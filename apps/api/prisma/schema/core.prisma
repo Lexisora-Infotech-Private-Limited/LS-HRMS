@@ -1,0 +1,348 @@
+// ── Core: tenancy, identity, org masters, employee, notifications, audit, files ──
+
+enum TenantStatus {
+  ACTIVE
+  FREE_TIER
+  PAYMENT_DUE
+  SUSPENDED
+}
+
+enum TenantIsolation {
+  SHARED
+  DEDICATED
+}
+
+/// A client company on the platform. Not tenant-scoped itself.
+model Tenant {
+  id          String          @id @default(cuid())
+  name        String
+  legalName   String?
+  domain      String          @unique // e.g. lexisora.hrms.app
+  slug        String          @unique // e.g. lexisora
+  status      TenantStatus    @default(ACTIVE)
+  isolation   TenantIsolation @default(SHARED)
+  gstin       String?
+  pan         String?
+  address     String?
+  city        String?
+  stateCode   String? // GST state code, e.g. "24" Gujarat — drives CGST+SGST vs IGST
+  stateName   String?
+  phone       String?
+  timezone    String          @default("Asia/Kolkata")
+  brandAccent String          @default("#b68235")
+  brandAccent2 String         @default("#2d2b2b")
+  brandName   String?
+  logoFileId  String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+}
+
+enum UserStatus {
+  INVITED
+  ACTIVE
+  DISABLED
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  tenantId    String
+  key         String // employee | lead | manager | hr | admin | custom-slug
+  name        String
+  description String?
+  isSystem    Boolean  @default(false)
+  permissions String[]
+  users       User[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([tenantId, key])
+  @@index([tenantId])
+}
+
+model User {
+  id              String     @id @default(cuid())
+  tenantId        String
+  email           String
+  passwordHash    String?
+  name            String
+  status          UserStatus @default(ACTIVE)
+  roleId          String
+  role            Role       @relation(fields: [roleId], references: [id])
+  /// Lexisora platform operator (Tenants screen). Never grants access to tenant private data.
+  isPlatformAdmin Boolean    @default(false)
+  lastLoginAt     DateTime?
+  inviteToken     String?    @unique
+  inviteExpiresAt DateTime?
+  employee        Employee?
+  refreshTokens   RefreshToken[]
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  // Back-relations added by domain modules (insert your lines directly under your marker):
+  // @backrel:platform:User
+  // @backrel:people:User
+  // @backrel:time:User
+  // @backrel:tracker:User
+  // @backrel:leavepay:User
+  // @backrel:work:User
+  // @backrel:finance:User
+  // @backrel:workplace:User
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+}
+
+model RefreshToken {
+  id         String    @id @default(cuid())
+  tenantId   String
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash  String    @unique
+  client     String    @default("web") // web | mobile | tracker
+  userAgent  String?
+  ip         String?
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  replacedBy String?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  tenantId  String
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([tenantId])
+}
+
+// ── Org masters ────────────────────────────────────────────────────────────
+
+model Department {
+  id        String     @id @default(cuid())
+  tenantId  String
+  name      String
+  code      String?
+  /// Team lead who allocates members to this department's task board.
+  leadEmployeeId String?
+  employees Employee[]
+  createdAt DateTime   @default(now())
+
+  // Back-relations added by domain modules (insert your lines directly under your marker):
+  // @backrel:platform:Department
+  // @backrel:people:Department
+  // @backrel:time:Department
+  // @backrel:tracker:Department
+  // @backrel:leavepay:Department
+  // @backrel:work:Department
+  // @backrel:finance:Department
+  // @backrel:workplace:Department
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model Designation {
+  id        String     @id @default(cuid())
+  tenantId  String
+  name      String
+  employees Employee[]
+  createdAt DateTime   @default(now())
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model Branch {
+  id        String     @id @default(cuid())
+  tenantId  String
+  name      String // Ahmedabad, Pune
+  address   String?
+  employees Employee[]
+  createdAt DateTime   @default(now())
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+// ── Employee (the person record; owned by People, used by every domain) ─────
+
+enum EmploymentType {
+  FULL_TIME
+  INTERN
+  CONTRACT
+}
+
+enum WorkMode {
+  OFFICE
+  REMOTE
+  HYBRID
+}
+
+enum EmployeeStatus {
+  ONBOARDING
+  ACTIVE
+  NOTICE_PERIOD
+  EXITED
+}
+
+enum TaxRegime {
+  OLD
+  NEW
+}
+
+model Employee {
+  id                    String         @id @default(cuid())
+  tenantId              String
+  userId                String?        @unique
+  user                  User?          @relation(fields: [userId], references: [id])
+  empCode               String // LX-0142, interns LX-I-021
+  firstName             String
+  lastName              String
+  fullName              String
+  officialEmail         String
+  personalEmail         String?
+  phone                 String?
+  photoFileId           String?
+  departmentId          String?
+  department            Department?    @relation(fields: [departmentId], references: [id])
+  designationId         String?
+  designation           Designation?   @relation(fields: [designationId], references: [id])
+  branchId              String?
+  branch                Branch?        @relation(fields: [branchId], references: [id])
+  /// Reporting Manager (Level-2 approver, leave approver).
+  managerId             String?
+  manager               Employee?      @relation("ReportingManager", fields: [managerId], references: [id])
+  reports               Employee[]     @relation("ReportingManager")
+  employmentType        EmploymentType @default(FULL_TIME)
+  workMode              WorkMode       @default(OFFICE)
+  workLocationId        String?
+  shiftId               String?
+  status                EmployeeStatus @default(ONBOARDING)
+  joiningDate           DateTime?      @db.Date
+  confirmationDate      DateTime?      @db.Date
+  noticeStartDate       DateTime?      @db.Date
+  exitDate              DateTime?      @db.Date
+  exitReason            String?
+  dateOfBirth           DateTime?      @db.Date
+  gender                String?
+  bloodGroup            String?
+  maritalStatus         String?
+  address               String?
+  emergencyContactName  String?
+  emergencyContactPhone String?
+  // Statutory & bank (encrypted at rest via the crypto service; *Enc columns hold ciphertext)
+  panEnc                String?
+  aadhaarEnc            String?
+  aadhaarLast4          String?
+  uan                   String?
+  esicNumber            String?
+  bankAccountEnc        String?
+  bankAccountLast4      String?
+  bankIfsc              String?
+  bankName              String?
+  taxRegime             TaxRegime      @default(NEW)
+  tshirtSize            String?
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+
+  // Back-relations added by domain modules (insert your lines directly under your marker):
+  // @backrel:platform:Employee
+  // @backrel:people:Employee
+  // @backrel:time:Employee
+  // @backrel:tracker:Employee
+  // @backrel:leavepay:Employee
+  // @backrel:work:Employee
+  // @backrel:finance:Employee
+  // @backrel:workplace:Employee
+
+  @@unique([tenantId, empCode])
+  @@unique([tenantId, officialEmail])
+  @@index([tenantId, status])
+  @@index([tenantId, managerId])
+  @@index([tenantId, departmentId])
+}
+
+// ── Notifications (Alerts screen + header count) ────────────────────────────
+
+model Notification {
+  id        String    @id @default(cuid())
+  tenantId  String
+  userId    String
+  type      String // e.g. timesheet.submitted, leave.approved
+  title     String
+  body      String?
+  link      String? // web route, e.g. /approvals
+  fromLabel String    @default("System") // "From" column: System, HR, Payroll…
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([tenantId, userId, readAt])
+}
+
+// ── Audit log ───────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  tenantId    String
+  actorUserId String?
+  actorName   String?
+  action      String // e.g. payroll.run, employee.update
+  entity      String
+  entityId    String?
+  meta        Json?
+  ip          String?
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, entity, entityId])
+}
+
+// ── Files (every upload: documents, photos, screenshots, bills, resumes…) ──
+
+model FileObject {
+  id          String   @id @default(cuid())
+  tenantId    String
+  ownerUserId String?
+  storageKey  String   @unique
+  filename    String
+  mime        String
+  size        Int
+  sha256      String?
+  /// Logical area: avatar, vault, policy, bill, resume, screenshot, invoice-pdf, payslip-pdf, chat, course, filing, id-card, …
+  category    String
+  /// Private files are readable only via permission-checked endpoints.
+  isPrivate   Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, category])
+}
+
+// ── Document numbering (HD-1043, INV-0415, RCPT-221, LX-0161, SUP-222 …) ──
+
+model NumberSequence {
+  id        String @id @default(cuid())
+  tenantId  String
+  key       String // e.g. helpdesk.ticket, invoice.gst, voucher.receipt, employee.fulltime
+  period    String @default("") // "" = never resets; "2026-27" = per financial year
+  nextValue Int    @default(1)
+
+  @@unique([tenantId, key, period])
+}
+
+// ── Tenant key/value settings (attendance policy, payroll config, quotes…) ──
+
+model Setting {
+  id        String   @id @default(cuid())
+  tenantId  String
+  key       String
+  value     Json
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, key])
+}

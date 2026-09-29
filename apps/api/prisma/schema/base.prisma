@@ -1,0 +1,15 @@
+// Lexisora HRMS — Prisma schema is split per domain in this folder.
+// Conventions:
+//  * Every tenant-owned model has `tenantId String` as a plain scalar (NO relation to Tenant)
+//    plus an index. The Prisma tenant extension injects/filters it automatically.
+//  * Money = Int paise. Durations = Int seconds. Dates-only = @db.Date. Times = DateTime (UTC).
+//  * IDs = cuid().
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}

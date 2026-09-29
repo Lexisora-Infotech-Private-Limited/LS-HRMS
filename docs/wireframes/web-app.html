@@ -1,0 +1,958 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="4144cc73-cbe9-4d95-bdee-e66f653d45b3"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>/* Classical — design-system tokens and component classes. This file is the source of truth for the system's look; retune it here and see readme.md. */
+/* cyrillic-ext */
+
+/* cyrillic */
+
+/* vietnamese */
+
+/* latin-ext */
+
+/* latin */
+
+/* cyrillic-ext */
+
+/* cyrillic */
+
+/* vietnamese */
+
+/* latin-ext */
+
+/* latin */
+
+/* cyrillic-ext */
+
+/* cyrillic */
+
+/* math */
+
+/* symbols */
+
+/* vietnamese */
+
+/* latin-ext */
+
+/* latin */
+
+/* cyrillic-ext */
+
+/* cyrillic */
+
+/* math */
+
+/* symbols */
+
+/* vietnamese */
+
+/* latin-ext */
+
+/* latin */
+
+
+
+:root {
+  --color-bg: #f3f2f2;
+  --color-surface: #eae9e9;
+  --color-text: #201f1d;
+  --color-accent: #b68235;
+  --color-accent-2: #ac803e;
+  --color-divider: color-mix(in srgb, #201f1d 16%, transparent);
+
+  /* Tonal ramps — generated in OKLCH on one shared lightness scale, so the
+     same step of any role matches the others in visual value. */
+  --color-neutral-100: #f8f4f4;
+  --color-neutral-200: #eae7e7;
+  --color-neutral-300: #d7d3d3;
+  --color-neutral-400: #bab6b6;
+  --color-neutral-500: #9b9797;
+  --color-neutral-600: #7d7979;
+  --color-neutral-700: #605d5d;
+  --color-neutral-800: #444141;
+  --color-neutral-900: #2d2b2b;
+
+  --color-accent-100: #fff3e4;
+  --color-accent-200: #ffe3bf;
+  --color-accent-300: #facb8d;
+  --color-accent-400: #e1ad66;
+  --color-accent-500: #c28d41;
+  --color-accent-600: #a06f24;
+  --color-accent-700: #7d5411;
+  --color-accent-800: #5a3b0a;
+  --color-accent-900: #3a270d;
+
+  --color-accent-2-100: #fff3e4;
+  --color-accent-2-200: #ffe3be;
+  --color-accent-2-300: #f5cd96;
+  --color-accent-2-400: #dbaf70;
+  --color-accent-2-500: #bc8f4e;
+  --color-accent-2-600: #9b7232;
+  --color-accent-2-700: #79561f;
+  --color-accent-2-800: #573d14;
+  --color-accent-2-900: #382810;
+
+  --font-heading: "Cormorant Garamond", system-ui, sans-serif;
+  --font-heading-weight: 600; /* review round 3: bold retired — semibold is the
+     interface headings' ceiling (they need the weight at small sizes); display
+     text goes lighter still, to the normal cut (see the deck) */
+  --font-body: "Lora", system-ui, sans-serif;
+
+  --space-1: 4.6px;
+  --space-2: 9.2px;
+  --space-3: 13.8px;
+  --space-4: 18.4px;
+  --space-6: 27.6px;
+  --space-8: 36.8px;
+
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 7px;
+
+  /* Elevation — derived from the ground: soft ink-tinted shadows on a
+     light theme, a hairline edge + ambient darkness on a dark one. */
+  --shadow-sm: 0 1px 2px color-mix(in srgb, #2d2b2b 14%, transparent);
+  --shadow-md: 0 3px 10px color-mix(in srgb, #2d2b2b 16%, transparent);
+  --shadow-lg: 0 12px 32px color-mix(in srgb, #2d2b2b 22%, transparent);
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-body);
+}
+h1, h2, h3, h4 { font-family: var(--font-heading); font-weight: var(--font-heading-weight); }
+
+.plate{filter:sepia(0.22) saturate(0.82) contrast(1.05);box-sizing:border-box;
+  border:6px solid var(--color-surface);outline:1px solid var(--color-divider)}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Components — built with the tokens above. Plain CSS
+   on plain HTML: no JavaScript, no build step. Each class is documented in
+   readme.md and demonstrated in foundations/ and components/.
+   ══════════════════════════════════════════════════════════════════════ */
+
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; font-size: 15px; line-height: 1.55; font-weight: 400; }
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+  line-height: 1.12; letter-spacing: -0.015em; margin: 0 0 var(--space-2);
+}
+h1 { font-size: 42px; }
+h2 { font-size: 32px; }
+h3 { font-size: 25px; }
+h4 { font-size: 20px; }
+h5 { font-size: 16px; }
+h6 { font-size: 13px; }
+h6 { letter-spacing: 0.08em; text-transform: uppercase; }
+p { margin: 0 0 var(--space-3); }
+a { color: var(--color-accent); text-underline-offset: 3px; }
+img { display: block; max-width: 100%; }
+figure { margin: 0; }
+figcaption {
+  font-size: 11px; margin-top: var(--space-1);
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+}
+.text-muted { color: color-mix(in srgb, var(--color-text) 55%, transparent); }
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+::selection { background: color-mix(in srgb, var(--color-accent) 30%, transparent); }
+
+/* — rules — */
+.hr {
+  height: 1px; border: 0; margin: var(--space-4) 0;
+  background: var(--color-divider);
+}
+
+/* — buttons — */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  cursor: pointer; text-decoration: none;
+  font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+  font-size: 14px; line-height: 1.2; color: var(--color-text); /* matches the .input's 14px —
+     the pair sits side by side in sign-up rows */
+  background: transparent; border: 1px solid transparent;
+  padding: var(--space-2) calc(var(--space-3) * 1.2);
+  border-radius: var(--radius-md);
+}
+.btn svg { display: block; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-primary { color: var(--color-accent); border-color: var(--color-accent); }
+.btn-primary:hover { background: color-mix(in srgb, var(--color-accent) 12%, transparent); }
+.btn-primary:active { background: color-mix(in srgb, var(--color-accent) 22%, transparent); }
+.btn-secondary { border-color: var(--color-divider); }
+.btn-secondary:hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
+.btn-secondary:active { background: color-mix(in srgb, var(--color-text) 14%, transparent); }
+.btn-ghost { color: var(--color-accent); padding-inline: var(--space-1); }
+.btn-ghost:hover { background: color-mix(in srgb, var(--color-accent) 10%, transparent); }
+.btn-ghost:active { background: color-mix(in srgb, var(--color-accent) 18%, transparent); }
+.btn-icon { width: 36px; height: 36px; padding: 0; }
+.btn-block { width: 100%; margin-top: var(--space-2); }
+
+/* — forms — */
+.field > label {
+  display: block; font-size: 12px; margin-bottom: 5px;
+  color: color-mix(in srgb, var(--color-text) 70%, transparent);
+}
+.input {
+  width: 100%; min-height: 36px; padding: 6px 10px; font: inherit;
+  font-size: 14px; color: var(--color-text); caret-color: var(--color-accent);
+  background: transparent;
+  border: 1px solid var(--color-divider); border-radius: var(--radius-md);
+}
+.input:hover { border-color: color-mix(in srgb, var(--color-text) 45%, transparent); }
+.input:focus-visible { border-color: var(--color-accent); outline-offset: 0; }
+textarea.input { min-height: 90px; resize: vertical; }
+.radio { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; }
+.radio input, .seg-opt input {
+  position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none;
+}
+.radio .dot {
+  width: 16px; height: 16px; flex: none; border-radius: 50%;
+  border: 1.5px solid var(--color-divider);
+}
+.radio:hover .dot { border-color: var(--color-accent); }
+.radio input:checked + .dot {
+  border-color: var(--color-accent); background: var(--color-accent);
+  box-shadow: inset 0 0 0 4px var(--color-bg);
+}
+.radio input:focus-visible + .dot { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.seg {
+  display: inline-flex; overflow: hidden;
+  border: 1px solid var(--color-divider); border-radius: var(--radius-md);
+}
+.seg-opt {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 12px; font-size: 13px; cursor: pointer;
+}
+.seg-opt + .seg-opt { border-left: 1px solid var(--color-divider); }
+.seg-opt:has(input:checked) { color: var(--color-accent); box-shadow: inset 0 0 0 1px var(--color-accent); }
+.seg-opt:not(:has(input:checked)):hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
+.seg-opt:has(input:focus-visible) { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+
+/* — cards — */
+.card {
+  display: flex; flex-direction: column; gap: var(--space-2);
+  padding: var(--space-3); border-radius: var(--radius-md); background: transparent; border: 1px solid var(--color-divider);
+}
+.card-kicker { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-accent); }
+.card-title {
+  font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+  font-size: 17px; line-height: 1.2;
+}
+.card-body { margin: 0; font-size: 13px; opacity: 0.8; flex: 1; }
+.card-meta {
+  display: flex; align-items: center; gap: 6px; font-size: 11px;
+  color: color-mix(in srgb, var(--color-text) 50%, transparent);
+}
+.elev-sm { box-shadow: var(--shadow-sm); }
+.elev-md { box-shadow: var(--shadow-md); }
+.elev-lg { box-shadow: var(--shadow-lg); }
+
+/* — tags — */
+.tag {
+  display: inline-flex; align-items: center; font-size: 11px;
+  letter-spacing: 0.02em; padding: 3px 10px;
+  border-radius: calc(var(--radius-md) * 0.75);
+}
+.tag-accent { background: var(--color-accent-100); color: var(--color-accent-800); }
+.tag-accent-2 { background: var(--color-accent-2-100); color: var(--color-accent-2-800); }
+.tag-neutral { background: var(--color-neutral-100); color: var(--color-neutral-800); }
+.tag-outline { border: 1px solid var(--color-accent); color: var(--color-accent); }
+
+/* — navigation — */
+.nav {
+  display: flex; align-items: center; gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-divider);
+}
+.nav-brand {
+  font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+  font-size: 18px; margin-right: auto;
+}
+.nav a { color: inherit; text-decoration: none; font-size: 14px; }
+.nav a:hover, .nav a[aria-current='page'] { color: var(--color-accent); }
+
+/* — tables — */
+.table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.table th {
+  text-align: left; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text) 60%, transparent);
+  padding: var(--space-2); border-bottom: 1px solid var(--color-divider);
+}
+.table td {
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--color-divider);
+}
+.table tbody tr:hover { background: color-mix(in srgb, var(--color-text) 4%, transparent); }
+
+/* — dialog — */
+.dialog-backdrop {
+  position: fixed; inset: 0; display: grid; place-items: center;
+  padding: var(--space-4);
+  background: color-mix(in srgb, var(--color-neutral-900) 50%, transparent);
+}
+.dialog {
+  width: min(440px, 100%); display: flex; flex-direction: column; gap: var(--space-3);
+  padding: var(--space-4); border-radius: var(--radius-lg);
+  background: var(--color-surface); box-shadow: var(--shadow-lg); border: 1px solid var(--color-divider);
+}
+.dialog-title {
+  font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+  font-size: 20px;
+}
+.dialog-body { font-size: 14px; opacity: 0.85; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-2); }
+
+</style>
+<script src="09c19496-0cd9-4c4f-a117-43a9be853e10"></script>
+<style>body{margin:0;background:var(--color-bg)} a{color:var(--color-accent-700)} a:hover{color:var(--color-accent-600)}</style>
+</helmet>
+<div style="min-height:100vh;background:var(--color-bg);color:var(--color-text);font-family:var(--font-body)">
+
+<sc-if value="{{ isLogin }}" hint-placeholder-val="{{ false }}">
+<div data-screen-label="Login" style="min-height:100vh;display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr)">
+  <div style="border-right:1px solid var(--color-divider);padding:56px;display:flex;flex-direction:column;justify-content:space-between;gap:32px">
+    <div style="display:flex;flex-direction:column;gap:4px">
+      <div style="font-family:var(--font-heading);font-size:26px;font-weight:600">Lexisora</div>
+      <div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--color-accent-700)">People &amp; Operations Suite</div>
+    </div>
+    <div style="max-width:460px;display:flex;flex-direction:column;gap:14px">
+      <h1 style="font-size:52px;font-weight:400;margin:0;line-height:1.05">Attendance, projects, payroll and people in one ledger.</h1>
+      <p style="margin:0;text-align:justify;color:var(--color-neutral-700)">Sign in to your company workspace. Your role decides which modules you see; the desktop tracker handles punch, breaks and idle time on your laptop.</p>
+    </div>
+    <div style="font-size:12px;color:var(--color-neutral-600)">Mobile access is enabled only for CEO, Admin and HR roles.</div>
+  </div>
+  <div style="display:flex;align-items:center;justify-content:center;padding:56px">
+    <div style="width:min(380px,100%);display:flex;flex-direction:column;gap:16px">
+      <h3 style="margin:0">Sign in</h3>
+      <div class="field"><label>Workspace</label><input class="input" value="lexisora.hrms.app"></div>
+      <div class="field"><label>Official email</label><input class="input" placeholder="name@lexisora.com"></div>
+      <div class="field"><label>Password</label><input class="input" type="password" value="password"></div>
+      <div class="field"><label>Demo: sign in as</label>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          <sc-for list="{{ roleBtns }}" as="r"><button sc-camel-on-click="{{ r.pick }}" style="font:inherit;font-size:12px;padding:5px 10px;border-radius:4px;cursor:pointer;border:1px solid {{ r.border }};color:{{ r.color }};background:transparent">{{ r.label }}</button></sc-for>
+        </div>
+      </div>
+      <button class="btn btn-primary btn-block" sc-camel-on-click="{{ doLogin }}">Sign in</button>
+      <div style="display:flex;justify-content:space-between;font-size:13px"><a href="#screen=login">Forgot password</a><a href="#screen=login">Use SSO</a></div>
+    </div>
+  </div>
+</div>
+</sc-if>
+
+<sc-if value="{{ isApp }}" hint-placeholder-val="{{ true }}">
+<div style="display:grid;grid-template-columns:236px minmax(0,1fr);min-height:100vh">
+  <aside style="border-right:1px solid var(--color-divider);padding:18px 10px;position:sticky;top:0;height:100vh;overflow:auto;display:flex;flex-direction:column;gap:16px">
+    <div style="padding:0 8px;display:flex;flex-direction:column;gap:2px">
+      <div style="font-family:var(--font-heading);font-size:22px;font-weight:600;line-height:1">Lexisora</div>
+      <div style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--color-accent-700)">People &amp; Operations</div>
+    </div>
+    <sc-for list="{{ nav }}" as="g" hint-placeholder-count="6">
+      <div style="display:flex;flex-direction:column;gap:1px">
+        <div style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--color-neutral-600);padding:0 8px 4px">{{ g.group }}</div>
+        <sc-for list="{{ g.items }}" as="it">
+          <button sc-camel-on-click="{{ it.go }}" style="text-align:left;font:inherit;font-size:13px;padding:5px 8px;border:0;border-radius:4px;cursor:pointer;background:{{ it.bg }};color:{{ it.color }}">{{ it.label }}</button>
+        </sc-for>
+      </div>
+    </sc-for>
+  </aside>
+
+  <div style="display:flex;flex-direction:column;min-width:0">
+    <header style="display:flex;align-items:center;gap:14px;padding:12px 32px;border-bottom:1px solid var(--color-divider);flex-wrap:wrap">
+      <input class="input" placeholder="Search people, tasks, documents" style="max-width:320px">
+      <div style="display:flex;gap:4px;margin-left:auto;flex-wrap:wrap">
+        <sc-for list="{{ roleBtns }}" as="r"><button sc-camel-on-click="{{ r.pick }}" style="font:inherit;font-size:11.5px;padding:4px 9px;border-radius:4px;cursor:pointer;border:1px solid {{ r.border }};color:{{ r.color }};background:transparent">{{ r.label }}</button></sc-for>
+      </div>
+      <button class="btn btn-primary" sc-camel-on-click="{{ togglePunch }}">{{ punchLabel }}</button>
+      <button class="btn btn-secondary" sc-camel-on-click="{{ goNotif }}">Alerts · {{ notifCount }}</button>
+      <button sc-camel-on-click="{{ logout }}" style="font:inherit;border:0;background:transparent;cursor:pointer;display:flex;align-items:center;gap:8px;text-align:left">
+        <span style="width:32px;height:32px;border-radius:50%;border:1px solid var(--color-accent);display:grid;place-items:center;font-family:var(--font-heading);font-size:14px;color:var(--color-accent-700)">{{ me.initials }}</span>
+        <span style="display:flex;flex-direction:column;line-height:1.2"><span style="font-size:13px">{{ me.name }}</span><span style="font-size:11px;color:var(--color-neutral-600)">Sign out</span></span>
+      </button>
+    </header>
+
+    <main style="padding:28px 32px 64px;display:flex;flex-direction:column;gap:22px;max-width:1320px;width:100%">
+
+      <sc-if value="{{ on.dashboard }}">
+        <div data-screen-label="Dashboard" style="display:flex;flex-direction:column;gap:22px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap">
+            <div><div style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-accent-700)">Tuesday, 29 September 2026</div><h2 style="margin:4px 0 0">Good morning, {{ me.first }}</h2></div>
+            <div style="font-size:13px;color:var(--color-neutral-700)">{{ me.title }}</div>
+          </div>
+          <div style="border-top:1px solid var(--color-accent);border-bottom:1px solid var(--color-divider);padding:16px 0;display:flex;gap:18px;align-items:baseline;flex-wrap:wrap">
+            <span style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--color-accent-700)">Thought of the day</span>
+            <span style="font-family:var(--font-heading);font-size:22px;font-style:italic;flex:1;min-width:260px">{{ quote }}</span>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px">
+            <div class="card">
+              <div class="card-kicker">Today</div>
+              <div class="card-title">{{ punchState }}</div>
+              <div style="font-family:var(--font-heading);font-size:40px;font-feature-settings:'tnum'">{{ elapsed }}</div>
+              <div class="card-meta">Shift 09:30 – 18:30 · {{ modeNote }}</div>
+              <button class="btn btn-primary" sc-camel-on-click="{{ togglePunch }}">{{ punchLabel }}</button>
+            </div>
+            <div class="card">
+              <div class="card-kicker">Leave balance</div>
+              <sc-for list="{{ balances }}" as="b"><div style="display:flex;justify-content:space-between;font-size:14px;border-bottom:1px solid var(--color-divider);padding:4px 0"><span>{{ b.type }}</span><span style="font-feature-settings:'tnum'">{{ b.left }} / {{ b.total }}</span></div></sc-for>
+              <button class="btn btn-ghost" sc-camel-on-click="{{ goLeave }}" style="align-self:flex-start">Apply time off</button>
+            </div>
+            <div class="card">
+              <div class="card-kicker">Pending to-do</div>
+              <sc-for list="{{ todos }}" as="t"><div style="display:flex;gap:10px;align-items:flex-start;font-size:13.5px;padding:3px 0"><span style="width:12px;height:12px;border:1px solid var(--color-accent);border-radius:2px;margin-top:4px;flex:none"></span><span style="flex:1">{{ t.text }}</span><span class="tag tag-neutral">{{ t.due }}</span></div></sc-for>
+              <button class="btn btn-ghost" sc-camel-on-click="{{ openAddTask }}" style="align-self:flex-start">Add task</button>
+            </div>
+            <sc-if value="{{ isMgr }}">
+              <div class="card">
+                <div class="card-kicker">Awaiting your approval</div>
+                <div style="display:flex;justify-content:space-between;font-size:14px;border-bottom:1px solid var(--color-divider);padding:4px 0"><span>Timesheets</span><span>{{ pendingSheets }}</span></div>
+                <div style="display:flex;justify-content:space-between;font-size:14px;border-bottom:1px solid var(--color-divider);padding:4px 0"><span>Time-off requests</span><span>3</span></div>
+                <div style="display:flex;justify-content:space-between;font-size:14px;border-bottom:1px solid var(--color-divider);padding:4px 0"><span>Helpdesk escalations</span><span>1</span></div>
+                <button class="btn btn-ghost" sc-camel-on-click="{{ goApprovals }}" style="align-self:flex-start">Review now</button>
+              </div>
+            </sc-if>
+          </div>
+          <div style="display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:24px">
+            <div style="display:flex;flex-direction:column;gap:10px">
+              <h4 style="margin:0">Announcements</h4>
+              <sc-for list="{{ announcements }}" as="a"><div style="border-top:1px solid var(--color-divider);padding:10px 0;display:flex;gap:14px"><span class="tag {{ a.tone }}" style="align-self:flex-start">{{ a.scope }}</span><div style="flex:1"><div style="font-family:var(--font-heading);font-size:18px">{{ a.title }}</div><div style="font-size:13px;color:var(--color-neutral-700)">{{ a.body }}</div></div><span style="font-size:12px;color:var(--color-neutral-600)">{{ a.date }}</span></div></sc-for>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:10px">
+              <h4 style="margin:0">Birthdays &amp; events</h4>
+              <sc-for list="{{ events }}" as="e"><div style="border-top:1px solid var(--color-divider);padding:8px 0;display:flex;justify-content:space-between;gap:10px;font-size:13.5px"><span>{{ e.what }}</span><span style="color:var(--color-neutral-600)">{{ e.when }}</span></div></sc-for>
+              <h4 style="margin:10px 0 0">Leave history</h4>
+              <sc-for list="{{ leaveHistory }}" as="l"><div style="border-top:1px solid var(--color-divider);padding:8px 0;display:flex;justify-content:space-between;gap:10px;font-size:13.5px"><span>{{ l.type }} · {{ l.days }}</span><span class="tag {{ l.tone }}">{{ l.status }}</span></div></sc-for>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ on.attendance }}">
+        <div data-screen-label="Attendance" style="display:flex;flex-direction:column;gap:22px">
+          <div><h2 style="margin:0">Attendance</h2><p style="margin:4px 0 0;color:var(--color-neutral-700)">Punch source follows HR policy: office staff punch by biometric, remote staff punch on web or desktop.</p></div>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <span style="font-size:13px">Work mode (demo):</span>
+            <sc-for list="{{ modeBtns }}" as="m"><button sc-camel-on-click="{{ m.pick }}" style="font:inherit;font-size:12px;padding:5px 12px;border-radius:4px;cursor:pointer;border:1px solid {{ m.border }};color:{{ m.color }};background:transparent">{{ m.label }}</button></sc-for>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px">
+            <div class="card">
+              <div class="card-kicker">Punch</div>
+              <div class="card-title">{{ punchState }}</div>
+              <div style="font-family:var(--font-heading);font-size:40px;font-feature-settings:'tnum'">{{ elapsed }}</div>
+              <sc-if value="{{ webPunchAllowed }}"><button class="btn btn-primary" sc-camel-on-click="{{ togglePunch }}">{{ punchLabel }}</button></sc-if>
+              <sc-if value="{{ webPunchBlocked }}"><div style="font-size:13px;border:1px dashed var(--color-accent);padding:10px;border-radius:4px;color:var(--color-accent-800)">Web punch disabled. Use the fingerprint sensor at the office entrance.</div></sc-if>
+            </div>
+            <div class="card"><div class="card-kicker">This month</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px">
+                <div><div style="font-family:var(--font-heading);font-size:28px">18</div>Present days</div>
+                <div><div style="font-family:var(--font-heading);font-size:28px">1</div>Late marks</div>
+                <div><div style="font-family:var(--font-heading);font-size:28px">142h</div>Active hours</div>
+                <div><div style="font-family:var(--font-heading);font-size:28px">3h 40m</div>Idle (auto)</div>
+              </div>
+            </div>
+            <div class="card"><div class="card-kicker">ID card check</div><div class="card-title">Verified today, 09:41</div><div class="card-body">Logged by Security desk · photo on file</div><div class="card-meta">Compliance this month: 17 / 18 days</div></div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <h4 style="margin:0">Today's timeline</h4>
+            <div style="display:flex;height:28px;border:1px solid var(--color-divider);border-radius:4px;overflow:hidden">
+              <sc-for list="{{ timeline }}" as="s"><div title="{{ s.label }}" style="flex:{{ s.w }};background:{{ s.bg }};border-right:1px solid var(--color-bg)"></div></sc-for>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--color-neutral-600)"><span>09:30</span><span>11:00</span><span>12:30</span><span>14:00</span><span>15:30</span><span>17:00</span><span>18:30</span></div>
+            <div style="display:flex;gap:16px;font-size:12px;flex-wrap:wrap"><span style="display:flex;gap:6px;align-items:center"><span style="width:12px;height:12px;background:var(--color-accent-300)"></span>Active</span><span style="display:flex;gap:6px;align-items:center"><span style="width:12px;height:12px;background:var(--color-neutral-400)"></span>Break</span><span style="display:flex;gap:6px;align-items:center"><span style="width:12px;height:12px;background:var(--color-neutral-200)"></span>Auto-idle (no input &gt; 5 min)</span></div>
+          </div>
+          <div style="display:flex;flex-direction:column">
+            <div style="display:grid;grid-template-columns:1.2fr 1fr 1fr 1fr 1fr 1fr 1fr;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-600);padding:8px;border-bottom:1px solid var(--color-divider)"><span>Date</span><span>In</span><span>Out</span><span>Source</span><span>Breaks</span><span>Idle</span><span>Status</span></div>
+            <sc-for list="{{ attRows }}" as="r"><div style="display:grid;grid-template-columns:1.2fr 1fr 1fr 1fr 1fr 1fr 1fr;font-size:13.5px;padding:8px;border-bottom:1px solid var(--color-divider);align-items:center"><span>{{ r.0 }}</span><span>{{ r.1 }}</span><span>{{ r.2 }}</span><span>{{ r.3 }}</span><span>{{ r.4 }}</span><span>{{ r.5 }}</span><span><span class="tag tag-accent">{{ r.6 }}</span></span></div></sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ on.timesheet }}">
+        <div data-screen-label="My timesheet" style="display:flex;flex-direction:column;gap:18px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap">
+            <div><h2 style="margin:0">My timesheet</h2><p style="margin:4px 0 0;color:var(--color-neutral-700)">Week of 21 – 27 Sep 2026 · hours come from the desktop tracker, edits need a reason.</p></div>
+            <div style="display:flex;gap:8px"><button class="btn btn-secondary" sc-camel-on-click="{{ openOutside }}">Log outside-hours task</button><button class="btn btn-primary" sc-camel-on-click="{{ submitSheet }}">{{ sheetBtn }}</button></div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;font-size:13px;flex-wrap:wrap">
+            <sc-for list="{{ chain }}" as="c"><span style="display:flex;gap:8px;align-items:center"><span class="tag {{ c.tone }}">{{ c.label }}</span><span style="color:var(--color-neutral-500)">{{ c.arrow }}</span></span></sc-for>
+          </div>
+          <div style="display:flex;flex-direction:column;overflow:auto">
+            <div style="display:grid;grid-template-columns:2.4fr repeat(7,minmax(54px,1fr)) 1fr;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-600);padding:8px;border-bottom:1px solid var(--color-divider)"><span>Task</span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span><span>Total</span></div>
+            <sc-for list="{{ sheet }}" as="r"><div style="display:grid;grid-template-columns:2.4fr repeat(7,minmax(54px,1fr)) 1fr;font-size:13.5px;padding:8px;border-bottom:1px solid var(--color-divider);font-feature-settings:'tnum';align-items:center"><span><span style="display:block">{{ r.task }}</span><span style="font-size:11.5px;color:var(--color-neutral-600)">{{ r.project }}</span></span><sc-for list="{{ r.d }}" as="h"><span>{{ h }}</span></sc-for><span style="font-weight:600">{{ r.total }}</span></div></sc-for>
+            <div style="display:grid;grid-template-columns:2.4fr repeat(7,minmax(54px,1fr)) 1fr;font-size:13px;padding:8px;color:var(--color-neutral-700);font-feature-settings:'tnum'"><span>Auto-idle deducted</span><span>0:20</span><span>0:45</span><span>0:10</span><span>0:30</span><span>0:15</span><span>–</span><span>–</span><span>2:00</span></div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ on.approvals }}">
+        <div data-screen-label="Timesheet approvals" style="display:flex;flex-direction:column;gap:18px">
+          <div><h2 style="margin:0">Timesheet approvals</h2><p style="margin:4px 0 0;color:var(--color-neutral-700)">Level 1: Project Lead reviews task hours and screenshots. Level 2: Reporting Manager signs off before payroll.</p></div>
+          <div class="seg" style="align-self:flex-start">
+            <sc-for list="{{ apprTabs }}" as="t"><button sc-camel-on-click="{{ t.pick }}" style="font:inherit;font-size:13px;padding:7px 14px;border:0;cursor:pointer;background:transparent;color:{{ t.color }};box-shadow:{{ t.ring }}">{{ t.label }} · {{ t.count }}</button></sc-for>
+          </div>
+          <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);gap:24px">
+            <div style="display:flex;flex-direction:column">
+              <sc-for list="{{ apprRows }}" as="r"><button sc-camel-on-click="{{ r.pick }}" style="font:inherit;text-align:left;cursor:pointer;border:0;border-bottom:1px solid var(--color-divider);background:{{ r.bg }};padding:12px 10px;display:grid;grid-template-columns:1fr auto;gap:4px;color:inherit"><span style="font-family:var(--font-heading);font-size:18px">{{ r.name }}</span><span class="tag {{ r.tone }}">{{ r.status }}</span><span style="font-size:12.5px;color:var(--color-neutral-700)">{{ r.week }} · {{ r.hours }} worked · {{ r.idle }} idle</span><span style="font-size:12px;color:var(--color-neutral-600)">{{ r.shots }} shots</span></button></sc-for>
+              <sc-if value="{{ apprEmpty }}"><div style="padding:24px 10px;font-size:14px;color:var(--color-neutral-600)">Nothing waiting at this level.</div></sc-if>
+            </div>
+            <sc-if value="{{ apprSel.on }}">
+              <div class="card" style="gap:14px">
+                <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap"><div><div class="card-kicker">{{ apprSel.week }}</div><div class="card-title" style="font-size:22px">{{ apprSel.name }}</div></div><div style="display:flex;gap:8px;align-items:flex-start"><button class="btn btn-secondary" sc-camel-on-click="{{ rejectSel }}">Send back</button><button class="btn btn-primary" sc-camel-on-click="{{ approveSel }}">Approve</button></div></div>
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;font-size:12.5px"><div><div style="font-family:var(--font-heading);font-size:24px">{{ apprSel.hours }}</div>Worked</div><div><div style="font-family:var(--font-heading);font-size:24px">{{ apprSel.idle }}</div>Auto-idle</div><div><div style="font-family:var(--font-heading);font-size:24px">{{ apprSel.shots }}</div>Screenshots</div></div>
+                <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-600)">Screenshots mapped to tasks · every 10 min</div>
+                <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+                  <sc-for list="{{ shots }}" as="s"><div style="display:flex;flex-direction:column;gap:3px"><div style="aspect-ratio:16/10;border:1px solid var(--color-divider);background:repeating-linear-gradient(45deg,var(--color-neutral-200),var(--color-neutral-200) 6px,var(--color-bg) 6px,var(--color-bg) 12px);display:grid;place-items:center;font-size:10px;color:var(--color-neutral-600)">screen</div><span style="font-size:11px">{{ s.t }} · {{ s.task }}</span></div></sc-for>
+                </div>
+                <div class="field"><label>Comment to employee</label><textarea class="input" placeholder="Optional note"></textarea></div>
+              </div>
+            </sc-if>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ on.leave }}">
+        <div data-screen-label="Time off" style="display:flex;flex-direction:column;gap:20px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap"><div><h2 style="margin:0">Time off</h2><p style="margin:4px 0 0;color:var(--color-neutral-700)">Requests route to your Reporting Manager; approved leave flows into payroll.</p></div><button class="btn btn-primary" sc-camel-on-click="{{ openLeave }}">Apply time off</button></div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px">
+            <sc-for list="{{ balances }}" as="b"><div class="card"><div class="card-kicker">{{ b.type }}</div><div style="font-family:var(--font-heading);font-size:36px;font-feature-settings:'tnum'">{{ b.left }}<span style="font-size:18px;color:var(--color-neutral-600)"> / {{ b.total }}</span></div><div class="card-meta">days available</div></div></sc-for>
+          </div>
+          <div style="display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:24px">
+            <div style="display:flex;flex-direction:column"><h4 style="margin:0 0 8px">History</h4>
+              <div style="display:grid;grid-template-columns:1fr 1.4fr .6fr 1.4fr 1fr;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-600);padding:8px;border-bottom:1px solid var(--color-divider)"><span>Type</span><span>Dates</span><span>Days</span><span>Reason</span><span>Status</span></div>
+              <sc-for list="{{ leaveHistory }}" as="l"><div style="display:grid;grid-template-columns:1fr 1.4fr .6fr 1.4fr 1fr;font-size:13.5px;padding:8px;border-bottom:1px solid var(--color-divider);align-items:center"><span>{{ l.type }}</span><span>{{ l.dates }}</span><span>{{ l.days }}</span><span>{{ l.reason }}</span><span><span class="tag {{ l.tone }}">{{ l.status }}</span></span></div></sc-for>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:8px"><h4 style="margin:0">Upcoming</h4>
+              <div style="border-top:1px solid var(--color-divider);padding:8px 0;font-size:13.5px;display:flex;justify-content:space-between"><span>Dussehra</span><span>20 Oct</span></div>
+              <div style="border-top:1px solid var(--color-divider);padding:8px 0;font-size:13.5px;display:flex;justify-content:space-between"><span>Diwali</span><span>8 – 9 Nov</span></div>
+              <div style="border-top:1px solid var(--color-divider);padding:8px 0;font-size:13.5px;display:flex;justify-content:space-between"><span>Your earned leave</span><span>14 – 16 Oct</span></div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ on.kanban }}">
+        <div data-screen-label="Task board" style="display:flex;flex-direction:column;gap:16px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap"><div><h2 style="margin:0">Task board · Atlas CRM</h2><p style="margin:4px 0 0;color:var(--color-neutral-700)">Drag cards between columns. Moving to Dev Completed pushes the branch to GitLab.</p></div><button class="btn btn-primary" sc-camel-on-click="{{ openAddTask }}">Add task</button></div>
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span style="font-size:13px;margin-right:4px">Team board:</span>
+            <sc-for list="{{ deptBtns }}" as="d"><button sc-camel-on-click="{{ d.pick }}" style="font:inherit;font-size:12px;padding:5px 12px;border-radius:4px;cursor:pointer;border:1px solid {{ d.border }};color:{{ d.color }};background:transparent">{{ d.label }}</button></sc-for>
+          </div>
+          <sc-if value="{{ boardLocked }}"><div style="border:1px dashed var(--color-accent);border-radius:4px;padding:40px;text-align:center;display:flex;flex-direction:column;gap:6px;align-items:center"><div style="font-family:var(--font-heading);font-size:22px">This board is private to the {{ dept }} team</div><div style="font-size:13.5px;color:var(--color-neutral-700)">Team-level access control: only members allocated by the {{ dept }} lead can view or edit these tasks.</div></div></sc-if>
+          <sc-if value="{{ boardOpen }}">
+            <div style="display:grid;grid-template-columns:repeat(5,minmax(200px,1fr));gap:12px;overflow:auto">
+              <sc-for list="{{ columns }}" as="col"><div sc-camel-on-drag-over="{{ col.over }}" sc-camel-on-drop="{{ col.drop }}" style="border:1px solid var(--color-divider);border-radius:4px;padding:10px;display:flex;flex-direction:column;gap:8px;min-height:380px;background:{{ col.bg }}">
+                <div style="display:flex;justify-content:space-between;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-accent-700)"><span>{{ col.name }}</span><span>{{ col.count }}</span></div>
+                <sc-for list="{{ col.cards }}" as="k"><div draggable="true" sc-camel-on-drag-start="{{ k.drag }}" style="border:1px solid var(--color-divider);border-radius:4px;padding:10px;background:var(--color-bg);cursor:grab;display:flex;flex-direction:column;gap:6px;box-shadow:var(--shadow-sm)">
+                  <div style="font-size:11px;color:var(--color-neutral-600)">{{ k.id }} · {{ k.module }}</div>
+                  <div style="font-family:var(--font-heading);font-size:16px;line-height:1.2">{{ k.title }}</div>
+                  <div style="display:flex;justify-content:space-between;align-items:center;font-size:11.5px"><span>{{ k.who }}</span><span class="tag tag-neutral">{{ k.est }}</span></div>
+                  <button sc-camel-on-click="{{ k.next }}" style="font:inherit;font-size:11.5px;border:0;background:transparent;color:var(--color-accent-700);cursor:pointer;text-align:left;padding:0">{{ k.nextLabel }}</button>
+                </div></sc-for>
+              </div></sc-for>
+            </div>
+          </sc-if>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ on.profile }}">
+        <div data-screen-label="Employee profile" style="display:flex;flex-direction:column;gap:18px">
+          <button class="btn btn-ghost" sc-camel-on-click="{{ goEmployees }}" style="align-self:flex-start">← Employees</button>
+          <div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--color-divider);padding-bottom:18px">
+            <div style="width:84px;height:84px;border:1px solid var(--color-accent);border-radius:50%;display:grid;place-items:center;font-family:var(--font-heading);font-size:30px;color:var(--color-accent-700)">PS</div>
+            <div style="flex:1"><h2 style="margin:0">Priya Sharma</h2><div style="font-size:13.5px;color:var(--color-neutral-700)">Software Engineer · Development · LX-0142 · Reports to Neha Kapoor</div><div style="display:flex;gap:6px;margin-top:6px"><span class="tag tag-accent">Remote</span><span class="tag tag-neutral">Joined 12 Jan 2024</span><span class="tag tag-outline">Star Coder</span></div></div>
+            <div style="display:flex;gap:8px"><button class="btn btn-secondary" sc-camel-on-click="{{ goIdcard }}">ID card</button><button class="btn btn-primary" sc-camel-on-click="{{ openAddEmp }}">Edit</button></div>
+          </div>
+          <div style="display:flex;gap:18px;border-bottom:1px solid var(--color-divider)">
+            <sc-for list="{{ profTabs }}" as="t"><button sc-camel-on-click="{{ t.pick }}" style="font:inherit;font-size:14px;padding:8px 0;border:0;background:transparent;cursor:pointer;color:{{ t.color }};border-bottom:2px solid {{ t.line }};margin-bottom:-1px">{{ t.label }}</button></sc-for>
+          </div>
+          <div style="display:flex;flex-direction:column">
+            <div style="display:grid;grid-template-columns:{{ prof.tpl }};font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-600);padding:8px;border-bottom:1px solid var(--color-divider)"><sc-for list="{{ prof.cols }}" as="c"><span>{{ c }}</span></sc-for></div>
+            <sc-for list="{{ prof.rows }}" as="r"><div style="display:grid;grid-template-columns:{{ prof.tpl }};font-size:13.5px;padding:9px 8px;border-bottom:1px solid var(--color-divider);align-items:center"><sc-for list="{{ r }}" as="c"><span><sc-if value="{{ c.isText }}">{{ c.text }}</sc-if><sc-if value="{{ c.isTag }}"><span class="tag {{ c.tone }}">{{ c.text }}</span></sc-if></span></sc-for></div></sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ on.onboarding }}">
+        <div data-screen-label="Paperless onboarding" style="display:flex;flex-direction:column;gap:18px">
+          <div><h2 style="margin:0">Paperless onboarding</h2><p style="margin:4px 0 0;color:var(--color-neutral-700)">New joiners sign, upload and receive their welcome kit here before day one.</p></div>
+          <div style="display:flex;gap:0;border:1px solid var(--color-divider);border-radius:4px;overflow:hidden;flex-wrap:wrap">
+            <sc-for list="{{ obSteps }}" as="s"><button sc-camel-on-click="{{ s.pick }}" style="flex:1;min-width:140px;font:inherit;font-size:13px;text-align:left;padding:10px 12px;border:0;border-right:1px solid var(--color-divider);cursor:pointer;background:{{ s.bg }};color:inherit"><span style="display:block;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-accent-700)">Step {{ s.n }} · {{ s.state }}</span>{{ s.label }}</button></sc-for>
+          </div>
+          <div style="display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:24px">
+            <div style="border:1px solid var(--color-divider);border-radius:4px;padding:32px;background:var(--color-neutral-100);min-height:360px;display:flex;flex-direction:column;gap:10px">
+              <div style="font-family:var(--font-heading);font-size:24px">{{ ob.docTitle }}</div>
+              <div style="font-size:13px;color:var(--color-neutral-700);text-align:justify">{{ ob.docBody }}</div>
+              <div style="height:8px;background:var(--color-neutral-200);width:92%"></div><div style="height:8px;background:var(--color-neutral-200);width:86%"></div><div style="height:8px;background:var(--color-neutral-200);width:90%"></div><div style="height:8px;background:var(--color-neutral-200);width:60%"></div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:12px">
+              <h4 style="margin:0">{{ ob.actionTitle }}</h4>
+              <div style="border:1px dashed var(--color-neutral-500);border-radius:4px;height:130px;display:grid;place-items:center;font-size:13px;color:var(--color-neutral-600)">{{ ob.box }}</div>
+              <label class="radio"><input type="checkbox"><span class="dot"></span>I have read and agree to this document</label>
+              <button class="btn btn-primary" sc-camel-on-click="{{ obNext }}">{{ ob.cta }}</button>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ on.idcard }}">
+        <div data-screen-label="ID card designer" style="display:flex;flex-direction:column;gap:18px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap"><div><h2 style="margin:0">ID card designer</h2><p style="margin:4px 0 0;color:var(--color-neutral-700)">Drag fields onto the card. Cards generate automatically when a photo and details are uploaded.</p></div><div style="display:flex;gap:8px"><button class="btn btn-secondary" sc-camel-on-click="{{ genCards }}">Generate for 3 new joiners</button><button class="btn btn-primary" sc-camel-on-click="{{ sendPrint }}">Send to print vendor</button></div></div>
+          <div style="display:grid;grid-template-columns:200px minmax(0,1fr) 220px;gap:20px">
+            <div style="display:flex;flex-direction:column;gap:6px"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-600)">Elements</div>
+              <sc-for list="{{ idEls }}" as="e"><div style="border:1px solid var(--color-divider);border-radius:4px;padding:7px 10px;font-size:13px;cursor:grab">{{ e }}</div></sc-for>
+              <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-600);margin-top:10px">Templates</div>
+              <div style="border:1px solid var(--color-accent);border-radius:4px;padding:7px 10px;font-size:13px">Classic portrait</div><div style="border:1px solid var(--color-divider);border-radius:4px;padding:7px 10px;font-size:13px">Landscape minimal</div>
+            </div>
+            <div style="border:1px solid var(--color-divider);border-radius:4px;padding:28px;display:flex;flex-direction:column;align-items:center;gap:14px;background:var(--color-neutral-100)">
+              <div class="seg"><sc-for list="{{ sideBtns }}" as="s"><button sc-camel-on-click="{{ s.pick }}" style="font:inherit;font-size:13px;padding:6px 14px;border:0;cursor:pointer;background:transparent;color:{{ s.color }};box-shadow:{{ s.ring }}">{{ s.label }}</button></sc-for></div>
+              <sc-if value="{{ idFront }}">
+                <div style="width:236px;height:370px;border:1px solid var(--color-divider);border-radius:10px;background:var(--color-bg);box-shadow:var(--shadow-md);display:flex;flex-direction:column;align-items:center;overflow:hidden">
+                  <div style="width:100%;padding:14px;border-bottom:2px solid var(--color-accent);text-align:center;font-family:var(--font-heading);font-size:18px">Lexisora Infotech</div>
+                  <div style="width:96px;height:112px;margin-top:22px;border:1px dashed var(--color-neutral-500);display:grid;place-items:center;font-size:11px;color:var(--color-neutral-600)">Photo</div>
+                  <div style="font-family:var(--font-heading);font-size:22px;margin-top:14px">Priya Sharma</div>
+                  <div style="font-size:12px;color:var(--color-neutral-700)">Software Engineer</div>
+                  <div style="font-size:12px;margin-top:10px;font-feature-settings:'tnum'">LX-0142 · B+</div>
+                  <div style="margin-top:auto;width:100%;height:10px;background:var(--color-accent-300)"></div>
+                </div>
+              </sc-if>
+              <sc-if value="{{ idBack }}">
+                <div style="width:236px;height:370px;border:1px solid var(--color-divider);border-radius:10px;background:var(--color-bg);box-shadow:var(--shadow-md);display:flex;flex-direction:column;align-items:center;padding:20px;gap:10px;font-size:12px;text-align:center">
+                  <div style="width:90px;height:90px;border:1px dashed var(--color-neutral-500);display:grid;place-items:center;font-size:11px;color:var(--color-neutral-600)">QR</div>
+                  <div>If found, please return to<br>Lexisora Infotech, 4th Floor, Ahmedabad</div>
+                  <div>Emergency: +91 98XXX XXX10</div>
+                  <div style="margin-top:auto;border-top:1px solid var(--color-divider);width:100%;padding-top:8px">Authorised signatory</div>
+                </div>
+              </sc-if>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:10px"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-600)">Properties · Name</div>
+              <div class="field"><label>Data field</label><input class="input" value="employee.full_name"></div>
+              <div class="field"><label>Font size</label><input class="input" value="22"></div>
+              <div class="field"><label>Background</label><div style="border:1px dashed var(--color-neutral-500);border-radius:4px;height:60px;display:grid;place-items:center;font-size:12px;color:var(--color-neutral-600)">Upload image</div></div>
+              <div class="field"><label>Print vendor</label><input class="input" value="print@shreeprints.in"></div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ on.vcard }}">
+        <div data-screen-label="Visiting card" style="display:flex;flex-direction:column;gap:18px">
+          <div><h2 style="margin:0">Digital visiting card</h2><p style="margin:4px 0 0;color:var(--color-neutral-700)">Auto-filled from your profile using the corporate template.</p></div>
+          <div style="display:flex;gap:32px;flex-wrap:wrap;align-items:flex-start">
+            <div style="width:420px;max-width:100%;aspect-ratio:1.75;border:1px solid var(--color-divider);border-radius:8px;box-shadow:var(--shadow-md);padding:26px;display:flex;flex-direction:column;justify-content:space-between;background:var(--color-bg)">
+              <div style="display:flex;justify-content:space-between"><span style="font-family:var(--font-heading);font-size:18px">Lexisora Infotech</span><span style="width:54px;height:54px;border:1px dashed var(--color-neutral-500);display:grid;place-items:center;font-size:10px;color:var(--color-neutral-600)">QR</span></div>
+              <div><div style="font-family:var(--font-heading);font-size:28px">{{ me.name }}</div><div style="font-size:13px;color:var(--color-accent-700)">{{ me.title }}</div></div>
+              <div style="font-size:12.5px;border-top:1px solid var(--color-divider);padding-top:8px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px"><span>{{ me.email }}</span><span>+91 98250 XXXXX</span></div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:8px;min-width:220px">
+              <button class="btn btn-secondary" sc-camel-on-click="{{ toastSaved }}">Download PNG</button>
+              <button class="btn btn-secondary" sc-camel-on-click="{{ toastSaved }}">Download PDF</button>
+              <button class="btn btn-primary" sc-camel-on-click="{{ shareEmail }}">Share by email</button>
+              <button class="btn btn-primary" sc-camel-on-click="{{ shareWa }}">Share on WhatsApp</button>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ on.feed }}">
+        <div data-screen-label="Company feed" style="display:grid;grid-template-columns:minmax(0,1fr) 260px;gap:28px">
+          <div style="display:flex;flex-direction:column;gap:16px">
+            <h2 style="margin:0">Company feed</h2>
+            <sc-if value="{{ canPublish }}">
+              <div class="card"><div style="display:flex;gap:4px;border-bottom:1px solid var(--color-divider);padding-bottom:8px"><sc-for list="{{ editorTools }}" as="t"><span style="font-size:12px;border:1px solid var(--color-divider);border-radius:3px;padding:2px 8px">{{ t }}</span></sc-for></div><div style="min-height:70px;font-size:14px;color:var(--color-neutral-600)">Write a blog post, milestone or update…</div><div style="display:flex;justify-content:flex-end;gap:8px"><button class="btn btn-secondary">Save draft</button><button class="btn btn-primary" sc-camel-on-click="{{ toastPublished }}">Publish</button></div></div>
+            </sc-if>
+            <sc-for list="{{ posts }}" as="p"><div style="border-top:1px solid var(--color-divider);padding-top:14px;display:flex;flex-direction:column;gap:8px">
+              <div style="display:flex;gap:10px;align-items:center"><span style="width:32px;height:32px;border:1px solid var(--color-accent);border-radius:50%;display:grid;place-items:center;font-size:12px">{{ p.init }}</span><div style="flex:1"><div style="font-size:14px">{{ p.author }}</div><div style="font-size:11.5px;color:var(--color-neutral-600)">{{ p.meta }}</div></div><span class="tag tag-accent">{{ p.kind }}</span></div>
+              <div style="font-family:var(--font-heading);font-size:22px">{{ p.title }}</div>
+              <div style="font-size:14px;text-align:justify">{{ p.body }}</div>
+              <div style="display:flex;gap:16px;font-size:13px"><button sc-camel-on-click="{{ p.like }}" style="font:inherit;border:0;background:transparent;cursor:pointer;color:var(--color-accent-700);padding:0">{{ p.likeLabel }}</button><span>{{ p.comments }} comments</span><sc-if value="{{ p.cert }}"><button sc-camel-on-click="{{ toastSaved }}" style="font:inherit;border:0;background:transparent;cursor:pointer;color:var(--color-accent-700);padding:0">Download certificate</button></sc-if></div>
+            </div></sc-for>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:12px"><h4 style="margin:0">Employee of the month</h4><div class="card"><div class="card-kicker">September 2026</div><div class="card-title">Priya Sharma</div><div class="card-body">Shipped the Atlas CRM billing module two weeks early.</div></div><h4 style="margin:6px 0 0">Kudos this week</h4><div style="font-size:13.5px;border-top:1px solid var(--color-divider);padding:6px 0">Star Coder → Rahul D.</div><div style="font-size:13.5px;border-top:1px solid var(--color-divider);padding:6px 0">Bug Hunter → Sneha P.</div></div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ on.chat }}">
+        <div data-screen-label="Comms hub" style="display:grid;grid-template-columns:220px minmax(0,1fr);border:1px solid var(--color-divider);border-radius:4px;height:620px">
+          <div style="border-right:1px solid var(--color-divider);padding:12px;display:flex;flex-direction:column;gap:2px;overflow:auto">
+            <div style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--color-neutral-600);padding:4px 6px">Channels</div>
+            <sc-for list="{{ channels }}" as="c"><button sc-camel-on-click="{{ c.pick }}" style="font:inherit;font-size:13px;text-align:left;border:0;border-radius:4px;padding:5px 8px;cursor:pointer;background:{{ c.bg }};color:inherit;display:flex;justify-content:space-between"><span>{{ c.name }}</span><span style="color:var(--color-accent-700)">{{ c.unread }}</span></button></sc-for>
+          </div>
+          <div style="display:flex;flex-direction:column;min-width:0">
+            <div style="display:flex;align-items:center;gap:8px;padding:10px 16px;border-bottom:1px solid var(--color-divider)"><span style="font-family:var(--font-heading);font-size:20px;flex:1">{{ channel }}</span><button class="btn btn-secondary" sc-camel-on-click="{{ callToast }}">Audio</button><button class="btn btn-secondary" sc-camel-on-click="{{ callToast }}">Video</button><button class="btn btn-secondary" sc-camel-on-click="{{ callToast }}">Share screen</button></div>
+            <div style="flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:12px">
+              <sc-for list="{{ messages }}" as="m"><div style="display:flex;gap:10px"><span style="width:28px;height:28px;border:1px solid var(--color-divider);border-radius:50%;display:grid;place-items:center;font-size:11px;flex:none">{{ m.init }}</span><div><div style="font-size:12.5px"><strong style="font-weight:600">{{ m.who }}</strong> <span style="color:var(--color-neutral-600)">{{ m.t }}</span></div><div style="font-size:14px">{{ m.text }}</div></div></div></sc-for>
+            </div>
+            <div style="display:flex;gap:8px;padding:12px;border-top:1px solid var(--color-divider)"><input class="input" placeholder="Message" value="{{ draft }}" sc-camel-on-change="{{ setDraft }}" sc-camel-on-key-down="{{ draftKey }}"><button class="btn btn-primary" sc-camel-on-click="{{ sendMsg }}">Send</button></div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ on.billing }}">
+        <div data-screen-label="Subscription" style="display:flex;flex-direction:column;gap:20px">
+          <div><h2 style="margin:0">Subscription &amp; billing</h2><p style="margin:4px 0 0;color:var(--color-neutral-700)">42 of 50 seats used · first 10 users are free on every plan.</p></div>
+          <div class="seg" style="align-self:flex-start"><sc-for list="{{ cycleBtns }}" as="c"><button sc-camel-on-click="{{ c.pick }}" style="font:inherit;font-size:13px;padding:7px 14px;border:0;cursor:pointer;background:transparent;color:{{ c.color }};box-shadow:{{ c.ring }}">{{ c.label }}</button></sc-for></div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px">
+            <sc-for list="{{ plans }}" as="p"><div class="card" style="border-color:{{ p.border }}"><div class="card-kicker">{{ p.name }}</div><div style="font-family:var(--font-heading);font-size:34px">{{ p.price }}</div><div class="card-meta">{{ p.unit }}</div><sc-for list="{{ p.feats }}" as="f"><div style="font-size:13px;border-top:1px solid var(--color-divider);padding-top:4px">{{ f }}</div></sc-for><button class="btn btn-primary" sc-camel-on-click="{{ p.choose }}">{{ p.cta }}</button></div></sc-for>
+          </div>
+          <div style="display:flex;gap:8px;max-width:420px"><input class="input" placeholder="Promo code"><button class="btn btn-secondary" sc-camel-on-click="{{ promo }}">Apply</button></div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ on.whitelabel }}">
+        <div data-screen-label="Branding" style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);gap:28px">
+          <div style="display:flex;flex-direction:column;gap:14px">
+            <div><h2 style="margin:0">Branding</h2><p style="margin:4px 0 0;color:var(--color-neutral-700)">Each client tenant gets its own colors, logo and login domain.</p></div>
+            <div class="field"><label>Brand palette</label><div style="display:flex;flex-direction:column;gap:6px"><sc-for list="{{ palettes }}" as="p"><button sc-camel-on-click="{{ p.pick }}" style="font:inherit;font-size:13px;display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid {{ p.border }};border-radius:4px;background:transparent;cursor:pointer;color:inherit"><span style="width:18px;height:18px;border-radius:50%;background:{{ p.a }}"></span><span style="width:18px;height:18px;border-radius:50%;background:{{ p.b }}"></span>{{ p.name }}</button></sc-for></div></div>
+            <div class="field"><label>Logo</label><div style="border:1px dashed var(--color-neutral-500);border-radius:4px;height:70px;display:grid;place-items:center;font-size:12px;color:var(--color-neutral-600)">Drop SVG or PNG</div></div>
+            <div class="field"><label>Login domain</label><input class="input" value="acme.hrms.app"></div>
+            <button class="btn btn-primary" sc-camel-on-click="{{ toastSaved }}" style="align-self:flex-start">Publish theme</button>
+          </div>
+          <div style="border:1px solid var(--color-divider);border-radius:6px;overflow:hidden;display:grid;grid-template-columns:120px 1fr;min-height:340px;box-shadow:var(--shadow-sm)">
+            <div style="background:{{ pal.b }};padding:14px;display:flex;flex-direction:column;gap:8px"><div style="height:14px;width:70%;background:rgba(255,255,255,.8);border-radius:2px"></div><div style="height:8px;width:80%;background:rgba(255,255,255,.4)"></div><div style="height:8px;width:60%;background:rgba(255,255,255,.4)"></div><div style="height:8px;width:75%;background:rgba(255,255,255,.4)"></div></div>
+            <div style="padding:18px;display:flex;flex-direction:column;gap:10px;background:#fbfafa"><div style="height:14px;width:40%;background:var(--color-neutral-300)"></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div style="height:80px;border:1px solid var(--color-neutral-300);border-top:3px solid {{ pal.a }}"></div><div style="height:80px;border:1px solid var(--color-neutral-300);border-top:3px solid {{ pal.a }}"></div></div><div style="align-self:flex-start;padding:6px 14px;border-radius:4px;background:{{ pal.a }};color:#fff;font-size:12px">Primary action</div></div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ gen.on }}">
+        <div data-screen-label="{{ gen.title }}" style="display:flex;flex-direction:column;gap:18px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap">
+            <div><h2 style="margin:0">{{ gen.title }}</h2><p style="margin:4px 0 0;color:var(--color-neutral-700);max-width:760px">{{ gen.sub }}</p></div>
+            <div style="display:flex;gap:8px"><sc-if value="{{ gen.hasAction2 }}"><button class="btn btn-secondary" sc-camel-on-click="{{ gen.act2 }}">{{ gen.action2 }}</button></sc-if><sc-if value="{{ gen.hasAction }}"><button class="btn btn-primary" sc-camel-on-click="{{ gen.act }}">{{ gen.action }}</button></sc-if></div>
+          </div>
+          <sc-if value="{{ gen.hasKpis }}"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px"><sc-for list="{{ gen.kpis }}" as="k"><div style="border-top:1px solid var(--color-accent);padding-top:8px"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-600)">{{ k.0 }}</div><div style="font-family:var(--font-heading);font-size:30px;font-feature-settings:'tnum'">{{ k.1 }}</div><div style="font-size:12px;color:var(--color-neutral-700)">{{ k.2 }}</div></div></sc-for></div></sc-if>
+          <sc-if value="{{ gen.hasTabs }}"><div style="display:flex;gap:18px;border-bottom:1px solid var(--color-divider);flex-wrap:wrap"><sc-for list="{{ gen.tabs }}" as="t"><button sc-camel-on-click="{{ t.pick }}" style="font:inherit;font-size:14px;padding:8px 0;border:0;background:transparent;cursor:pointer;color:{{ t.color }};border-bottom:2px solid {{ t.line }};margin-bottom:-1px">{{ t.label }}</button></sc-for></div></sc-if>
+          <sc-if value="{{ gen.hasNote }}"><div style="font-size:13px;border:1px dashed var(--color-accent);border-radius:4px;padding:10px 12px;color:var(--color-accent-800)">{{ gen.note }}</div></sc-if>
+          <sc-if value="{{ gen.hasTiles }}"><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px"><sc-for list="{{ gen.tiles }}" as="t"><div class="card"><sc-if value="{{ t.media }}"><div style="aspect-ratio:16/9;border:1px solid var(--color-divider);background:repeating-linear-gradient(45deg,var(--color-neutral-200),var(--color-neutral-200) 6px,var(--color-bg) 6px,var(--color-bg) 12px);display:grid;place-items:center;font-size:11px;color:var(--color-neutral-600)">{{ t.media }}</div></sc-if><div class="card-kicker">{{ t.k }}</div><div class="card-title">{{ t.title }}</div><div class="card-body">{{ t.sub }}</div><sc-if value="{{ t.cta }}"><button class="btn btn-ghost" sc-camel-on-click="{{ t.go }}" style="align-self:flex-start">{{ t.cta }}</button></sc-if></div></sc-for></div></sc-if>
+          <sc-if value="{{ gen.hasTable }}">
+            <div style="display:flex;flex-direction:column;overflow:auto">
+              <div style="display:grid;grid-template-columns:{{ gen.tpl }};gap:10px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-600);padding:8px;border-bottom:1px solid var(--color-divider)"><sc-for list="{{ gen.cols }}" as="c"><span>{{ c }}</span></sc-for></div>
+              <sc-for list="{{ gen.rows }}" as="r"><div sc-camel-on-click="{{ r.go }}" style="display:grid;grid-template-columns:{{ gen.tpl }};gap:10px;font-size:13.5px;padding:9px 8px;border-bottom:1px solid var(--color-divider);align-items:center;cursor:{{ r.cursor }}" style-hover="background:color-mix(in srgb,var(--color-text) 4%,transparent)"><sc-for list="{{ r.cells }}" as="c"><span style="min-width:0"><sc-if value="{{ c.isText }}">{{ c.text }}</sc-if><sc-if value="{{ c.isTag }}"><span class="tag {{ c.tone }}">{{ c.text }}</span></sc-if><sc-if value="{{ c.isCheck }}"><button sc-camel-on-click="{{ c.toggle }}" style="width:18px;height:18px;border-radius:3px;border:1.5px solid {{ c.border }};background:{{ c.fill }};cursor:pointer;padding:0;color:var(--color-bg);font-size:11px;line-height:1">{{ c.mark }}</button></sc-if></span></sc-for></div></sc-for>
+            </div>
+          </sc-if>
+        </div>
+      </sc-if>
+
+    </main>
+  </div>
+</div>
+</sc-if>
+
+<sc-if value="{{ modalOn }}" hint-placeholder-val="{{ false }}">
+  <div class="dialog-backdrop" sc-camel-on-click="{{ closeModal }}" style="z-index:50">
+    <div class="dialog" sc-camel-on-click="{{ stop }}" style="width:min(560px,100%);max-height:90vh;overflow:auto">
+      <div class="dialog-title">{{ form.title }}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <sc-for list="{{ form.fields }}" as="f">
+          <div class="field" style="grid-column:{{ f.span }}"><label>{{ f.label }}</label>
+            <sc-if value="{{ f.isText }}"><input class="input" type="{{ f.inputType }}" placeholder="{{ f.ph }}"></sc-if>
+            <sc-if value="{{ f.isSelect }}"><div class="input" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer"><span>{{ f.first }}</span><span style="color:var(--color-neutral-600)">▾</span></div></sc-if>
+            <sc-if value="{{ f.isArea }}"><textarea class="input" placeholder="{{ f.ph }}"></textarea></sc-if>
+            <sc-if value="{{ f.isFile }}"><div style="border:1px dashed var(--color-neutral-500);border-radius:4px;padding:14px;font-size:12.5px;text-align:center;color:var(--color-neutral-600)">Drop file or browse</div></sc-if>
+          </div>
+        </sc-for>
+      </div>
+      <div class="dialog-actions"><button class="btn btn-secondary" sc-camel-on-click="{{ closeModal }}">Cancel</button><button class="btn btn-primary" sc-camel-on-click="{{ submitModal }}">{{ form.submit }}</button></div>
+    </div>
+  </div>
+</sc-if>
+
+<sc-if value="{{ toastOn }}" hint-placeholder-val="{{ false }}">
+  <div style="position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:60;background:var(--color-neutral-900);color:var(--color-neutral-100);padding:10px 18px;border-radius:4px;font-size:13.5px;box-shadow:var(--shadow-lg)">{{ toast }}</div>
+</sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script="" data-props="{&quot;defaultRole&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;employee&quot;,&quot;lead&quot;,&quot;manager&quot;,&quot;hr&quot;,&quot;admin&quot;],&quot;default&quot;:&quot;employee&quot;,&quot;tsType&quot;:&quot;string&quot;}}">
+const ALL=['employee','lead','manager','hr','admin'],HRA=['hr','admin'],ADM=['admin'];
+const PEOPLE={employee:['Priya Sharma','Software Engineer · Development','priya.sharma@lexisora.com'],lead:['Arjun Mehta','Project Lead · Development','arjun.mehta@lexisora.com'],manager:['Neha Kapoor','Engineering Manager','neha.kapoor@lexisora.com'],hr:['Kavya Iyer','HR Manager','kavya.iyer@lexisora.com'],admin:['Rohit Verma','Chief Executive Officer','rohit.verma@lexisora.com']};
+const RL=[['employee','Employee'],['lead','Team / Project Lead'],['manager','Reporting Manager'],['hr','HR'],['admin','Admin / CEO']];
+const NAV=[
+['Home',[['dashboard','Dashboard',ALL],['feed','Company feed',ALL],['notices','Notice board',ALL],['chat','Comms hub',ALL]]],
+['Time',[['attendance','Attendance',ALL],['timesheet','My timesheet',ALL],['approvals','Timesheet approvals',['lead','manager','admin']],['leave','Time off',ALL],['leaveAdmin','Leave setup',HRA],['idcompliance','ID card compliance',HRA]]],
+['Work',[['projects','Projects',ALL],['kanban','Task board',ALL],['archive','Project archive',['lead','manager','admin']],['interns','Intern task sheets',['lead','hr','admin']]]],
+['People',[['employees','Employees',['manager','hr','admin']],['onboarding','Paperless onboarding',ALL],['shifts','Shifts',HRA],['locations','Work locations',HRA],['appraisal','Appraisals',['manager','hr','admin']],['jobs','Jobs',HRA],['candidates','Candidates',['lead','hr','admin']],['interviews','Interviews',['lead','manager','hr','admin']]]],
+['Finance',[['payslips','My payslips',ALL],['payroll','Payroll run',HRA],['ledger','Ledger',ADM],['invoices','GST invoices',ADM],['purchases','Purchases & input GST',ADM],['filing','Filing cabinet',ADM]]],
+['Workplace',[['vault','My digital vault',ALL],['idcard','ID card designer',HRA],['vcard','Visiting card',ALL],['assets','Assets',HRA],['welcomekit','Welcome kits',HRA],['policies','Policies & rulebook',ALL],['helpdesk','Helpdesk',ALL],['lms','Learning',ALL],['kudos','Kudos & EOTM',ALL],['facility','Rooms & visitors',ALL],['cctv','CCTV',ADM],['wellness','Wellness games',ALL]]],
+['Admin',[['roles','Roles & access',ADM],['settings','Attendance policy',HRA],['notif','Alerts',ALL]]],
+['SaaS',[['billing','Subscription',ADM],['whitelabel','Branding',ADM],['tenants','Tenants',ADM],['privacy','Data privacy',ADM],['support','Lexisora support',ADM]]]];
+const CUSTOM=['dashboard','attendance','timesheet','approvals','leave','kanban','profile','onboarding','idcard','vcard','feed','chat','billing','whitelabel'];
+const GEN={
+notices:{t:'Notice board',s:'Global notices reach everyone. Team-specific notices are visible only to the selected department or project.',a:['Publish notice','notice'],tabs:['All','Global','My teams'],cols:['Title','Visibility','Audience','Published','Read'],rows:[['Diwali celebration & potluck','~Global','Everyone','27 Sep','112 / 128'],['Atlas CRM release freeze','!Team','Development · Atlas','26 Sep','14 / 16'],['Revised travel reimbursement','~Global','Everyone','22 Sep','98 / 128'],['QA regression schedule','!Team','QA Team','20 Sep','9 / 9']]},
+leaveAdmin:{t:'Leave setup',s:'Leave types, annual credit rules and manual credits.',a:['Credit leave','credit'],a2:['Add leave type','leavetype'],tabs:['Leave types','Basic credit','Manual credit','Requests'],cols:['Leave type','Annual quota','Carry forward','Encashable','Applies to'],rows:[['Casual leave','12','No','No','Full-time'],['Sick leave','8','No','No','Full-time, Interns'],['Earned leave','18','Up to 30','Yes','Full-time'],['Comp-off','On approval','60 days','No','Full-time']]},
+idcompliance:{t:'ID card compliance',s:'Security logs whether each employee in the office is wearing their ID card. Photo verification is optional.',a:['Start today\'s check','idcheck'],kpis:[['In office today','86','of 128 employees'],['Wearing ID','81','94%'],['Missing','5','Reminder sent'],['Month compliance','96%','+2% vs Aug']],cols:['Employee','Department','Checked at','Wearing ID','Photo','Logged by'],rows:[['Rahul Desai','Development','09:41','[x]','-Taken','Security desk'],['Sneha Patel','QA','09:48','[x]','-Skipped','Security desk'],['Vikram Joshi','Design','10:02','[ ]','-Taken','Security desk'],['Ananya Rao','Finance','10:05','[x]','-Skipped','Kavya Iyer']]},
+projects:{t:'Projects',s:'Every client and internal project, with its modules, team and estimate.',a:['Create project','project'],to:'kanban',kpis:[['Active','9','3 due this month'],['Billable hours (Sep)','1,284','₹ 19.2 L billable'],['On track','7','2 at risk']],cols:['Project','Client','Lead','Progress','Estimated vs logged','Status'],rows:[['Atlas CRM','Nimbus Retail','Arjun Mehta','64%','820h / 540h','~On track'],['Orbit HR portal','Internal','Neha Kapoor','30%','600h / 190h','~On track'],['Kestrel mobile app','Zephyr Foods','Arjun Mehta','82%','400h / 372h','!At risk'],['Ledger sync','Internal','Rahul Desai','10%','120h / 14h','-Planning']]},
+archive:{t:'Project archive & client vault',s:'Completed projects with original requirements, assets and scope documents, searchable for future reference.',tabs:['All','Web','Mobile','Internal'],cols:['Project','Client','Closed','Documents','Tech','Access'],rows:[['Helix e-commerce','Ardent Co.','Mar 2026','14 files','React, Node','-Leads only'],['Quill LMS','Internal','Jan 2026','9 files','Next.js','-All developers'],['Pulse analytics','Crest Labs','Nov 2025','22 files','Python, Vue','-Leads only']]},
+interns:{t:'Intern task sheets',s:'Interns have a separate dashboard with daily task sheets, tracked apart from full-time staff.',a:['Assign task','interntask'],cols:['Intern','Mentor','Today\'s task','Hours','Status','Week score'],rows:[['Isha Mehra','Arjun Mehta','Build login form validation','4.5','~Done','8.5'],['Karan Shah','Sneha Patel','Write 20 test cases for leave module','3','!In progress','7.0'],['Divya Nair','Vikram Joshi','Icon set for dashboard','5','~Done','9.0']]},
+employees:{t:'Employees',s:'Directory of all staff and interns. Open a row for profile, documents, assets and compensation.',a:['Add employee','employee'],a2:['Import CSV','import'],to:'profile',tabs:['All · 128','Full-time · 112','Interns · 9','Notice period · 3','Exited'],cols:['Name','Emp ID','Department','Designation','Work mode','Manager','Status'],rows:[['Priya Sharma','LX-0142','Development','Software Engineer','Remote','Neha Kapoor','~Active'],['Rahul Desai','LX-0118','Development','Senior Engineer','Office','Neha Kapoor','~Active'],['Sneha Patel','LX-0131','QA','QA Lead','Office','Neha Kapoor','~Active'],['Vikram Joshi','LX-0150','Design','UI Designer','Hybrid','Arjun Mehta','~Active'],['Isha Mehra','LX-I-021','Development','Intern','Office','Arjun Mehta','-Intern'],['Ananya Rao','LX-0099','Finance','Accountant','Office','Rohit Verma','!Notice period']]},
+shifts:{t:'Shifts',s:'Shift master and employee shift allocation.',a:['Add shift','shift'],a2:['Allocate shift','allocate'],tabs:['Shift master','Allocation'],cols:['Shift','Timing','Grace','Break','Weekly off','Employees'],rows:[['General','09:30 – 18:30','15 min','60 min','Sat, Sun','104'],['Early','07:00 – 16:00','10 min','60 min','Sun','12'],['US overlap','13:00 – 22:00','15 min','45 min','Sat, Sun','12']]},
+locations:{t:'Work locations',s:'Offices and their punch rules. Biometric-only locations block web punch for employees assigned there.',a:['Add location','location'],cols:['Location','Address','Geo radius','Punch mode','Employees'],rows:[['Ahmedabad HQ','4th Floor, Titanium City Centre','150 m','~Biometric only','96'],['Pune studio','Baner Road','100 m','~Biometric only','14'],['Remote','—','—','!Web / desktop','18']]},
+appraisal:{t:'Appraisals',s:'Appraisal cycles, KRA templates and employee association.',a:['Create cycle','appraisal'],tabs:['Cycles','Templates','Employee association'],cols:['Cycle','Period','Reviewers','Self review','Manager review','Status'],rows:[['H1 FY26-27','Apr – Sep 2026','8','92%','40%','!In review'],['H2 FY25-26','Oct – Mar 2026','8','100%','100%','~Closed']]},
+jobs:{t:'Jobs',s:'Open positions with department, designation, job type and branch masters.',a:['Add job','job'],tabs:['Open · 4','Closed','Masters'],cols:['Position','Department','Type','Openings','Branch','Applicants','Status'],rows:[['React Developer','Development','Full-time','2','Ahmedabad','38','~Open'],['QA Engineer','QA','Full-time','1','Ahmedabad','21','~Open'],['UI/UX Intern','Design','Internship','2','Pune','54','~Open'],['Accountant','Finance','Full-time','1','Ahmedabad','12','-On hold']]},
+candidates:{t:'Candidates & interview vault',s:'Every applicant with resume, interview scores and final result, kept for future hiring.',a:['Add candidate','candidate'],a2:['Schedule interview','interview'],tabs:['All','Screening','Interview','Offered','Rejected'],cols:['Candidate','Applied for','Source','Score','Stage','Resume'],rows:[['Aditya Kulkarni','React Developer','LinkedIn','8.2 / 10','!Interview','-PDF'],['Meera Iyer','QA Engineer','Referral','7.5 / 10','~Offered','-PDF'],['Farhan Ali','React Developer','Naukri','5.1 / 10','-Rejected','-PDF'],['Tanvi Shah','UI/UX Intern','Campus','—','!Screening','-PDF']]},
+interviews:{t:'Interviews',s:'Scheduled interview appointments and scorecards.',a:['Schedule interview','interview'],cols:['Candidate','Round','Interviewer','When','Mode','Result'],rows:[['Aditya Kulkarni','Technical 2','Arjun Mehta','30 Sep, 11:00','Video','!Pending'],['Tanvi Shah','Portfolio','Vikram Joshi','1 Oct, 15:00','In office','!Pending'],['Meera Iyer','HR','Kavya Iyer','25 Sep, 12:00','Video','~Selected']]},
+payslips:{t:'My payslips',s:'Calculated from approved attendance, auto-idle time and leave.',cols:['Month','Working days','Paid days','Idle deduction','Net pay','Payslip'],rows:[['Aug 2026','21','21','₹ 0','₹ 78,420','-Download'],['Jul 2026','23','22.5','₹ 1,120','₹ 76,980','-Download'],['Jun 2026','22','22','₹ 0','₹ 78,420','-Download']]},
+payroll:{t:'Payroll run',s:'Payroll uses RM-approved timesheets, leave and idle deductions. Lock attendance before running.',a:['Run payroll · Sep 2026','payroll'],kpis:[['Employees','128','9 interns on stipend'],['Timesheets approved','119','9 pending RM'],['Gross','₹ 86.4 L','+1.8% vs Aug'],['Idle deductions','₹ 14,200','from 6 employees']],cols:['Employee','Paid days','Leave','Idle','Gross','Deductions','Net','Status'],rows:[['Priya Sharma','22','0','0h 40m','₹ 84,000','₹ 5,580','₹ 78,420','~Ready'],['Rahul Desai','21','1 EL','0h','₹ 1,12,000','₹ 9,120','₹ 1,02,880','~Ready'],['Vikram Joshi','20','2 CL','2h 10m','₹ 62,000','₹ 5,410','₹ 56,590','!Timesheet pending']]},
+ledger:{t:'Ledger',s:'Income, expenses and internal HR vouchers in a double-entry ledger.',a:['New voucher','voucher'],kpis:[['Income (Sep)','₹ 42.6 L','12 invoices'],['Expenses (Sep)','₹ 31.1 L','incl. payroll'],['Balance','₹ 11.5 L','Current month']],tabs:['Day book','Income','Expenses','HR vouchers','Trial balance'],cols:['Date','Voucher','Ledger','Narration','Debit','Credit'],rows:[['28 Sep','RCPT-221','Nimbus Retail','Invoice INV-0412 received','','₹ 4,72,000'],['27 Sep','PMT-310','Office supplies','Amazon order – stationery','₹ 8,460',''],['25 Sep','HRV-044','Staff welfare','Team dinner reimbursement','₹ 12,000',''],['24 Sep','PMT-309','Rent','Ahmedabad HQ – Oct','₹ 2,10,000','']]},
+invoices:{t:'GST invoices',s:'Invoices generated from client billable hours with GST applied, emailed from here.',a:['Generate invoice','invoice'],cols:['Invoice','Client','Billable hours','Taxable','GST 18%','Total','Status'],rows:[['INV-0412','Nimbus Retail','320','₹ 4,00,000','₹ 72,000','₹ 4,72,000','~Paid'],['INV-0413','Zephyr Foods','186','₹ 2,32,500','₹ 41,850','₹ 2,74,350','!Emailed'],['INV-0414','Crest Labs','64','₹ 80,000','₹ 14,400','₹ 94,400','-Draft']]},
+purchases:{t:'Purchases & input GST',s:'Company purchases with Input GST captured automatically from uploaded invoices.',a:['Record purchase','purchase'],kpis:[['Purchases (Sep)','₹ 1.84 L','23 bills'],['Input GST claimable','₹ 28,140','for GSTR-3B']],cols:['Date','Vendor','Invoice no.','Category','Amount','Input GST','Bill'],rows:[['27 Sep','Amazon','IN-8843','Stationery','₹ 8,460','₹ 1,290','-PDF'],['22 Sep','Flipkart','FK-22019','Peripherals','₹ 24,900','₹ 3,798','-PDF'],['18 Sep','Dell India','DL-5521','Laptops','₹ 1,42,000','₹ 21,661','-PDF']]},
+filing:{t:'Filing cabinet',s:'Folders for bills, tax documents, vendor receipts and corporate files.',a:['Upload','upload'],tiles:[['Folder','Bills & receipts','412 files'],['Folder','GST returns','36 files'],['Folder','Income tax','18 files'],['Folder','Contracts & NDAs','64 files'],['Folder','Company registration','9 files'],['Folder','Vendor agreements','27 files']]},
+vault:{t:'My digital vault',s:'Your personal documents, offer letter and compensation. Visible only to you and HR.',a:['Upload document','upload'],cols:['Document','Category','Uploaded','Verified by HR'],rows:[['Offer letter','Offer & compensation','12 Jan 2024','~Signed'],['Compensation breakdown','Offer & compensation','1 Apr 2026','~Current'],['PAN card','Government ID','12 Jan 2024','~Verified'],['Aadhaar card','Government ID','12 Jan 2024','~Verified'],['B.Tech marksheets','Education','14 Jan 2024','!Pending'],['Resume','Career','10 Jan 2024','-—']]},
+assets:{t:'Assets & inventory',s:'Every item issued to employees with serial numbers, warranty and return status.',a:['Add asset','asset'],tabs:['All · 214','Assigned','In stock','Under repair','Returned'],cols:['Item','Serial no.','Assigned to','Assigned on','Warranty till','Status'],rows:[['Dell Latitude 5440','DL5440-8821','Priya Sharma','12 Jan 2024','Jan 2027','~Assigned'],['Logitech M331 mouse','LG-M331-203','Priya Sharma','12 Jan 2024','Jan 2026','~Assigned'],['MacBook Air M3','C02XK1','Vikram Joshi','3 Mar 2025','Mar 2026','!Warranty expired'],['Dell P2422H monitor','CN0P24-11','—','—','Aug 2027','-In stock']]},
+welcomekit:{t:'Welcome kits',s:'Items handed to new joiners on day one.',a:['Issue kit','kit'],cols:['New joiner','Joined','T-shirt','Mug','Notebook','Bag','Issued by'],rows:[['Meera Iyer','6 Oct 2026','[x]','[x]','[x]','[ ]','Kavya Iyer'],['Isha Mehra','15 Sep 2026','[x]','[x]','[x]','[x]','Kavya Iyer'],['Karan Shah','15 Sep 2026','[x]','[ ]','[x]','[x]','Kavya Iyer']]},
+policies:{t:'Policies & rulebook',s:'Official rules, HR policies, holiday list and compliance guidelines. Some require acknowledgement.',a:['Upload policy','policy'],cols:['Document','Updated','Requires acknowledgement','Acknowledged'],rows:[['Employee handbook 2026','1 Apr 2026','Yes','~You acknowledged'],['Leave & attendance policy','15 Jul 2026','Yes','!Pending · read now'],['Holiday list 2026','1 Jan 2026','No','-—'],['IT & data security policy','10 Mar 2026','Yes','~You acknowledged'],['POSH policy','1 Apr 2026','Yes','~You acknowledged']]},
+helpdesk:{t:'Helpdesk',s:'Raise IT or HR tickets and track them to resolution.',a:['Raise ticket','ticket'],tabs:['My tickets','Assigned to me','All'],cols:['Ticket','Subject','Category','Priority','Assignee','Status'],rows:[['HD-1042','Laptop battery drains fast','IT hardware','!High','IT desk','!In progress'],['HD-1038','Payslip shows wrong PF','Payroll','Medium','Kavya Iyer','~Resolved'],['HD-1031','VPN access for client server','IT access','Medium','IT desk','~Resolved']]},
+lms:{t:'Learning',s:'Training videos and coding guidelines. Certificates issue automatically on completion.',a:['Upload course','course'],tiles:[['Required · 40 min','Secure coding guidelines','3 of 5 lessons done','Continue','Video'],['Onboarding · 25 min','Git workflow at Lexisora','Completed · certificate ready','Download certificate','Video'],['Optional · 1h 10m','Writing good test cases','Not started','Start','Video'],['Required · 15 min','POSH awareness','Completed','Download certificate','Video']]},
+kudos:{t:'Kudos & Employee of the Month',s:'Managers award badges; EOTM is announced on the feed with a verifiable certificate.',a:['Give kudos','kudos'],a2:['Announce EOTM','eotm'],cols:['Employee','Badge','From','Message','Date'],rows:[['Rahul Desai','~Star Coder','Neha Kapoor','Refactored the payroll engine in a week','26 Sep'],['Sneha Patel','~Bug Hunter','Arjun Mehta','Caught the GST rounding issue before release','22 Sep'],['Priya Sharma','~Employee of the Month','Rohit Verma','Atlas CRM billing shipped early','1 Sep']]},
+facility:{t:'Rooms & visitors',s:'Book conference rooms and register visitors to issue e-passes.',a:['Book room','booking'],a2:['Register visitor','visitor'],tabs:['Room bookings','Visitor log'],cols:['Room / visitor','Date','Time','Host','Purpose','Status'],rows:[['Board room','30 Sep','11:00 – 12:00','Rohit Verma','Nimbus Retail review','~Booked'],['Huddle 2','30 Sep','15:00 – 15:30','Arjun Mehta','Sprint planning','~Booked'],['Amit Khanna (Nimbus)','30 Sep','10:45','Rohit Verma','Client visit','!E-pass sent']]},
+cctv:{t:'CCTV',s:'Live camera feeds streamed from the office NVR. Visible to Admin and Facility Manager only.',tiles:[['Live','Main entrance','Ahmedabad HQ','','Camera feed'],['Live','Reception','Ahmedabad HQ','','Camera feed'],['Live','Dev floor','Ahmedabad HQ','','Camera feed'],['Offline','Server room','Last seen 08:12','Reconnect','Camera feed'],['Live','Parking','Ahmedabad HQ','','Camera feed'],['Live','Pune studio','Baner Road','','Camera feed']]},
+wellness:{t:'Wellness games',s:'Short daily puzzles for a five-minute break. A new set unlocks every morning.',tiles:[['Daily · 3 min','Queens','Place one queen per row, column and colour region.','Play'],['Daily · 5 min','Mini Sudoku','A 6×6 grid.','Play'],['Daily · 2 min','Word ladder','Change one letter at a time.','Play'],['Weekly','Team leaderboard','Development leads this week.','View']]},
+roles:{t:'Roles & access',s:'Module permissions per role. Mobile access is off by default and should be enabled only for top-level roles.',a:['Add role','role'],cols:['Module','Employee','Team Lead','Rep. Manager','HR','Admin / CEO'],rows:[['Mobile app access','[ ]','[ ]','[ ]','[x]','[x]'],['Approve timesheets','[ ]','[x]','[x]','[ ]','[x]'],['View all task boards','[ ]','[ ]','[x]','[ ]','[x]'],['Payroll & ledger','[ ]','[ ]','[ ]','[x]','[x]'],['Publish global notices','[ ]','[ ]','[ ]','[x]','[x]'],['Publish team notices','[ ]','[x]','[x]','[x]','[x]'],['Recruitment','[ ]','[x]','[ ]','[x]','[x]'],['CCTV feeds','[ ]','[ ]','[ ]','[ ]','[x]']]},
+settings:{t:'Attendance policy',s:'Controls how and where employees can punch in, plus desktop tracker rules.',cols:['Rule','Office employees','Remote / WFH employees'],rows:[['Biometric punch mandatory','[x]','[ ]'],['Allow web punch-in','[ ]','[x]'],['Allow desktop app punch-in','[ ]','[x]'],['Auto-idle after 5 min without input','[x]','[x]'],['Screenshot every 10 min','[x]','[x]'],['Blur screenshots','[ ]','[ ]'],['Deduct idle time from payroll','[x]','[x]']]},
+notif:{t:'Alerts',s:'Reminders and approvals that need your attention.',cols:['Alert','From','When'],rows:[['Timesheet for 21–27 Sep awaiting your submission','System','Today'],['Acknowledge the updated leave & attendance policy','HR','Yesterday'],['Your ticket HD-1038 was resolved','Payroll','26 Sep'],['Birthday: Rahul Desai','System','30 Sep']]},
+tenants:{t:'Tenants',s:'Client companies on the platform. Each has an isolated database and its own login domain.',a:['Add tenant','tenant'],kpis:[['Tenants','14','3 on free tier'],['Seats billed','1,286','+64 this month'],['MRR','₹ 6.4 L','+8%']],cols:['Company','Domain','Plan','Seats','Renewal','Status'],rows:[['Lexisora Infotech','lexisora.hrms.app','Internal','128','—','~Active'],['Acme Logistics','acme.hrms.app','Growth · yearly','240','Mar 2027','~Active'],['Bluepeak Studio','bluepeak.hrms.app','Free','9','—','-Free tier'],['Nova Clinics','nova.hrms.app','Growth · monthly','62','12 Oct','!Payment due']]},
+privacy:{t:'Data privacy guarantee',s:'The platform super-admin cannot read a tenant\'s chats, salaries or personal documents. These controls are enforced, not optional.',cols:['Data','Tenant admin','Lexisora super-admin','Encryption'],rows:[['Chats & call recordings','Own users','-No access','Per-tenant key'],['Salaries & payslips','HR / Admin','-No access','Per-tenant key'],['Personal documents','HR / Admin','-No access','Per-tenant key'],['Usage & billing metrics','Admin','~Aggregated only','At rest']]},
+support:{t:'Lexisora support',s:'24/7 channel for client company admins to reach the Lexisora technical team.',a:['New request','b2b'],cols:['Request','Subject','Severity','Opened','Status'],rows:[['SUP-221','SSO login failing for 3 users','!High','Today, 10:12','!Engineer assigned'],['SUP-214','Custom payslip template','Low','22 Sep','~Resolved']]}};
+const F=(t,fields,sub,toast)=>({title:t,fields,submit:sub||'Save',toast:toast||'Saved'});
+const FORMS={
+task:F('Add task',[['Title','text',2],['Project','select',1,['Atlas CRM','Orbit HR portal']],['Module','select',1,['Billing','Auth','Reports']],['Assignee','select',1,['Priya Sharma','Rahul Desai']],['Estimated hours','text',1],['Due date','date',1],['Team board','select',1,['Development','QA','Design']],['Description','area',2]],'Add task','Task added'),
+leave:F('Apply time off',[['Leave type','select',2,['Earned leave','Casual leave','Sick leave','Comp-off']],['From','date',1],['To','date',1],['Half day','select',1,['No','First half','Second half']],['Notify','select',1,['Neha Kapoor (RM)']],['Reason','area',2]],'Submit request','Request sent to Neha Kapoor'),
+outside:F('Log outside-hours task',[['Task','text',2],['Project','select',1,['Atlas CRM']],['Date','date',1],['From','time',1],['To','time',1],['Reason','area',2]],'Log hours','Added for PL review'),
+employee:F('Add employee',[['Full name','text',1],['Official email','email',1],['Phone','text',1],['Department','select',1,['Development','QA','Design','Finance','HR']],['Designation','select',1,['Software Engineer','QA Engineer','Intern']],['Reporting manager','select',1,['Neha Kapoor']],['Employment type','select',1,['Full-time','Intern']],['Work mode','select',1,['Office (biometric)','Remote (web + desktop)','Hybrid']],['Joining date','date',1],['Shift','select',1,['General 09:30–18:30']],['Photo','file',2]],'Add & send onboarding invite','Invite sent · ID card queued'),
+import:F('Import employees',[['CSV file','file',2]],'Import','42 rows imported'),
+shift:F('Add shift',[['Shift name','text',2],['Start','time',1],['End','time',1],['Grace (min)','text',1],['Break (min)','text',1],['Weekly off','select',2,['Sat, Sun']]]),
+allocate:F('Allocate shift',[['Employees','select',2,['Select employees']],['Shift','select',1,['General']],['From date','date',1]]),
+location:F('Add work location',[['Name','text',2],['Address','area',2],['Geo radius (m)','text',1],['Punch mode','select',1,['Biometric only','Web / desktop allowed']]]),
+appraisal:F('Create appraisal cycle',[['Cycle name','text',2],['From','date',1],['To','date',1],['KRA template','select',2,['Engineering v2']]]),
+job:F('Add job',[['Position','text',2],['Department','select',1,['Development']],['Job type','select',1,['Full-time','Internship']],['Openings','text',1],['Branch','select',1,['Ahmedabad']],['Description','area',2]],'Publish job'),
+candidate:F('Add candidate',[['Name','text',1],['Email','email',1],['Phone','text',1],['Applied for','select',1,['React Developer']],['Source','select',1,['LinkedIn','Referral']],['Resume','file',2]]),
+interview:F('Schedule interview',[['Candidate','select',2,['Aditya Kulkarni']],['Round','select',1,['Technical 1','Technical 2','HR']],['Interviewer','select',1,['Arjun Mehta']],['Date','date',1],['Time','time',1],['Mode','select',2,['Video','In office']]],'Schedule & email','Invite emailed'),
+notice:F('Publish notice',[['Title','text',2],['Visibility','select',1,['Global · everyone','Team-specific']],['Team','select',1,['Development','QA Team','Atlas project']],['Body','area',2],['Attachment','file',2]],'Publish','Notice published'),
+credit:F('Credit leave',[['Credit type','select',2,['Manual credit','Basic (annual)']],['Leave type','select',1,['Comp-off']],['Days','text',1],['Employees','select',2,['Select employees']],['Note','area',2]],'Credit'),
+leavetype:F('Add leave type',[['Name','text',2],['Annual quota','text',1],['Carry forward','text',1]]),
+idcheck:F('ID card check',[['Employee','select',2,['Scan badge or pick']],['Wearing ID','select',1,['Yes','No']],['Photo','file',1]],'Log check','Logged'),
+project:F('Create project',[['Project name','text',2],['Client','select',1,['Nimbus Retail','Internal']],['Project lead','select',1,['Arjun Mehta']],['Start','date',1],['Deadline','date',1],['Billable','select',1,['Yes','No']],['Git repository','text',1],['Requirement documents','file',2]],'Create'),
+interntask:F('Assign intern task',[['Intern','select',1,['Isha Mehra']],['Date','date',1],['Task','area',2]],'Assign'),
+payroll:F('Run payroll · September 2026',[['Lock attendance up to','date',2],['Include idle deduction','select',1,['Yes']],['Pending timesheets','select',1,['Exclude (9)','Wait']],['Payment date','date',2]],'Run & generate payslips','Payslips generated for 119 employees'),
+voucher:F('New voucher',[['Type','select',1,['Payment','Receipt','Journal','HR voucher']],['Date','date',1],['Ledger','select',1,['Office supplies']],['Amount','text',1],['Narration','area',2]]),
+invoice:F('Generate GST invoice',[['Client','select',1,['Zephyr Foods']],['Project','select',1,['Kestrel mobile app']],['Period','select',1,['Sep 2026']],['Billable hours','text',1],['Rate / hour','text',1],['GST','select',1,['18% IGST','9% CGST + 9% SGST']],['Email to','email',2]],'Generate & email','Invoice emailed to client'),
+purchase:F('Record purchase',[['Vendor','text',1],['Invoice no.','text',1],['Amount','text',1],['Input GST (auto)','text',1],['Category','select',2,['Stationery','Peripherals']],['Bill','file',2]]),
+upload:F('Upload document',[['Folder / category','select',2,['Bills & receipts']],['File','file',2],['Tags','text',2]],'Upload','Uploaded'),
+asset:F('Add asset',[['Item','text',2],['Serial no.','text',1],['Warranty till','date',1],['Assign to','select',1,['Priya Sharma']],['Assigned on','date',1]]),
+kit:F('Issue welcome kit',[['New joiner','select',2,['Meera Iyer']],['Items','select',2,['T-shirt, Mug, Notebook, Bag']],['Issued on','date',2]],'Issue'),
+policy:F('Upload policy',[['Title','text',2],['File','file',2],['Require acknowledgement','select',2,['Yes','No']]],'Publish'),
+ticket:F('Raise ticket',[['Category','select',1,['IT hardware','IT access','Payroll','HR']],['Priority','select',1,['Medium','High','Low']],['Subject','text',2],['Description','area',2],['Attachment','file',2]],'Raise ticket','Ticket HD-1043 created'),
+course:F('Upload course',[['Title','text',2],['Video','file',2],['Certificate on completion','select',1,['Yes']],['Assign to','select',1,['All developers']]],'Publish'),
+kudos:F('Give kudos',[['Employee','select',1,['Rahul Desai']],['Badge','select',1,['Star Coder','Bug Hunter','Team Player']],['Message','area',2]],'Send kudos','Kudos posted to feed'),
+eotm:F('Announce Employee of the Month',[['Employee','select',1,['Priya Sharma']],['Month','select',1,['September 2026']],['Citation','area',2]],'Announce & issue certificate','Posted to feed · certificate issued'),
+booking:F('Book room',[['Room','select',2,['Board room','Huddle 1','Huddle 2']],['Date','date',2],['From','time',1],['To','time',1],['Purpose','text',2]],'Book'),
+visitor:F('Register visitor',[['Visitor name','text',1],['Company','text',1],['Host','select',1,['Rohit Verma']],['Date','date',1],['Phone','text',2]],'Send e-pass','E-pass sent on WhatsApp'),
+role:F('Add role',[['Role name','text',2],['Copy permissions from','select',2,['Employee']]]),
+tenant:F('Add tenant',[['Company','text',2],['Login domain','text',1],['Plan','select',1,['Free (10 users)','Growth']],['Admin email','email',2]],'Create tenant','Tenant provisioned'),
+b2b:F('New support request',[['Subject','text',2],['Severity','select',2,['High','Medium','Low']],['Description','area',2]],'Send','Request SUP-222 opened')};
+const QUOTES=['Small steps every day add up to big results.','Do the hard thing first; the rest of the day gets lighter.','Quality is never an accident.','You are one focused hour away from a good day.'];
+const COLS=['Open','Alloted','WIP','Dev Completed','QA'];
+const cell=(v,key,checks,toggle)=>{v=String(v);if(v==='[x]'||v==='[ ]'){const on=checks[key]!==undefined?checks[key]:v==='[x]';return{isCheck:true,border:on?'var(--color-accent)':'var(--color-neutral-400)',fill:on?'var(--color-accent)':'transparent',mark:on?'✓':'',toggle:(e)=>{e.stopPropagation();toggle(key,!on)}}}const c=v[0];if(c==='~')return{isTag:true,text:v.slice(1),tone:'tag-accent'};if(c==='!')return{isTag:true,text:v.slice(1),tone:'tag-outline'};if(c==='-')return{isTag:true,text:v.slice(1),tone:'tag-neutral'};return{isText:true,text:v}};
+class Component extends DCLogic {
+  state={screen:'login',role:this.props.defaultRole||'employee',punchedAt:null,now:Date.now(),mode:'remote',modal:null,toast:'',tab:0,apprTab:'pl',apprSel:'a1',
+    appr:[{id:'a1',name:'Priya Sharma',week:'21–27 Sep',hours:'41h 20m',idle:'2h 00m',shots:248,level:'pl',status:'Pending PL'},{id:'a2',name:'Rahul Desai',week:'21–27 Sep',hours:'39h 05m',idle:'0h 50m',shots:234,level:'pl',status:'Pending PL'},{id:'a3',name:'Vikram Joshi',week:'21–27 Sep',hours:'36h 40m',idle:'3h 10m',shots:220,level:'rm',status:'Pending RM'},{id:'a4',name:'Sneha Patel',week:'21–27 Sep',hours:'40h 00m',idle:'0h 30m',shots:240,level:'rm',status:'Pending RM'}],
+    tasks:[{id:'AT-101',title:'Invoice PDF export',module:'Billing',who:'Priya S.',est:'8h',col:'WIP'},{id:'AT-102',title:'GST rounding rules',module:'Billing',who:'Rahul D.',est:'5h',col:'Dev Completed'},{id:'AT-103',title:'Role-based menu',module:'Auth',who:'Priya S.',est:'6h',col:'Alloted'},{id:'AT-104',title:'Customer import CSV',module:'Reports',who:'—',est:'10h',col:'Open'},{id:'AT-105',title:'Session timeout',module:'Auth',who:'Rahul D.',est:'3h',col:'QA'},{id:'AT-106',title:'Dashboard filters',module:'Reports',who:'—',est:'4h',col:'Open'}],
+    dept:'Development',checks:{},profTab:0,obStep:0,idSide:'front',chatCh:0,draft:'',msgs:[['NK','Neha Kapoor','10:02','Release freeze starts Thursday. Please merge by Wednesday EOD.'],['RD','Rahul Desai','10:05','GST rounding fix is in QA now.'],['SP','Sneha Patel','10:09','Picking it up, will update by lunch.']],liked:{},cycle:'yearly',pal:0,sheetSubmitted:false};
+  componentDidMount(){this.readHash();this._h=()=>this.readHash();window.addEventListener('hashchange',this._h);this._t=setInterval(()=>{if(this.state.punchedAt)this.setState({now:Date.now()})},1000)}
+  componentWillUnmount(){window.removeEventListener('hashchange',this._h);clearInterval(this._t)}
+  readHash(){const p=new URLSearchParams(location.hash.slice(1));const s=p.get('screen'),r=p.get('role');const u={};if(r&&PEOPLE[r])u.role=r;if(s)u.screen=s;if(Object.keys(u).length)this.setState(u)}
+  go(screen){this.setState({screen,tab:0});try{history.replaceState(null,'','#screen='+screen+'&role='+this.state.role)}catch(e){}const m=document.querySelector('main');if(m)window.scrollTo(0,0)}
+  flash(msg){this.setState({toast:msg});clearTimeout(this._tt);this._tt=setTimeout(()=>this.setState({toast:''}),2600)}
+  allowed(id,role){for(const g of NAV)for(const it of g[1])if(it[0]===id)return it[2].includes(role);return true}
+  renderVals(){
+    const s=this.state,role=s.role,P=PEOPLE[role],isMgr=role!=='employee';
+    const open=(f)=>()=>this.setState({modal:f});
+    const nav=NAV.map(g=>({group:g[0],items:g[1].filter(i=>i[2].includes(role)).map(i=>{const act=s.screen===i[0]||(i[0]==='employees'&&s.screen==='profile');return{label:i[1],go:()=>this.go(i[0]),bg:act?'var(--color-accent-100)':'transparent',color:act?'var(--color-accent-800)':'var(--color-text)'}})})).filter(g=>g.items.length);
+    const roleBtns=RL.map(([id,label])=>({label,border:id===role?'var(--color-accent)':'var(--color-divider)',color:id===role?'var(--color-accent-700)':'var(--color-text)',pick:()=>{const u={role:id};if(s.screen!=='login'&&!this.allowed(s.screen,id))u.screen='dashboard';this.setState(u,()=>{if(s.screen!=='login')this.go(this.state.screen)})}}));
+    const el=s.punchedAt?Math.floor((s.now-s.punchedAt)/1000):0;const pad=n=>String(n).padStart(2,'0');
+    const elapsed=pad(Math.floor(el/3600))+':'+pad(Math.floor(el%3600/60))+':'+pad(el%60);
+    const blocked=s.mode==='office';
+    const togglePunch=()=>{if(blocked&&!s.punchedAt){this.flash('Office mode: punch in with the biometric sensor');return}if(s.punchedAt){this.setState({punchedAt:null});this.flash('Punched out · day summary saved')}else{this.setState({punchedAt:Date.now(),now:Date.now()});this.flash('Punched in at '+new Date().toTimeString().slice(0,5)+' · web')}};
+    const on={};CUSTOM.forEach(k=>on[k]=s.screen===k);
+    const g=GEN[s.screen];let gen={on:false};
+    if(g){const tpl=g.cols?g.cols.map((c,i)=>i===0?'minmax(140px,1.6fr)':'minmax(90px,1fr)').join(' '):'';
+      gen={on:true,title:g.t,sub:g.s,hasAction:!!g.a,action:g.a&&g.a[0],act:g.a&&open(g.a[1]),hasAction2:!!g.a2,action2:g.a2&&g.a2[0],act2:g.a2&&open(g.a2[1]),
+        hasKpis:!!g.kpis,kpis:g.kpis||[],hasTabs:!!g.tabs,tabs:(g.tabs||[]).map((t,i)=>({label:t,pick:()=>this.setState({tab:i}),color:s.tab===i?'var(--color-accent-700)':'var(--color-text)',line:s.tab===i?'var(--color-accent)':'transparent'})),
+        hasNote:false,hasTiles:!!g.tiles,tiles:(g.tiles||[]).map(t=>({k:t[0],title:t[1],sub:t[2],cta:t[3]||'',media:t[4]||'',go:()=>this.flash(t[3]+' · '+t[1])})),
+        hasTable:!!g.cols,cols:g.cols||[],tpl,rows:(g.rows||[]).map((r,ri)=>({cursor:g.to?'pointer':'default',go:g.to?()=>this.go(g.to):undefined,cells:r.map((v,ci)=>cell(v,s.screen+ri+'_'+ci,s.checks,(k,val)=>this.setState(st=>({checks:Object.assign({},st.checks,{[k]:val})}))))}))}}
+    const fm=s.modal&&FORMS[s.modal];
+    const form=fm?{title:fm.title,submit:fm.submit,fields:fm.fields.map(f=>({label:f[0],span:f[2]===2?'1 / -1':'auto',isText:['text','email','date','time'].includes(f[1]),inputType:f[1],ph:'',isSelect:f[1]==='select',first:f[3]?f[3][0]:'',isArea:f[1]==='area',isFile:f[1]==='file'}))}:{fields:[]};
+    const appr=s.appr.filter(a=>a.level===s.apprTab);const sel=s.appr.find(a=>a.id===s.apprSel&&a.level===s.apprTab)||appr[0];
+    const decide=(ok)=>{if(!sel)return;this.setState(st=>({appr:st.appr.map(a=>a.id!==sel.id?a:ok?(a.level==='pl'?Object.assign({},a,{level:'rm',status:'Pending RM'}):Object.assign({},a,{level:'done',status:'Approved'})):Object.assign({},a,{level:'back',status:'Sent back'})),apprSel:null}));this.flash(ok?(sel.level==='pl'?sel.name+' → forwarded to Reporting Manager':sel.name+' → approved, sent to payroll'):sel.name+' → sent back with comment')};
+    const allowedDepts=(role==='employee'||role==='lead')?['Development']:['Development','QA','Design'];
+    const moveTo=(id,col)=>{this.setState(st=>({tasks:st.tasks.map(t=>t.id===id?Object.assign({},t,{col}):t)}));if(col==='Dev Completed')this.flash(id+' → Dev Completed · pushed to GitLab (feature/'+id.toLowerCase()+')')};
+    const columns=COLS.map((c,ci)=>{const cards=s.tasks.filter(t=>t.col===c);return{name:c,count:cards.length,bg:'transparent',over:e=>e.preventDefault(),drop:e=>{e.preventDefault();if(this._drag)moveTo(this._drag,c)},cards:cards.map(t=>({id:t.id,title:t.title,module:t.module,who:t.who,est:t.est,drag:e=>{this._drag=t.id;try{e.dataTransfer.setData('text/plain',t.id)}catch(x){}},nextLabel:ci<COLS.length-1?'Move to '+COLS[ci+1]+' →':'Mark done',next:()=>ci<COLS.length-1?moveTo(t.id,COLS[ci+1]):this.flash(t.id+' closed')}))}});
+    const profTabsL=['Overview','Documents','Assets','Offer & pay','Attendance'];
+    const PROF=[{cols:['Field','Value'],rows:[['Official email','priya.sharma@lexisora.com'],['Phone','+91 98250 XXXXX'],['Shift','General · 09:30–18:30'],['Work location','Remote · web + desktop punch'],['Blood group','B+'],['Emergency contact','Anil Sharma · +91 98XXX XXX21']]},{cols:['Document','Category','Status'],rows:[['Offer letter','Offer','~Signed'],['NDA','Legal','~Signed'],['PAN card','Gov. ID','~Verified'],['Aadhaar card','Gov. ID','~Verified'],['Marksheets','Education','!Pending']]},{cols:['Item','Serial','Assigned','Status'],rows:[['Dell Latitude 5440','DL5440-8821','12 Jan 2024','~Assigned'],['Logitech M331','LG-M331-203','12 Jan 2024','~Assigned'],['Welcome kit','—','12 Jan 2024','~4 of 4 items']]},{cols:['Component','Monthly','Annual'],rows:[['Basic','₹ 42,000','₹ 5,04,000'],['HRA','₹ 21,000','₹ 2,52,000'],['Special allowance','₹ 21,000','₹ 2,52,000'],['PF (employer)','₹ 1,800','₹ 21,600'],['CTC','₹ 85,800','₹ 10,29,600']]},{cols:['Month','Present','Leave','Idle','Late'],rows:[['Sep 2026','18','0','3h 40m','1'],['Aug 2026','21','0','2h 10m','0'],['Jul 2026','21.5','1','4h 05m','2']]}];
+    const pr=PROF[s.profTab];
+    const OB=[['Offer letter','Offer letter · Software Engineer','This letter confirms your appointment at Lexisora Infotech with the compensation shown in Annexure A.','Sign offer letter','Draw or type your signature','Sign & continue'],['NDA','Non-disclosure agreement','You agree to keep client code, data and business information confidential during and after employment.','Sign NDA','Draw or type your signature','Sign & continue'],['Personal documents','Upload your documents','PAN, Aadhaar, education marksheets and previous employment letters. HR verifies each one.','Upload documents','Drop PAN, Aadhaar, marksheets','Upload & continue'],['Bank & tax','Bank and tax details','Salary account, IFSC and tax regime selection for payroll.','Bank details','Account no. · IFSC · Tax regime','Save & continue'],['Welcome kit','Your welcome kit','T-shirt, mug, notebook and bag will be handed over on day one. Pick your T-shirt size.','Confirm size','S · M · L · XL','Finish onboarding']];
+    const ob=OB[s.obStep];
+    const plans=[{name:'Free',price:'₹ 0',unit:'up to 10 users',feats:['Attendance & leave','Projects & tasks','Community support'],k:'free'},{name:'Growth',price:s.cycle==='yearly'?'₹ 149':'₹ 179',unit:'per user / month, billed '+s.cycle,feats:['Everything in Free','Payroll, ledger & GST','Desktop tracker','White-label theme'],k:'growth'},{name:'Enterprise',price:'Custom',unit:'200+ users',feats:['Dedicated database','CCTV & biometric integrations','24/7 priority support'],k:'ent'}].map(p=>({...p,border:p.k==='growth'?'var(--color-accent)':'var(--color-divider)',cta:p.k==='growth'?'Current plan · renew':p.k==='free'?'Downgrade':'Contact sales',choose:()=>this.flash(p.k==='growth'?'Redirecting to payment gateway…':'Request noted')}));
+    const PALS=[['Lexisora · pink & blue','#d6457a','#2f5fb3'],['Acme · red & black','#c62828','#1c1c1c'],['Default · gold & ink','#b68235','#2d2b2b']];
+    const CH=['# general','# atlas-crm','# qa-team','# announcements','Neha Kapoor','Rahul Desai'];
+    const sendMsg=()=>{if(!s.draft.trim())return;this.setState(st=>({msgs:st.msgs.concat([[P[0].split(' ').map(x=>x[0]).join(''),P[0],'now',st.draft]]),draft:''}))};
+    const POSTS=[{id:'p1',init:'RV',author:'Rohit Verma',meta:'CEO · 1 Sep',kind:'EOTM',title:'Employee of the Month: Priya Sharma',body:'Priya shipped the Atlas CRM billing module two weeks ahead of plan and mentored two interns along the way. Her certificate is ready to download.',comments:18,cert:true},{id:'p2',init:'KI',author:'Kavya Iyer',meta:'HR · 25 Sep',kind:'Blog',title:'How we run appraisals this cycle',body:'Self reviews open on 1 October. This post explains the new KRA template, timelines and what managers will look for.',comments:6,cert:false},{id:'p3',init:'AM',author:'Arjun Mehta',meta:'Project Lead · 20 Sep',kind:'Milestone',title:'Kestrel app crosses 50,000 installs',body:'Thanks to the mobile and QA teams for three releases in six weeks.',comments:11,cert:false}];
+    const tabBtn=(cur,val,label,pick)=>({label,pick,color:cur===val?'var(--color-accent-700)':'var(--color-text)',ring:cur===val?'inset 0 0 0 1px var(--color-accent)':'none'});
+    return {
+      isLogin:s.screen==='login',isApp:s.screen!=='login',nav,roleBtns,
+      doLogin:()=>this.go('dashboard'),logout:()=>this.go('login'),
+      me:{name:P[0],first:P[0].split(' ')[0],title:P[1],email:P[2],initials:P[0].split(' ').map(x=>x[0]).join('')},
+      punchLabel:s.punchedAt?'Punch out':'Punch in',punchState:s.punchedAt?'Punched in':'Not punched in',elapsed,togglePunch,
+      modeNote:blocked?'Office · biometric punch':'Remote · web punch allowed',webPunchAllowed:!blocked||!!s.punchedAt,webPunchBlocked:blocked&&!s.punchedAt,
+      modeBtns:[['office','Office (biometric)'],['remote','Remote / WFH']].map(([k,l])=>({label:l,pick:()=>this.setState({mode:k}),border:s.mode===k?'var(--color-accent)':'var(--color-divider)',color:s.mode===k?'var(--color-accent-700)':'var(--color-text)'})),
+      notifCount:4,goNotif:()=>this.go('notif'),isMgr,pendingSheets:s.appr.filter(a=>a.level==='pl'||a.level==='rm').length,
+      quote:QUOTES[new Date().getDate()%QUOTES.length],
+      balances:[{type:'Earned leave',left:11,total:18},{type:'Casual leave',left:6,total:12},{type:'Sick leave',left:4,total:8},{type:'Comp-off',left:1,total:1}],
+      todos:[{text:'Submit timesheet for 21–27 Sep',due:'Today'},{text:'Acknowledge leave policy update',due:'Today'},{text:'Code review: AT-102 GST rounding',due:'Wed'}],
+      announcements:[{scope:'Global',tone:'tag-accent',title:'Diwali celebration & potluck',body:'8 Nov, 4 pm onwards on the terrace. Sign up for a dish by 1 Nov.',date:'27 Sep'},{scope:'Team',tone:'tag-outline',title:'Atlas CRM release freeze',body:'Visible to Development · Atlas. Merges close Wednesday EOD.',date:'26 Sep'},{scope:'Global',tone:'tag-accent',title:'Revised travel reimbursement',body:'New per-km rates apply from 1 October.',date:'22 Sep'}],
+      events:[{what:'Rahul Desai · birthday',when:'30 Sep'},{what:'Sneha Patel · 3 years',when:'2 Oct'},{what:'Town hall',when:'3 Oct, 5 pm'}],
+      leaveHistory:[{type:'Earned leave',dates:'14 – 16 Oct',days:'3',reason:'Family function',status:'Pending RM',tone:'tag-outline'},{type:'Sick leave',dates:'4 Sep',days:'1',reason:'Fever',status:'Approved',tone:'tag-accent'},{type:'Casual leave',dates:'15 Aug',days:'1',reason:'Personal',status:'Approved',tone:'tag-accent'},{type:'Casual leave',dates:'2 Jul',days:'0.5',reason:'Bank work',status:'Rejected',tone:'tag-neutral'}],
+      goLeave:()=>this.go('leave'),goApprovals:()=>this.go('approvals'),goEmployees:()=>this.go('employees'),goIdcard:()=>this.go('idcard'),
+      openAddTask:open('task'),openLeave:open('leave'),openOutside:open('outside'),openAddEmp:open('employee'),
+      timeline:[[9,'a'],[1,'i'],[6,'a'],[2,'b'],[8,'a'],[1,'i'],[4,'a'],[1,'b'],[7,'a']].map(([w,k])=>({w,label:k,bg:k==='a'?'var(--color-accent-300)':k==='b'?'var(--color-neutral-400)':'var(--color-neutral-200)'})),
+      attRows:[['Mon 28 Sep','09:28','18:42','Desktop','55m','20m','Present'],['Fri 25 Sep','09:35','18:30','Desktop','60m','45m','Present'],['Thu 24 Sep','09:52','18:40','Web','50m','10m','Late'],['Wed 23 Sep','09:30','18:35','Desktop','60m','30m','Present']],
+      sheet:[{task:'AT-101 Invoice PDF export',project:'Atlas CRM · Billing',d:['4:00','5:30','3:00','6:00','2:00','–','–'],total:'20:30'},{task:'AT-103 Role-based menu',project:'Atlas CRM · Auth',d:['3:00','2:00','4:30','1:30','4:00','–','–'],total:'15:00'},{task:'Code review',project:'Atlas CRM',d:['0:50','0:30','0:40','0:30','1:00','–','–'],total:'3:30'},{task:'Stand-up & meetings',project:'Internal',d:['0:30','0:30','0:30','0:30','0:30','–','–'],total:'2:30'}],
+      sheetBtn:s.sheetSubmitted?'Submitted':'Submit for approval',submitSheet:()=>{this.setState({sheetSubmitted:true});this.flash('Timesheet sent to Arjun Mehta (Project Lead)')},
+      chain:[['Employee',s.sheetSubmitted?'tag-accent':'tag-outline'],['Project Lead','tag-neutral'],['Reporting Manager','tag-neutral'],['Payroll','tag-neutral']].map(([l,t],i)=>({label:l,tone:t,arrow:i<3?'→':''})),
+      apprTabs:[tabBtn(s.apprTab,'pl','Level 1 · Project Lead',()=>this.setState({apprTab:'pl',apprSel:null})),tabBtn(s.apprTab,'rm','Level 2 · Reporting Manager',()=>this.setState({apprTab:'rm',apprSel:null}))].map((t,i)=>({...t,count:s.appr.filter(a=>a.level===(i?'rm':'pl')).length})),
+      apprRows:appr.map(a=>({name:a.name,week:a.week,hours:a.hours,idle:a.idle,shots:a.shots,status:a.status,tone:'tag-outline',bg:sel&&sel.id===a.id?'var(--color-accent-100)':'transparent',pick:()=>this.setState({apprSel:a.id})})),
+      apprEmpty:appr.length===0,apprSel:sel?{on:true,name:sel.name,week:sel.week,hours:sel.hours,idle:sel.idle,shots:sel.shots}:{on:false},
+      approveSel:()=>decide(true),rejectSel:()=>decide(false),
+      shots:['10:00','10:10','10:20','10:30','10:40','10:50','11:00','11:10'].map((t,i)=>({t,task:i<5?'AT-101':'AT-103'})),
+      deptBtns:['Development','QA','Design'].map(d=>({label:d+(allowedDepts.includes(d)?'':' 🔒'),pick:()=>this.setState({dept:d}),border:s.dept===d?'var(--color-accent)':'var(--color-divider)',color:s.dept===d?'var(--color-accent-700)':'var(--color-text)'})),
+      dept:s.dept,boardLocked:!allowedDepts.includes(s.dept),boardOpen:allowedDepts.includes(s.dept),columns,
+      profTabs:profTabsL.map((l,i)=>({label:l,pick:()=>this.setState({profTab:i}),color:s.profTab===i?'var(--color-accent-700)':'var(--color-text)',line:s.profTab===i?'var(--color-accent)':'transparent'})),
+      prof:{cols:pr.cols,tpl:pr.cols.map(()=>'minmax(0,1fr)').join(' '),rows:pr.rows.map(r=>r.map(v=>cell(v,'',{},()=>{})))},
+      obSteps:OB.map((o,i)=>({n:i+1,label:o[0],state:i<s.obStep?'Done':i===s.obStep?'Now':'Next',bg:i===s.obStep?'var(--color-accent-100)':'transparent',pick:()=>this.setState({obStep:i})})),
+      ob:{docTitle:ob[1],docBody:ob[2],actionTitle:ob[3],box:ob[4],cta:ob[5]},
+      obNext:()=>{if(s.obStep<OB.length-1)this.setState({obStep:s.obStep+1});else this.flash('Onboarding complete · HR notified, ID card queued')},
+      idEls:['Photo','Full name','Designation','Employee ID','Blood group','QR code','Company logo','Emergency contact'],
+      sideBtns:[tabBtn(s.idSide,'front','Front',()=>this.setState({idSide:'front'})),tabBtn(s.idSide,'back','Back',()=>this.setState({idSide:'back'}))],
+      idFront:s.idSide==='front',idBack:s.idSide==='back',
+      genCards:()=>this.flash('3 ID cards generated (front & back)'),sendPrint:()=>this.flash('High-res PDF emailed to print@shreeprints.in'),
+      toastSaved:()=>this.flash('Saved'),shareEmail:()=>this.flash('Visiting card sent by email'),shareWa:()=>this.flash('Shared via WhatsApp Business'),
+      canPublish:role==='hr'||role==='admin',editorTools:['B','I','H2','Link','Image','List'],toastPublished:()=>this.flash('Post published to feed'),
+      posts:POSTS.map(p=>({...p,likeLabel:(s.liked[p.id]?'Liked · ':'Like · ')+((p.id==='p1'?64:p.id==='p2'?21:38)+(s.liked[p.id]?1:0)),like:()=>this.setState(st=>({liked:Object.assign({},st.liked,{[p.id]:!st.liked[p.id]})}))})),
+      channels:CH.map((c,i)=>({name:c,unread:i===1?'3':i===2?'1':'',bg:s.chatCh===i?'var(--color-accent-100)':'transparent',pick:()=>this.setState({chatCh:i})})),
+      channel:CH[s.chatCh],messages:s.msgs.map(m=>({init:m[0],who:m[1],t:m[2],text:m[3]})),draft:s.draft,
+      setDraft:e=>this.setState({draft:e.target.value}),draftKey:e=>{if(e.key==='Enter')sendMsg()},sendMsg,callToast:()=>this.flash('Starting call · recording saved to cloud archive'),
+      cycleBtns:[tabBtn(s.cycle,'monthly','Monthly',()=>this.setState({cycle:'monthly'})),tabBtn(s.cycle,'yearly','Yearly · save 17%',()=>this.setState({cycle:'yearly'}))],plans,promo:()=>this.flash('Promo applied · 20% off next renewal'),
+      palettes:PALS.map((p,i)=>({name:p[0],a:p[1],b:p[2],border:s.pal===i?'var(--color-accent)':'var(--color-divider)',pick:()=>this.setState({pal:i})})),pal:{a:PALS[s.pal][1],b:PALS[s.pal][2]},
+      on,gen,modalOn:!!fm,form,closeModal:()=>this.setState({modal:null}),stop:e=>e.stopPropagation(),submitModal:()=>{const t=fm.toast;this.setState({modal:null});this.flash(t)},
+      toastOn:!!s.toast,toast:s.toast
+    };
+  }
+}
+</script>
+
+
+</body></html>

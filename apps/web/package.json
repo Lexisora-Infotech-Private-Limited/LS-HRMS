@@ -1,0 +1,33 @@
+{
+  "name": "@lexisora/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@fontsource/cormorant-garamond": "^5.0.0",
+    "@fontsource/lora": "^5.0.0",
+    "@lexisora/shared": "workspace:*",
+    "@tanstack/react-query": "^5.0.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-router-dom": "^6.30.0",
+    "socket.io-client": "^4.0.0",
+    "zod": "3.25.76",
+    "livekit-client": "^2.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.0.0",
+    "typescript": "5.9.3",
+    "vite": "^6.4.0",
+    "vitest": "^3.0.0"
+  }
+}

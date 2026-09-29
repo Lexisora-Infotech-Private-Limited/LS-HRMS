@@ -1,0 +1,17 @@
+node_modules/
+dist/
+out/
+build/
+release/
+coverage/
+.env
+.env.local
+*.log
+.DS_Store
+.vite/
+playwright-report/
+test-results/
+apps/api/storage/
+apps/api/prisma/*.db
+.turbo/
+.db-sync.lock/

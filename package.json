@@ -1,0 +1,31 @@
+{
+  "name": "lexisora-hrms",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Lexisora HRMS — People & Operations Suite (web portal, API, Windows desktop tracker)",
+  "packageManager": "pnpm@10.31.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "infra:up": "docker compose up -d",
+    "infra:down": "docker compose down",
+    "build:shared": "pnpm --filter @lexisora/shared build",
+    "db:generate": "pnpm --filter @lexisora/api prisma:generate",
+    "db:migrate": "pnpm --filter @lexisora/api prisma:migrate",
+    "db:push": "pnpm --filter @lexisora/api prisma:push",
+    "db:seed": "pnpm --filter @lexisora/api seed",
+    "db:reset": "pnpm --filter @lexisora/api db:reset",
+    "dev": "pnpm build:shared && pnpm -r --parallel --filter @lexisora/shared --filter @lexisora/api --filter @lexisora/web dev",
+    "dev:api": "pnpm --filter @lexisora/api dev",
+    "dev:web": "pnpm --filter @lexisora/web dev",
+    "dev:tracker": "pnpm --filter @lexisora/tracker dev",
+    "build": "pnpm build:shared && pnpm -r --filter !@lexisora/shared build",
+    "typecheck": "pnpm build:shared && pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "e2e": "pnpm --filter @lexisora/e2e test"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}
