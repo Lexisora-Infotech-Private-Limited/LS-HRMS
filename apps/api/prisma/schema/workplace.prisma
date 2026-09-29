@@ -1,0 +1,802 @@
+// ── Workplace & culture: dashboard, notices, feed, kudos/EOTM, certificates, chat,
+//    helpdesk, learning, rooms & visitors, policies, wellness, CCTV ─────────────────
+// People are referenced by scalar ids: employeeId (HR/work records) or userId (chat).
+// Audience rules are stored as JSON arrays: [{ type: 'ALL'|'DEPARTMENT'|'PROJECT'|'BRANCH'|'EMPLOYEE'|'EMPLOYMENT_TYPE', refId?, label? }].
+
+// ── Dashboard ──────────────────────────────────────────────────────────────
+
+model Quote {
+  id           String    @id @default(cuid())
+  tenantId     String
+  text         String    @db.VarChar(280)
+  author       String?
+  scheduledFor DateTime? @db.Date
+  active       Boolean   @default(true)
+  sortOrder    Int       @default(0)
+  createdAt    DateTime  @default(now())
+
+  @@index([tenantId, active, sortOrder])
+}
+
+model PersonalTodo {
+  id          String    @id @default(cuid())
+  tenantId    String
+  employeeId  String
+  title       String    @db.VarChar(200)
+  note        String?
+  dueDate     DateTime? @db.Date
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([tenantId, employeeId, completedAt])
+}
+
+enum WpEventKind {
+  TOWN_HALL
+  CELEBRATION
+  TRAINING
+  OTHER
+}
+
+model CompanyEvent {
+  id                  String      @id @default(cuid())
+  tenantId            String
+  title               String
+  description         String?
+  kind                WpEventKind @default(OTHER)
+  startsAt            DateTime
+  endsAt              DateTime?
+  location            String?
+  audiences           Json        @default("[]")
+  createdByEmployeeId String?
+  cancelledAt         DateTime?
+  createdAt           DateTime    @default(now())
+
+  @@index([tenantId, startsAt])
+}
+
+// ── Notice board ───────────────────────────────────────────────────────────
+
+enum WpNoticeVisibility {
+  GLOBAL
+  TEAM
+}
+
+enum WpNoticeStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+  EXPIRED
+  ARCHIVED
+}
+
+model Notice {
+  id               String             @id @default(cuid())
+  tenantId         String
+  title            String             @db.VarChar(150)
+  bodyHtml         String
+  excerpt          String             @default("")
+  visibility       WpNoticeVisibility
+  status           WpNoticeStatus     @default(DRAFT)
+  authorEmployeeId String
+  audiences        Json               @default("[]")
+  publishAt        DateTime?
+  publishedAt      DateTime?
+  expiresAt        DateTime?
+  pinned           Boolean            @default(false)
+  emailRecipients  Boolean            @default(false)
+  recipientCount   Int                @default(0)
+  readCount        Int                @default(0)
+  lastRemindedAt   DateTime?
+  editedAt         DateTime?
+  deletedAt        DateTime?
+  attachments      NoticeAttachment[]
+  recipients       NoticeRecipient[]
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  @@index([tenantId, status, publishedAt])
+}
+
+model NoticeAttachment {
+  id        String @id @default(cuid())
+  tenantId  String
+  noticeId  String
+  notice    Notice @relation(fields: [noticeId], references: [id], onDelete: Cascade)
+  fileId    String
+  name      String
+  sizeBytes Int
+  mime      String
+
+  @@index([tenantId, noticeId])
+}
+
+model NoticeRecipient {
+  id         String    @id @default(cuid())
+  tenantId   String
+  noticeId   String
+  notice     Notice    @relation(fields: [noticeId], references: [id], onDelete: Cascade)
+  employeeId String
+  userId     String?
+  addedAt    DateTime  @default(now())
+  readAt     DateTime?
+
+  @@unique([noticeId, employeeId])
+  @@index([tenantId, employeeId, readAt])
+}
+
+// ── Company feed ───────────────────────────────────────────────────────────
+
+enum WpPostKind {
+  BLOG
+  MILESTONE
+  UPDATE
+  EOTM
+  KUDOS
+}
+
+enum WpPostStatus {
+  DRAFT
+  PENDING_REVIEW
+  PUBLISHED
+  ARCHIVED
+}
+
+model Post {
+  id                    String        @id @default(cuid())
+  tenantId              String
+  kind                  WpPostKind
+  status                WpPostStatus  @default(DRAFT)
+  title                 String        @db.VarChar(150)
+  bodyHtml              String
+  excerpt               String        @default("") @db.VarChar(300)
+  coverFileId           String?
+  authorEmployeeId      String
+  publishedAt           DateTime?
+  publishedByEmployeeId String?
+  reviewNote            String?
+  pinned                Boolean       @default(false)
+  likeCount             Int           @default(0)
+  commentCount          Int           @default(0)
+  eotmAwardId           String?       @unique
+  kudosId               String?       @unique
+  editedAt              DateTime?
+  deletedAt             DateTime?
+  likes                 PostLike[]
+  comments              PostComment[]
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  @@index([tenantId, status, pinned, publishedAt])
+}
+
+model PostLike {
+  id         String   @id @default(cuid())
+  tenantId   String
+  postId     String
+  post       Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  employeeId String
+  createdAt  DateTime @default(now())
+
+  @@unique([postId, employeeId])
+  @@index([tenantId, postId])
+}
+
+model PostComment {
+  id               String    @id @default(cuid())
+  tenantId         String
+  postId           String
+  post             Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
+  authorEmployeeId String
+  parentId         String?
+  body             String    @db.VarChar(2000)
+  mentions         String[]
+  deletedAt        DateTime?
+  createdAt        DateTime  @default(now())
+
+  @@index([tenantId, postId, createdAt])
+}
+
+// ── Kudos, EOTM, certificates ──────────────────────────────────────────────
+
+model Badge {
+  id          String   @id @default(cuid())
+  tenantId    String
+  name        String   @db.VarChar(40)
+  icon        String   @default("star")
+  description String?
+  system      Boolean  @default(false)
+  active      Boolean  @default(true)
+  kudos       Kudos[]
+  createdAt   DateTime @default(now())
+
+  @@unique([tenantId, name])
+}
+
+model Kudos {
+  id                  String    @id @default(cuid())
+  tenantId            String
+  giverEmployeeId     String
+  recipientEmployeeId String
+  badgeId             String
+  badge               Badge     @relation(fields: [badgeId], references: [id])
+  message             String    @db.VarChar(500)
+  postId              String?   @unique
+  revokedAt           DateTime?
+  createdAt           DateTime  @default(now())
+
+  @@index([tenantId, recipientEmployeeId, createdAt])
+  @@index([tenantId, createdAt])
+}
+
+model EotmAward {
+  id                    String    @id @default(cuid())
+  tenantId              String
+  employeeId            String
+  month                 String    @db.Char(7) // YYYY-MM
+  citation              String    @db.VarChar(600)
+  announcedByEmployeeId String
+  postId                String?   @unique
+  certificateId         String?   @unique
+  revokedAt             DateTime?
+  createdAt             DateTime  @default(now())
+
+  @@unique([tenantId, month])
+}
+
+enum WpCertificateType {
+  EOTM
+  COURSE
+}
+
+enum WpCertStatus {
+  PENDING
+  READY
+  FAILED
+  REVOKED
+}
+
+model Certificate {
+  id                  String            @id @default(cuid())
+  tenantId            String
+  type                WpCertificateType
+  recipientEmployeeId String
+  holderName          String
+  title               String
+  subtitle            String?
+  issuedAt            DateTime          @default(now())
+  verificationCode    String            @unique @db.VarChar(12)
+  fileId              String?
+  sha256              String?
+  status              WpCertStatus      @default(PENDING)
+  revokedAt           DateTime?
+  revokeReason        String?
+  sourceType          String
+  sourceId            String
+  metadata            Json              @default("{}")
+  createdAt           DateTime          @default(now())
+
+  @@unique([tenantId, sourceType, sourceId])
+  @@index([tenantId, recipientEmployeeId])
+}
+
+// ── Comms hub ──────────────────────────────────────────────────────────────
+
+enum WpChannelKind {
+  PUBLIC
+  PRIVATE
+  DM
+  GROUP_DM
+}
+
+enum WpPostingPolicy {
+  ALL_MEMBERS
+  ADMINS_ONLY
+}
+
+enum WpMessageKind {
+  USER
+  SYSTEM
+  CALL_SUMMARY
+}
+
+model ChatChannel {
+  id              String          @id @default(cuid())
+  tenantId        String
+  kind            WpChannelKind
+  name            String?         @db.VarChar(60)
+  topic           String?
+  linkedType      String? // COMPANY_GENERAL | COMPANY_ANNOUNCEMENTS | DEPARTMENT | PROJECT
+  linkedId        String?
+  dmKey           String?
+  postingPolicy   WpPostingPolicy @default(ALL_MEMBERS)
+  createdByUserId String?
+  archivedAt      DateTime?
+  lastMessageSeq  Int             @default(0)
+  lastMessageAt   DateTime?
+  sortOrder       Int             @default(100)
+  members         ChatMember[]
+  messages        ChatMessage[]
+  createdAt       DateTime        @default(now())
+
+  @@unique([tenantId, name])
+  @@unique([tenantId, dmKey])
+  @@index([tenantId])
+}
+
+model ChatMember {
+  id          String      @id @default(cuid())
+  tenantId    String
+  channelId   String
+  channel     ChatChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  userId      String
+  role        String      @default("MEMBER") // OWNER | ADMIN | MEMBER
+  lastReadSeq Int         @default(0)
+  muted       Boolean     @default(false)
+  managedBy   String      @default("MANUAL") // MANUAL | AUDIENCE
+  joinedAt    DateTime    @default(now())
+
+  @@unique([channelId, userId])
+  @@index([tenantId, userId])
+}
+
+model ChatMessage {
+  id           String        @id @default(cuid())
+  tenantId     String
+  channelId    String
+  channel      ChatChannel   @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  seq          Int
+  senderUserId String?
+  kind         WpMessageKind @default(USER)
+  body         String?
+  replyToId    String?
+  mentions     String[]
+  attachments  Json          @default("[]") // [{fileId,name,mime,size}]
+  clientMsgId  String?       @db.VarChar(64)
+  editedAt     DateTime?
+  deletedAt    DateTime?
+  createdAt    DateTime      @default(now())
+
+  @@unique([channelId, seq])
+  @@unique([channelId, senderUserId, clientMsgId])
+  @@index([tenantId, channelId, seq])
+}
+
+model ChatCall {
+  id              String    @id @default(cuid())
+  tenantId        String
+  channelId       String
+  kind            String // AUDIO | VIDEO | SCREEN
+  roomName        String    @unique
+  startedByUserId String
+  startedAt       DateTime  @default(now())
+  endedAt         DateTime?
+  recording       Boolean   @default(false)
+  participantIds  String[]
+  maxParticipants Int       @default(1)
+
+  @@index([tenantId, channelId])
+}
+
+// ── Helpdesk ───────────────────────────────────────────────────────────────
+
+enum WpTicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum WpTicketStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING
+  RESOLVED
+  CLOSED
+  CANCELLED
+}
+
+enum WpSlaState {
+  ON_TRACK
+  AT_RISK
+  BREACHED
+  MET
+}
+
+model SupportGroup {
+  id                String           @id @default(cuid())
+  tenantId          String
+  name              String
+  leadEmployeeId    String?
+  memberEmployeeIds String[]
+  active            Boolean          @default(true)
+  categories        TicketCategory[]
+  createdAt         DateTime         @default(now())
+
+  @@unique([tenantId, name])
+}
+
+model TicketCategory {
+  id         String       @id @default(cuid())
+  tenantId   String
+  name       String
+  groupId    String
+  group      SupportGroup @relation(fields: [groupId], references: [id])
+  restricted Boolean      @default(false)
+  active     Boolean      @default(true)
+  sortOrder  Int          @default(0)
+
+  @@unique([tenantId, name])
+}
+
+model SlaPolicy {
+  id                String           @id @default(cuid())
+  tenantId          String
+  priority          WpTicketPriority
+  firstResponseMins Int
+  resolutionMins    Int
+
+  @@unique([tenantId, priority])
+}
+
+model HelpdeskTicket {
+  id                     String           @id @default(cuid())
+  tenantId               String
+  number                 Int
+  code                   String // HD-1042
+  categoryId             String
+  groupId                String
+  priority               WpTicketPriority @default(MEDIUM)
+  subject                String           @db.VarChar(150)
+  description            String
+  status                 WpTicketStatus   @default(OPEN)
+  requesterEmployeeId    String
+  assigneeEmployeeId     String?
+  firstResponseDueAt     DateTime
+  resolutionDueAt        DateTime
+  firstRespondedAt       DateTime?
+  resolvedAt             DateTime?
+  closedAt               DateTime?
+  pausedMins             Int              @default(0)
+  pausedSince            DateTime?
+  slaState               WpSlaState       @default(ON_TRACK)
+  escalationLevel        Int              @default(0)
+  escalatedToEmployeeIds String[]
+  resolutionNote         String?
+  csat                   Int?
+  reopenCount            Int              @default(0)
+  attachmentFileIds      String[]
+  comments               TicketComment[]
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @updatedAt
+
+  @@unique([tenantId, number])
+  @@index([tenantId, requesterEmployeeId, status])
+  @@index([tenantId, assigneeEmployeeId, status])
+  @@index([tenantId, status, resolutionDueAt])
+}
+
+model TicketComment {
+  id               String         @id @default(cuid())
+  tenantId         String
+  ticketId         String
+  ticket           HelpdeskTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  authorEmployeeId String?
+  visibility       String         @default("PUBLIC") // PUBLIC | INTERNAL
+  kind             String         @default("COMMENT") // COMMENT | STATUS_CHANGE | ASSIGNMENT | ESCALATION | PRIORITY_CHANGE
+  body             String         @db.VarChar(5000)
+  fileIds          String[]
+  createdAt        DateTime       @default(now())
+
+  @@index([tenantId, ticketId, createdAt])
+}
+
+// ── Learning ───────────────────────────────────────────────────────────────
+
+enum WpCourseCategory {
+  REQUIRED
+  OPTIONAL
+  ONBOARDING
+}
+
+enum WpCourseStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum WpEnrollStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+}
+
+model Course {
+  id                      String             @id @default(cuid())
+  tenantId                String
+  title                   String             @db.VarChar(150)
+  description             String?
+  category                WpCourseCategory   @default(OPTIONAL)
+  certificateOnCompletion Boolean            @default(true)
+  status                  WpCourseStatus     @default(DRAFT)
+  totalDurationSec        Int                @default(0)
+  createdByEmployeeId     String?
+  publishedAt             DateTime?
+  lessons                 Lesson[]
+  assignments             CourseAssignment[]
+  enrollments             Enrollment[]
+  createdAt               DateTime           @default(now())
+
+  @@index([tenantId, status])
+}
+
+model Lesson {
+  id          String  @id @default(cuid())
+  tenantId    String
+  courseId    String
+  course      Course  @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  order       Int
+  title       String
+  type        String  @default("VIDEO") // VIDEO | DOCUMENT
+  fileId      String?
+  durationSec Int     @default(0)
+  content     String?
+
+  @@unique([courseId, order])
+  @@index([tenantId, courseId])
+}
+
+model CourseAssignment {
+  id           String   @id @default(cuid())
+  tenantId     String
+  courseId     String
+  course       Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  audienceType String // ALL | DEPARTMENT | PROJECT | EMPLOYMENT_TYPE | EMPLOYEE | NEW_JOINERS
+  refId        String?
+  label        String?
+  required     Boolean  @default(true)
+  dueInDays    Int?
+  createdAt    DateTime @default(now())
+
+  @@index([tenantId, courseId])
+}
+
+model Enrollment {
+  id            String           @id @default(cuid())
+  tenantId      String
+  courseId      String
+  course        Course           @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  employeeId    String
+  source        String           @default("ASSIGNED") // ASSIGNED | SELF
+  required      Boolean          @default(false)
+  assignedAt    DateTime         @default(now())
+  dueAt         DateTime?
+  status        WpEnrollStatus   @default(NOT_STARTED)
+  startedAt     DateTime?
+  completedAt   DateTime?
+  progressPct   Int              @default(0)
+  lessonsDone   Int              @default(0)
+  certificateId String?
+  progress      LessonProgress[]
+
+  @@unique([courseId, employeeId])
+  @@index([tenantId, employeeId, status])
+}
+
+model LessonProgress {
+  id             String     @id @default(cuid())
+  tenantId       String
+  enrollmentId   String
+  enrollment     Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  lessonId       String
+  positionSec    Int        @default(0)
+  watchedBuckets Int[]
+  completedAt    DateTime?
+
+  @@unique([enrollmentId, lessonId])
+}
+
+// ── Rooms & visitors ───────────────────────────────────────────────────────
+
+enum WpBookingStatus {
+  BOOKED
+  CANCELLED
+  COMPLETED
+}
+
+enum WpVisitorStatus {
+  REGISTERED
+  PASS_SENT
+  CHECKED_IN
+  CHECKED_OUT
+  NO_SHOW
+  CANCELLED
+}
+
+model Room {
+  id             String        @id @default(cuid())
+  tenantId       String
+  branchId       String?
+  name           String        @db.VarChar(60)
+  capacity       Int           @default(4)
+  amenities      String[]
+  active         Boolean       @default(true)
+  maxBookingMins Int           @default(240)
+  openFrom       String        @default("08:00")
+  openTo         String        @default("21:00")
+  bookings       RoomBooking[]
+  createdAt      DateTime      @default(now())
+
+  @@unique([tenantId, name])
+}
+
+model RoomBooking {
+  id                    String          @id @default(cuid())
+  tenantId              String
+  roomId                String
+  room                  Room            @relation(fields: [roomId], references: [id])
+  hostEmployeeId        String
+  purpose               String          @db.VarChar(120)
+  startAt               DateTime
+  endAt                 DateTime
+  attendeeEmployeeIds   String[]
+  status                WpBookingStatus @default(BOOKED)
+  cancelledByEmployeeId String?
+  cancelReason          String?
+  createdAt             DateTime        @default(now())
+
+  @@index([tenantId, roomId, startAt])
+  @@index([tenantId, hostEmployeeId, startAt])
+}
+
+model Visitor {
+  id                    String          @id @default(cuid())
+  tenantId              String
+  number                Int
+  name                  String          @db.VarChar(100)
+  company               String?
+  phone                 String?
+  email                 String?
+  hostEmployeeId        String
+  branchId              String?
+  visitDate             DateTime        @db.Date
+  expectedTime          String // HH:mm
+  purpose               String          @db.VarChar(160)
+  status                WpVisitorStatus @default(REGISTERED)
+  checkedInAt           DateTime?
+  checkedOutAt          DateTime?
+  checkedInByEmployeeId String?
+  passToken             String          @unique
+  shortCode             String
+  validFrom             DateTime
+  validUntil            DateTime
+  passRevokedAt         DateTime?
+  deliveries            Json            @default("[]") // [{channel,to,status,link,sentAt}]
+  createdAt             DateTime        @default(now())
+
+  @@unique([tenantId, number])
+  @@index([tenantId, visitDate, status])
+  @@index([tenantId, hostEmployeeId, visitDate])
+}
+
+// ── Policies & rulebook ────────────────────────────────────────────────────
+
+enum WpPolicyStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+model HrPolicy {
+  id               String            @id @default(cuid())
+  tenantId         String
+  title            String            @db.VarChar(150)
+  category         String            @default("HR") // HANDBOOK HR LEAVE_ATTENDANCE IT_SECURITY POSH HOLIDAY_LIST COMPLIANCE OTHER
+  requiresAck      Boolean           @default(true)
+  ackDueDays       Int               @default(7)
+  status           WpPolicyStatus    @default(DRAFT)
+  currentVersionId String?           @unique
+  holidayYear      Int?
+  audiences        Json              @default("[]")
+  sortOrder        Int               @default(0)
+  versions         HrPolicyVersion[]
+  createdAt        DateTime          @default(now())
+
+  @@index([tenantId, status])
+}
+
+model HrPolicyVersion {
+  id                    String      @id @default(cuid())
+  tenantId              String
+  policyId              String
+  policy                HrPolicy    @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  version               Int
+  fileId                String?
+  effectiveFrom         DateTime    @db.Date
+  changeSummary         String?
+  requiresReack         Boolean     @default(true)
+  publishedAt           DateTime?
+  publishedByEmployeeId String?
+  acks                  PolicyAck[]
+
+  @@unique([policyId, version])
+}
+
+model PolicyAck {
+  id              String          @id @default(cuid())
+  tenantId        String
+  policyId        String
+  policyVersionId String
+  version         HrPolicyVersion @relation(fields: [policyVersionId], references: [id], onDelete: Cascade)
+  employeeId      String
+  dueAt           DateTime
+  acknowledgedAt  DateTime?
+  ackIp           String?
+  ackUserAgent    String?
+  readSeconds     Int?
+  lastRemindedAt  DateTime?
+
+  @@unique([policyVersionId, employeeId])
+  @@index([tenantId, employeeId, acknowledgedAt])
+}
+
+// ── Wellness ───────────────────────────────────────────────────────────────
+
+model GameSession {
+  id          String    @id @default(cuid())
+  tenantId    String
+  employeeId  String
+  gameKey     String // queens | sudoku6 | wordladder
+  puzzleDate  DateTime  @db.Date
+  startedAt   DateTime  @default(now())
+  startToken  String    @unique
+  completedAt DateTime?
+  elapsedSec  Int?
+  hintsUsed   Int       @default(0)
+  moves       Int?
+  revealed    Boolean   @default(false)
+  points      Int       @default(0)
+  solution    Json?
+
+  @@unique([tenantId, employeeId, gameKey, puzzleDate])
+  @@index([tenantId, puzzleDate, gameKey])
+}
+
+// ── CCTV ───────────────────────────────────────────────────────────────────
+
+enum WpCameraStatus {
+  ONLINE
+  OFFLINE
+  UNKNOWN
+  DISABLED
+}
+
+model Camera {
+  id            String         @id @default(cuid())
+  tenantId      String
+  branchId      String?
+  location      String // "Ahmedabad HQ", "Baner Road"
+  name          String         @db.VarChar(60)
+  rtspUrlEnc    String?
+  rtspMasked    String?
+  gatewayPath   String         @unique
+  status        WpCameraStatus @default(UNKNOWN)
+  lastSeenAt    DateTime?
+  lastError     String?
+  enabled       Boolean        @default(true)
+  sortOrder     Int            @default(0)
+  lastReconnect DateTime?
+  createdAt     DateTime       @default(now())
+
+  @@unique([tenantId, name])
+}
+
+model CameraViewSession {
+  id        String    @id @default(cuid())
+  tenantId  String
+  cameraId  String
+  userId    String
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+
+  @@index([tenantId, cameraId, startedAt])
+}

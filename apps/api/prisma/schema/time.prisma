@@ -1,0 +1,581 @@
+// ── Time domain: attendance, shifts, locations, policy, holidays, ID compliance,
+//    biometric devices, timesheets + 2-level approvals, regularizations, period locks ──
+// Cross-domain references (projects, tasks, tracker devices, files, leave) are plain scalars.
+
+enum PolicyAudience {
+  OFFICE
+  REMOTE
+}
+
+enum PunchSource {
+  BIOMETRIC
+  WEB
+  DESKTOP
+  MOBILE
+  REGULARIZATION
+  SYSTEM
+}
+
+enum DayStatus {
+  PENDING
+  PRESENT
+  HALF_DAY
+  ABSENT
+  LEAVE
+  HALF_DAY_LEAVE
+  HOLIDAY
+  WEEKLY_OFF
+  HOLIDAY_WORKED
+  WEEKLY_OFF_WORKED
+  MISSED_PUNCH
+}
+
+enum TimesheetStatus {
+  DRAFT
+  SUBMITTED
+  PENDING_RM
+  APPROVED
+  RETURNED
+  LOCKED
+}
+
+enum PunchDirection {
+  IN
+  OUT
+  UNKNOWN
+}
+
+enum PunchStatus {
+  ACCEPTED
+  REJECTED
+  SUPERSEDED
+}
+
+enum RegularizationType {
+  MISSED_PUNCH
+  WRONG_TIME
+  WFH_FORGOT
+  ON_DUTY
+  LATE_EXCUSE
+}
+
+enum RegularizationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum TimesheetStepStatus {
+  PENDING
+  APPROVED
+  RETURNED
+  SKIPPED_SELF
+  SKIPPED_DUPLICATE
+  CANCELLED
+}
+
+model WorkLocation {
+  id               String    @id @default(cuid())
+  tenantId         String
+  name             String
+  code             String?
+  address          String?
+  lat              Float?
+  lng              Float?
+  geoRadiusM       Int?
+  /// Enforce the geo-fence for web punches at this location.
+  geoFenceWebPunch Boolean   @default(false)
+  punchMode        String /// BIOMETRIC_ONLY | WEB_DESKTOP_ALLOWED
+  isRemote         Boolean   @default(false)
+  /// The system "Remote" row cannot be deleted.
+  isSystem         Boolean   @default(false)
+  timezone         String    @default("Asia/Kolkata")
+  archivedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model Shift {
+  id                     String            @id @default(cuid())
+  tenantId               String
+  name                   String
+  startMinute            Int /// minutes from 00:00 local (570 = 09:30)
+  endMinute              Int /// may be < start → crosses midnight
+  graceMinutes           Int               @default(15)
+  breakMinutes           Int               @default(60)
+  weeklyOffDays          Int[] /// 0=Sun … 6=Sat
+  isDefault              Boolean           @default(false)
+  minFullDayMinutes      Int               @default(450)
+  minHalfDayMinutes      Int               @default(240)
+  earlyOutGraceMinutes   Int               @default(15)
+  halfDayIfLateByMinutes Int?              @default(120)
+  archivedAt             DateTime?
+  assignments            ShiftAssignment[]
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model ShiftAssignment {
+  id             String    @id @default(cuid())
+  tenantId       String
+  employeeId     String
+  shiftId        String
+  shift          Shift     @relation(fields: [shiftId], references: [id])
+  effectiveFrom  DateTime  @db.Date
+  effectiveTo    DateTime? @db.Date
+  assignedByName String?
+  createdAt      DateTime  @default(now())
+
+  @@index([tenantId, employeeId, effectiveFrom])
+  @@index([tenantId, shiftId])
+}
+
+model AttendancePolicy {
+  id                          String         @id @default(cuid())
+  tenantId                    String
+  audience                    PolicyAudience
+  biometricMandatory          Boolean
+  allowWebPunch               Boolean
+  allowDesktopPunch           Boolean
+  autoIdleEnabled             Boolean        @default(true)
+  autoIdleMinutes             Int            @default(5)
+  screenshotsEnabled          Boolean        @default(true)
+  screenshotIntervalMinutes   Int            @default(10)
+  blurScreenshots             Boolean        @default(false)
+  deductIdleFromPayroll       Boolean        @default(true)
+  monthlyIdleAllowanceMinutes Int            @default(60)
+  breakReminderMinutes        Int            @default(120)
+  offlineRetentionDays        Int            @default(7)
+  screenshotRetentionDays     Int            @default(90)
+  // ── "More rules" ──
+  idleDeductionMode           String         @default("SHORTFALL_ONLY") /// SHORTFALL_ONLY | ALL_IDLE
+  lateMarksPerPenalty         Int            @default(3)
+  latePenaltyDays             Float          @default(0.5)
+  latePenaltySource           String         @default("LEAVE_THEN_LOP") /// LEAVE_THEN_LOP | LOP | NONE
+  earlyOutCountsAsLate        Boolean        @default(false)
+  missedPunchAutoCloseHours   Int            @default(6)
+  maxRegularizationsPerMonth  Int            @default(3)
+  regularizationWindowDays    Int            @default(7)
+  timesheetRequired           Boolean        @default(true)
+  trackerRequired             Boolean        @default(false)
+  punchInReminder             Boolean        @default(true)
+  version                     Int            @default(1)
+  updatedByName               String?
+  updatedAt                   DateTime       @updatedAt
+
+  @@unique([tenantId, audience])
+}
+
+model Holiday {
+  id          String   @id @default(cuid())
+  tenantId    String
+  date        DateTime @db.Date
+  name        String
+  type        String /// MANDATORY | OPTIONAL
+  /// Calendar label shown on the Holidays tab ("Gujarat 2026", "National").
+  calendar    String   @default("National")
+  /// Empty = applies to every location.
+  locationIds String[]
+  createdAt   DateTime @default(now())
+
+  @@unique([tenantId, date, name])
+  @@index([tenantId, date])
+}
+
+model AttendanceDay {
+  id                    String          @id @default(cuid())
+  tenantId              String
+  employeeId            String
+  date                  DateTime        @db.Date
+  status                DayStatus
+  firstInAt             DateTime?
+  lastOutAt             DateTime?
+  primarySource         PunchSource?
+  workedMinutes         Int             @default(0)
+  breakMinutes          Int             @default(0)
+  idleMinutes           Int             @default(0)
+  isLate                Boolean         @default(false)
+  lateByMinutes         Int             @default(0)
+  presentFraction       Float           @default(0)
+  leaveFraction         Float           @default(0)
+  idleDeductibleMinutes Int             @default(0)
+  isLocked              Boolean         @default(false)
+  // ── extras ──
+  shiftId               String?
+  effectiveMode         PolicyAudience?
+  locationId            String?
+  expectedStart         DateTime?
+  expectedEnd           DateTime?
+  /// Presence (gross − breaks); status thresholds use this, idle is deducted separately.
+  presenceMinutes       Int             @default(0)
+  sourcesMask           Int             @default(0)
+  lateExcused           Boolean         @default(false)
+  isEarlyOut            Boolean         @default(false)
+  leaveTypeCode         String?
+  holidayName           String?
+  overriddenByName      String?
+  overrideReason        String?
+  recomputedAt          DateTime        @default(now())
+
+  @@unique([employeeId, date])
+  @@index([tenantId, date, status])
+  @@index([tenantId, employeeId, date])
+}
+
+model AttendancePunch {
+  id                String         @id @default(cuid())
+  tenantId          String
+  employeeId        String
+  attendanceDate    DateTime       @db.Date
+  punchedAt         DateTime
+  direction         PunchDirection
+  source            PunchSource
+  status            PunchStatus
+  /// PUNCH_NOT_ALLOWED | GEOFENCE_OUTSIDE | GEO_REQUIRED | DUPLICATE | PERIOD_LOCKED | STATE_CONFLICT | ON_LEAVE
+  rejectReason      String?
+  locationId        String?
+  lat               Float?
+  lng               Float?
+  accuracyM         Int?
+  distanceM         Int?
+  geoStatus         String         @default("NOT_REQUIRED") /// INSIDE | OUTSIDE | LOW_ACCURACY | UNAVAILABLE | NOT_REQUIRED
+  ipAddress         String?
+  userAgent         String?
+  trackerDeviceId   String?
+  biometricDeviceId String?
+  regularizationId  String?
+  /// Idempotency key (web: Idempotency-Key header; tracker: event uuid; biometric: SN|PIN|ts).
+  clientEventId     String?
+  createdByName     String?
+  createdAt         DateTime       @default(now())
+
+  @@unique([tenantId, source, clientEventId])
+  @@index([tenantId, employeeId, punchedAt])
+  @@index([tenantId, attendanceDate])
+}
+
+model WorkSession {
+  id             String      @id @default(cuid())
+  tenantId       String
+  employeeId     String
+  attendanceDate DateTime    @db.Date
+  inPunchId      String
+  outPunchId     String?
+  startedAt      DateTime
+  endedAt        DateTime?
+  source         PunchSource
+  autoClosed     Boolean     @default(false)
+  deviceId       String?
+  createdAt      DateTime    @default(now())
+
+  @@index([tenantId, employeeId, attendanceDate])
+  @@index([tenantId, endedAt])
+}
+
+model AttendanceRegularization {
+  id                 String               @id @default(cuid())
+  tenantId           String
+  employeeId         String
+  date               DateTime             @db.Date
+  type               RegularizationType
+  requestedIn        DateTime?
+  requestedOut       DateTime?
+  reason             String
+  attachmentFileId   String?
+  status             RegularizationStatus @default(PENDING)
+  approverEmployeeId String?
+  decidedByName      String?
+  decidedAt          DateTime?
+  decisionComment    String?
+  createdAt          DateTime             @default(now())
+
+  @@index([tenantId, approverEmployeeId, status])
+  @@index([tenantId, employeeId, date])
+}
+
+model PeriodLock {
+  id           String    @id @default(cuid())
+  tenantId     String
+  month        String /// "2026-09"
+  lockedUpTo   DateTime  @db.Date
+  lockedByName String?
+  lockedAt     DateTime  @default(now())
+  unlockedAt   DateTime?
+  unlockReason String?
+  payrollRunId String?
+
+  @@unique([tenantId, month])
+}
+
+model IdCardCheck {
+  id             String   @id @default(cuid())
+  tenantId       String
+  employeeId     String
+  date           DateTime @db.Date
+  locationId     String?
+  checkedAt      DateTime
+  wearing        Boolean
+  photoFileId    String?
+  method         String   @default("MANUAL_PICK") /// BADGE_SCAN | MANUAL_PICK
+  loggedByUserId String?
+  loggedByName   String
+  note           String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([tenantId, employeeId, date])
+  @@index([tenantId, date, wearing])
+}
+
+// ── Biometric (ZKTeco ADMS push) ──
+
+model BiometricDevice {
+  id            String    @id @default(cuid())
+  tenantId      String
+  /// Globally unique: the public iclock endpoint resolves the tenant from the SN.
+  serialNumber  String    @unique
+  name          String
+  locationId    String?
+  model         String?
+  firmware      String?
+  directionMode String    @default("FIRST_LAST") /// DEVICE_STATUS | ALTERNATE | FIRST_LAST
+  timezone      String    @default("Asia/Kolkata")
+  commKey       String?
+  attLogStamp   String?
+  lastSeenAt    DateTime?
+  status        String    @default("ACTIVE") /// ACTIVE | DISABLED
+  createdAt     DateTime  @default(now())
+
+  @@index([tenantId])
+}
+
+/// Devices that called the ADMS endpoint but are not registered to any tenant (not tenant-scoped).
+model UnclaimedBiometricDevice {
+  serialNumber String   @id
+  firstSeenAt  DateTime @default(now())
+  lastSeenAt   DateTime @default(now())
+  ip           String?
+  model        String?
+}
+
+model BiometricEnrollment {
+  id         String   @id @default(cuid())
+  tenantId   String
+  employeeId String
+  pin        String
+  createdAt  DateTime @default(now())
+
+  @@unique([tenantId, pin])
+  @@unique([tenantId, employeeId])
+}
+
+model BiometricRawLog {
+  id             String   @id @default(cuid())
+  tenantId       String
+  deviceId       String
+  pin            String
+  punchedAtLocal String /// "2026-09-29 09:41:07"
+  punchedAt      DateTime
+  statusCode     Int?
+  verifyCode     Int?
+  workCode       String?
+  raw            String
+  receivedAt     DateTime @default(now())
+  processed      Boolean  @default(false)
+  punchId        String?
+  error          String? /// UNKNOWN_PIN | DUPLICATE | PERIOD_LOCKED | DEVICE_CLOCK
+  employeeId     String?
+
+  @@unique([deviceId, pin, punchedAtLocal])
+  @@index([tenantId, processed])
+  @@index([tenantId, deviceId, receivedAt])
+}
+
+// ── Timesheets ──
+
+model Timesheet {
+  id                  String                  @id @default(cuid())
+  tenantId            String
+  employeeId          String
+  weekStart           DateTime                @db.Date
+  weekEnd             DateTime                @db.Date
+  status              TimesheetStatus         @default(DRAFT)
+  submittedAt         DateTime?
+  approvedAt          DateTime?
+  totalMinutes        Int                     @default(0)
+  idleMinutes         Int                     @default(0)
+  screenshotCount     Int                     @default(0)
+  // ── extras ──
+  cycle               Int                     @default(0)
+  trackedMinutes      Int                     @default(0)
+  adjustmentMinutes   Int                     @default(0)
+  outsideHoursMinutes Int                     @default(0)
+  idleAsWorkMinutes   Int                     @default(0)
+  returnedComment     String?
+  returnedByName      String?
+  hasLateData         Boolean                 @default(false)
+  lockedAt            DateTime?
+  version             Int                     @default(1)
+  lines               TimesheetLine[]
+  idleDays            TimesheetIdleDay[]
+  steps               TimesheetApprovalStep[]
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+
+  @@unique([employeeId, weekStart])
+  @@index([tenantId, status])
+  @@index([tenantId, weekStart])
+}
+
+model TimesheetLine {
+  id          String          @id @default(cuid())
+  tenantId    String
+  timesheetId String
+  timesheet   Timesheet       @relation(fields: [timesheetId], references: [id], onDelete: Cascade)
+  projectId   String?
+  taskId      String?
+  label       String
+  subLabel    String?
+  billable    Boolean
+  isManual    Boolean         @default(false)
+  sortOrder   Int             @default(0)
+  cells       TimesheetCell[]
+  createdAt   DateTime        @default(now())
+
+  @@index([tenantId, timesheetId])
+  @@index([tenantId, projectId])
+  @@index([tenantId, taskId])
+}
+
+model TimesheetCell {
+  id                  String        @id @default(cuid())
+  tenantId            String
+  lineId              String
+  line                TimesheetLine @relation(fields: [lineId], references: [id], onDelete: Cascade)
+  date                DateTime      @db.Date
+  trackedMinutes      Int           @default(0)
+  adjustmentMinutes   Int           @default(0)
+  outsideHoursMinutes Int           @default(0)
+  finalMinutes        Int           @default(0)
+  billedInvoiceLineId String?
+  /// Approved "I was working" idle claims (tracker IDLE_WORK) counted as work.
+  idleAsWorkMinutes   Int           @default(0)
+  /// Pending (not yet reviewed) idle-as-work minutes — shown with a clock marker.
+  pendingIdleMinutes  Int           @default(0)
+
+  @@unique([lineId, date])
+  @@index([tenantId, date])
+}
+
+model TimesheetIdleDay {
+  id          String    @id @default(cuid())
+  tenantId    String
+  timesheetId String
+  timesheet   Timesheet @relation(fields: [timesheetId], references: [id], onDelete: Cascade)
+  date        DateTime  @db.Date
+  idleMinutes Int
+
+  @@unique([timesheetId, date])
+}
+
+model TimesheetAdjustment {
+  id             String    @id @default(cuid())
+  tenantId       String
+  timesheetId    String
+  cellId         String
+  fromMinutes    Int
+  toMinutes      Int
+  deltaMinutes   Int
+  kind           String /// MANUAL_INCREASE | MANUAL_DECREASE | REALLOCATION
+  reason         String
+  reviewStatus   String    @default("NOT_REQUIRED") /// NOT_REQUIRED | PENDING_PL | ACCEPTED | REJECTED
+  createdByName  String?
+  reviewedByName String?
+  reviewedAt     DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([tenantId, timesheetId])
+  @@index([tenantId, cellId])
+}
+
+model OutsideHoursEntry {
+  id             String    @id @default(cuid())
+  tenantId       String
+  employeeId     String
+  timesheetId    String
+  lineId         String?
+  projectId      String?
+  taskId         String?
+  taskText       String
+  date           DateTime  @db.Date
+  startAt        DateTime
+  endAt          DateTime
+  minutes        Int
+  reason         String
+  reviewStatus   String    @default("PENDING_PL") /// PENDING_PL | ACCEPTED | REJECTED
+  reviewedByName String?
+  reviewedAt     DateTime?
+  reviewComment  String?
+  createdAt      DateTime  @default(now())
+
+  @@index([tenantId, timesheetId])
+  @@index([tenantId, employeeId, date])
+}
+
+model TimesheetApprovalStep {
+  id                 String              @id @default(cuid())
+  tenantId           String
+  timesheetId        String
+  timesheet          Timesheet           @relation(fields: [timesheetId], references: [id], onDelete: Cascade)
+  cycle              Int
+  level              Int /// 1 = Project Lead, 2 = Reporting Manager
+  projectId          String?
+  approverEmployeeId String
+  status             TimesheetStepStatus @default(PENDING)
+  actedByName        String?
+  actedAt            DateTime?
+  comment            String?
+  dueAt              DateTime
+  escalatedAt        DateTime?
+  createdAt          DateTime            @default(now())
+
+  @@unique([timesheetId, cycle, level, projectId])
+  @@index([tenantId, approverEmployeeId, status])
+  @@index([tenantId, status, level])
+}
+
+/// Reviewer decisions on tracker idle claims made inside the approval UI (tracker is notified via idle.claimDecided).
+model TimesheetItemDecision {
+  id          String   @id @default(cuid())
+  tenantId    String
+  timesheetId String
+  itemType    String /// IDLE_CLAIM
+  refId       String
+  decision    String /// APPROVED | REJECTED
+  note        String?
+  decidedByName String?
+  createdAt   DateTime @default(now())
+
+  @@unique([tenantId, itemType, refId])
+  @@index([tenantId, timesheetId])
+}
+
+model TimesheetEvent {
+  id          String   @id @default(cuid())
+  tenantId    String
+  timesheetId String
+  type        String /// submitted | approved | returned | recalled | reopened | locked | cell.adjusted | outside_hours.logged
+  actorName   String?
+  level       Int?
+  comment     String?
+  at          DateTime @default(now())
+
+  @@index([tenantId, timesheetId])
+}

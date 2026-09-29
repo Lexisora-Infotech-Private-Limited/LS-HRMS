@@ -48,7 +48,9 @@ export const PERMISSIONS = {
   'tasks.manage': { label: 'Create & assign tasks', group: 'Work', roles: ALL },
   'tasks.viewAllBoards': { label: 'View all task boards', group: 'Work', roles: ['manager', 'admin'] },
   'archive.view': { label: 'Project archive & client vault', group: 'Work', roles: ['lead', 'manager', 'admin'] },
+  'archive.manage': { label: 'Archive projects & change archive access', group: 'Work', roles: ['manager', 'admin'] },
   'interns.manage': { label: 'Intern task sheets', group: 'Work', roles: ['lead', 'hr', 'admin'] },
+  'interns.viewAll': { label: 'All interns (not only mentees)', group: 'Work', roles: ['hr', 'admin'] },
   'clients.manage': { label: 'Manage clients', group: 'Work', roles: ['lead', 'manager', 'admin'] },
   'git.manage': { label: 'GitLab integration settings', group: 'Work', roles: ADM },
 

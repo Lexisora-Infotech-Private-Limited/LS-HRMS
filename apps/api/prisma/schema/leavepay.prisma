@@ -1,0 +1,629 @@
+// ── Leavepay: leave management + payroll + payslips ─────────────────────────
+// Owner: leavepay. Spine models (read by other domains): LeaveType, LeaveBalance,
+// LeaveRequest, LeaveRequestDay, EmployeeSalary, Payslip. Money = Int paise.
+// Day counts = Float in 0.5 steps. Dates = @db.Date (UTC midnight of the IST date).
+
+enum LeaveRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  WITHDRAWN
+  CANCELLATION_PENDING
+  CANCELLED
+}
+
+enum LeaveAccrualFrequency {
+  YEARLY
+  MONTHLY
+  QUARTERLY
+  ON_APPROVAL
+  NONE
+}
+
+enum LeaveLedgerTx {
+  OPENING
+  ACCRUAL
+  PRORATED_ACCRUAL
+  MANUAL_CREDIT
+  MANUAL_DEBIT
+  COMP_OFF_GRANT
+  AVAIL
+  AVAIL_REVERSAL
+  CARRY_FORWARD_IN
+  CARRY_FORWARD_OUT
+  LAPSE
+  EXPIRY
+  ENCASHMENT
+}
+
+enum LeaveCreditBatchType {
+  ANNUAL
+  MONTHLY
+  QUARTERLY
+  JOINING_PRORATION
+  YEAR_END
+  MANUAL
+}
+
+enum LeaveBatchStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum CompOffStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  PARTIALLY_USED
+  USED
+  EXPIRED
+  CANCELLED
+}
+
+model LeaveType {
+  id                        String                @id @default(cuid())
+  tenantId                  String
+  code                      String // EL CL SL CO LWP
+  name                      String
+  shortLabel                String                @default("")
+  color                     String?
+  displayOrder              Int                   @default(0)
+  /// Annual quota in days. 0 with accrualFrequency ON_APPROVAL = "On approval" (comp-off).
+  annualQuota               Float                 @default(0)
+  accrualFrequency          LeaveAccrualFrequency @default(YEARLY)
+  prorateOnJoin             Boolean               @default(true)
+  /// null = no carry forward; a number = cap ("Up to 30").
+  carryForwardMax           Float?
+  encashable                Boolean               @default(false)
+  /// EmploymentType values (FULL_TIME, INTERN, CONTRACT).
+  appliesTo                 String[]
+  isPaid                    Boolean               @default(true)
+  isCompOff                 Boolean               @default(false)
+  /// Comp-off grants expire this many days after the worked date (60).
+  expiryDays                Int?
+  allowHalfDay              Boolean               @default(true)
+  sandwichWeeklyOffs        Boolean               @default(false)
+  sandwichHolidays          Boolean               @default(false)
+  allowNegative             Boolean               @default(false)
+  negativeLimit             Float                 @default(0)
+  minNoticeDays             Int                   @default(0)
+  /// WARN | BLOCK
+  noticeEnforcement         String                @default("WARN")
+  maxConsecutiveDays        Float?
+  backdateLimitDays         Int                   @default(0)
+  documentRequiredAfterDays Float?
+  /// Hidden types (LWP) are applied by HR / converted excess only.
+  hidden                    Boolean               @default(false)
+  active                    Boolean               @default(true)
+  createdAt                 DateTime              @default(now())
+  updatedAt                 DateTime              @updatedAt
+
+  balances    LeaveBalance[]
+  requests    LeaveRequest[]
+  creditRules LeaveCreditRule[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+}
+
+model LeaveCreditRule {
+  id             String                @id @default(cuid())
+  tenantId       String
+  leaveTypeId    String
+  leaveType      LeaveType             @relation(fields: [leaveTypeId], references: [id])
+  employmentType String // FULL_TIME | INTERN | CONTRACT
+  frequency      LeaveAccrualFrequency
+  daysPerPeriod  Float
+  creditDay      Int                   @default(1)
+  prorateOnJoin  Boolean               @default(true)
+  effectiveFrom  DateTime              @db.Date
+  effectiveTo    DateTime?             @db.Date
+  active         Boolean               @default(true)
+  lastRunAt      DateTime?
+  lastPeriodKey  String?
+  lastRunStatus  String?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  @@unique([tenantId, leaveTypeId, employmentType, effectiveFrom])
+  @@index([tenantId])
+}
+
+model LeaveCreditBatch {
+  id            String               @id @default(cuid())
+  tenantId      String
+  type          LeaveCreditBatchType
+  leaveTypeId   String?
+  ruleId        String?
+  /// "2026" | "2026-09" | "manual:<id>" | "ye:2026" | "join:<employeeId>"
+  periodKey     String
+  leaveYear     Int
+  status        LeaveBatchStatus
+  employeeCount Int                  @default(0)
+  totalDays     Float                @default(0)
+  triggeredById String?
+  note          String?
+  error         String?
+  startedAt     DateTime             @default(now())
+  completedAt   DateTime?
+
+  @@unique([tenantId, type, leaveTypeId, periodKey])
+  @@index([tenantId, startedAt])
+}
+
+/// Append-only leave ledger; LeaveBalance is its projection.
+model LeaveLedgerEntry {
+  id             String        @id @default(cuid())
+  tenantId       String
+  employeeId     String
+  employee       Employee      @relation("leavepay_LedgerEmployee", fields: [employeeId], references: [id])
+  leaveTypeId    String
+  leaveYear      Int
+  txType         LeaveLedgerTx
+  /// Signed day count.
+  days           Float
+  effectiveDate  DateTime      @db.Date
+  requestId      String?
+  compOffGrantId String?
+  batchId        String?
+  note           String?
+  createdById    String?
+  createdByName  String?
+  createdAt      DateTime      @default(now())
+
+  @@unique([batchId, employeeId, leaveTypeId])
+  @@index([tenantId, employeeId, leaveTypeId, leaveYear])
+  @@index([tenantId, txType, createdAt])
+}
+
+model LeaveBalance {
+  id          String    @id @default(cuid())
+  tenantId    String
+  employeeId  String
+  employee    Employee  @relation("leavepay_BalanceEmployee", fields: [employeeId], references: [id])
+  leaveTypeId String
+  leaveType   LeaveType @relation(fields: [leaveTypeId], references: [id])
+  year        Int
+  opening     Float     @default(0)
+  accrued     Float     @default(0)
+  credited    Float     @default(0)
+  availed     Float     @default(0)
+  pending     Float     @default(0)
+  lapsed      Float     @default(0)
+  encashed    Float     @default(0)
+  /// Card "total": this year's allotment (full-year scheduled accrual + manual credits + comp-off grants).
+  entitlement Float     @default(0)
+  /// Card "left".
+  available   Float     @default(0)
+  version     Int       @default(0)
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([employeeId, leaveTypeId, year])
+  @@index([tenantId, year])
+}
+
+model LeaveRequest {
+  id                 String             @id @default(cuid())
+  tenantId           String
+  requestNo          String // LV-2026-00042
+  employeeId         String
+  employee           Employee           @relation("leavepay_RequestEmployee", fields: [employeeId], references: [id])
+  leaveTypeId        String
+  leaveType          LeaveType          @relation(fields: [leaveTypeId], references: [id])
+  fromDate           DateTime           @db.Date
+  toDate             DateTime           @db.Date
+  /// NONE | FIRST_HALF | SECOND_HALF (single-day requests)
+  halfDay            String             @default("NONE")
+  /// FULL | SECOND_HALF (multi-day: start from second half)
+  fromSession        String             @default("FULL")
+  /// FULL | FIRST_HALF (multi-day: end at first half)
+  toSession          String             @default("FULL")
+  days               Float
+  paidDays           Float              @default(0)
+  lopDays            Float              @default(0)
+  sandwichDays       Float              @default(0)
+  /// Per-day breakdown computed at apply time: [{date, session, kind, units, isSandwich, isPaid, holidayName?}]
+  dayBreakdown       Json               @default("[]")
+  reason             String?
+  attachmentFileId   String?
+  status             LeaveRequestStatus @default(PENDING)
+  approverEmployeeId String?
+  /// RM | FALLBACK | HR_ON_BEHALF | ESCALATED
+  approverSource     String             @default("RM")
+  notifyEmployeeIds  String[]
+  appliedByUserId    String?
+  decidedAt          DateTime?
+  decidedByName      String?
+  decisionNote       String?
+  cancelReason       String?
+  cancelRequestedAt  DateTime?
+  cancelledAt        DateTime?
+  touchesLockedPeriod Boolean           @default(false)
+  version            Int                @default(0)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  leaveDays LeaveRequestDay[]
+
+  @@unique([tenantId, requestNo])
+  @@index([tenantId, employeeId, fromDate])
+  @@index([tenantId, approverEmployeeId, status])
+}
+
+/// Approved leave, one row per date. Time reads active rows to mark AttendanceDay LEAVE.
+model LeaveRequestDay {
+  id          String       @id @default(cuid())
+  tenantId    String
+  requestId   String
+  request     LeaveRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  employeeId  String
+  leaveTypeId String
+  date        DateTime     @db.Date
+  /// FULL | FIRST_HALF | SECOND_HALF
+  session     String       @default("FULL")
+  /// WORKING | WEEKLY_OFF | HOLIDAY
+  dayKind     String       @default("WORKING")
+  units       Float
+  isSandwich  Boolean      @default(false)
+  isPaid      Boolean      @default(true)
+  leaveYear   Int
+  active      Boolean      @default(true)
+
+  @@index([tenantId, employeeId, date])
+  @@index([requestId])
+}
+
+model CompOffGrant {
+  id                 String        @id @default(cuid())
+  tenantId           String
+  employeeId         String
+  employee           Employee      @relation("leavepay_CompOffEmployee", fields: [employeeId], references: [id])
+  workedDate         DateTime      @db.Date
+  units              Float
+  remaining          Float
+  expiresOn          DateTime      @db.Date
+  status             CompOffStatus
+  /// REQUEST | MANUAL
+  source             String        @default("REQUEST")
+  reason             String?
+  workedMinutes      Int?
+  approverEmployeeId String?
+  decidedByName      String?
+  decidedAt          DateTime?
+  comment            String?
+  createdAt          DateTime      @default(now())
+
+  @@index([tenantId, employeeId, status, expiresOn])
+}
+
+model CompOffConsumption {
+  id         String    @id @default(cuid())
+  tenantId   String
+  grantId    String
+  requestId  String
+  units      Float
+  reversedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([tenantId, requestId])
+  @@index([grantId])
+}
+
+// ── Payroll ────────────────────────────────────────────────────────────────
+
+enum PayrollPayType {
+  SALARY
+  STIPEND
+}
+
+enum PayrollRunStatus {
+  DRAFT
+  CALCULATING
+  CALCULATED
+  FINALIZED
+  PAID
+  CANCELLED
+  FAILED
+}
+
+enum PayrollItemStatus {
+  READY
+  TIMESHEET_PENDING
+  EXCLUDED
+  ON_HOLD
+  ERROR
+  STALE
+  FINALIZED
+  PAID
+}
+
+model SalaryComponent {
+  id            String   @id @default(cuid())
+  tenantId      String
+  code          String // BASIC HRA SPECIAL STIPEND PF_EE PF_ER ESI_EE ESI_ER PT TDS IDLE_DED LOP ARREARS ...
+  name          String
+  /// EARNING | DEDUCTION | EMPLOYER_CONTRIBUTION | INFO
+  kind          String
+  taxable       Boolean  @default(true)
+  pfWage        Boolean  @default(false)
+  esiWage       Boolean  @default(true)
+  partOfGross   Boolean  @default(true)
+  partOfCtc     Boolean  @default(true)
+  showOnPayslip Boolean  @default(true)
+  payslipOrder  Int      @default(0)
+  isSystem      Boolean  @default(false)
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  @@unique([tenantId, code])
+}
+
+model SalaryTemplate {
+  id              String         @id @default(cuid())
+  tenantId        String
+  name            String
+  payType         PayrollPayType @default(SALARY)
+  employmentTypes String[]
+  isDefault       Boolean        @default(false)
+  /// [{componentCode, calc: PERCENT_OF_GROSS|PERCENT_OF_COMPONENT|BALANCING|FIXED|STATUTORY, value?, base?}]
+  lines           Json
+  createdAt       DateTime       @default(now())
+
+  @@unique([tenantId, name])
+}
+
+/// Salary revision. The component breakdown is encrypted (CryptoService.encryptJson).
+model EmployeeSalary {
+  id                String         @id @default(cuid())
+  tenantId          String
+  employeeId        String
+  employee          Employee       @relation("leavepay_SalaryEmployee", fields: [employeeId], references: [id])
+  effectiveFrom     DateTime       @db.Date
+  ctcAnnualPaise    Int
+  grossMonthlyPaise Int
+  /// encryptJson([{code,label,monthlyPaise,annualPaise}])
+  structureEnc      String
+  /// ACTIVE | SUPERSEDED
+  status            String         @default("ACTIVE")
+  payType           PayrollPayType @default(SALARY)
+  templateId        String?
+  /// JOINING | APPRAISAL | PROMOTION | CORRECTION | OTHER
+  reason            String         @default("JOINING")
+  note              String?
+  createdByName     String?
+  createdAt         DateTime       @default(now())
+
+  @@unique([employeeId, effectiveFrom])
+  @@index([tenantId, employeeId, status])
+}
+
+model EmployeePayrollProfile {
+  id                  String         @id @default(cuid())
+  tenantId            String
+  employeeId          String         @unique
+  employee            Employee       @relation("leavepay_ProfileEmployee", fields: [employeeId], references: [id])
+  payType             PayrollPayType @default(SALARY)
+  pfEnabled           Boolean        @default(true)
+  pfCeilingOpted      Boolean        @default(true)
+  /// AUTO | FORCE_ON | FORCE_OFF
+  esiMode             String         @default("AUTO")
+  ptStateCode         String         @default("GJ")
+  taxRegime           TaxRegime      @default(NEW)
+  /// OLD-regime declarations: {fy, sec80CPaise, sec80DPaise, rentMonthlyPaise, metro, homeLoanInterestPaise}
+  declarations        Json?
+  payrollHold         Boolean        @default(false)
+  holdReason          String?
+  idleDeductionExempt Boolean        @default(false)
+  /// BANK_TRANSFER | CHEQUE | CASH
+  paymentMode         String         @default("BANK_TRANSFER")
+  bankVerified        Boolean        @default(true)
+  updatedAt           DateTime       @updatedAt
+
+  @@index([tenantId])
+}
+
+model PayrollRun {
+  id                     String           @id @default(cuid())
+  tenantId               String
+  runNo                  String // PR-2026-09-R
+  period                 String // "2026-09"
+  periodYear             Int
+  periodMonth            Int
+  periodStart            DateTime         @db.Date
+  periodEnd              DateTime         @db.Date
+  /// REGULAR | SUPPLEMENTARY
+  runType                String           @default("REGULAR")
+  parentRunId            String?
+  status                 PayrollRunStatus @default(DRAFT)
+  attendanceLockDate     DateTime?        @db.Date
+  includeIdleDeduction   Boolean          @default(true)
+  /// EXCLUDE | WAIT
+  pendingTimesheetMode   String           @default("EXCLUDE")
+  paymentDate            DateTime?        @db.Date
+  calcVersion            Int              @default(0)
+  employeeCount          Int              @default(0)
+  internCount            Int              @default(0)
+  timesheetApprovedCount Int              @default(0)
+  timesheetPendingCount  Int              @default(0)
+  readyCount             Int              @default(0)
+  grossPaise             Int              @default(0)
+  deductionsPaise        Int              @default(0)
+  netPaise               Int              @default(0)
+  employerContribPaise   Int              @default(0)
+  employerPfPaise        Int              @default(0)
+  idleDeductionPaise     Int              @default(0)
+  idleEmployeeCount      Int              @default(0)
+  errorCount             Int              @default(0)
+  createdByName          String?
+  calculatedAt           DateTime?
+  finalizedByName        String?
+  finalizedAt            DateTime?
+  paidAt                 DateTime?
+  cancelReason           String?
+  lastError              String?
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @updatedAt
+
+  items PayrollItem[]
+
+  @@unique([tenantId, runNo])
+  @@index([tenantId, periodYear, periodMonth])
+}
+
+model PayrollItem {
+  id                     String            @id @default(cuid())
+  tenantId               String
+  runId                  String
+  run                    PayrollRun        @relation(fields: [runId], references: [id], onDelete: Cascade)
+  employeeId             String
+  employee               Employee          @relation("leavepay_ItemEmployee", fields: [employeeId], references: [id])
+  calcVersion            Int               @default(1)
+  status                 PayrollItemStatus
+  /// NOT_REQUIRED | APPROVED | PENDING_PL | PENDING_RM | SENT_BACK | NOT_SUBMITTED
+  timesheetGate          String            @default("NOT_REQUIRED")
+  payType                PayrollPayType    @default(SALARY)
+  taxRegime              TaxRegime?
+  ptStateCode            String?
+  workingDays            Float             @default(0)
+  eligibleDays           Float             @default(0)
+  paidLeaveDays          Float             @default(0)
+  unpaidLeaveDays        Float             @default(0)
+  absentDays             Float             @default(0)
+  lopDays                Float             @default(0)
+  paidDays               Float             @default(0)
+  projectedDays          Float             @default(0)
+  holidays               Int               @default(0)
+  weeklyOffs             Int               @default(0)
+  /// [{code:"EL",days:1}]
+  leaveSummary           Json              @default("[]")
+  leaveLabel             String            @default("0")
+  idleMinutesRaw         Int               @default(0)
+  idleAllowanceMinutes   Int               @default(0)
+  idleMinutesDeductible  Int               @default(0)
+  hourlyRatePaise        Float             @default(0)
+  perDayRatePaise        Float             @default(0)
+  grossFixedPaise        Int               @default(0)
+  grossEarnedPaise       Int               @default(0)
+  lopAmountPaise         Int               @default(0)
+  idleDeductionPaise     Int               @default(0)
+  adjustmentsPaise       Int               @default(0)
+  totalEarningsPaise     Int               @default(0)
+  totalDeductionsPaise   Int               @default(0)
+  employerContribPaise   Int               @default(0)
+  employerPfPaise        Int               @default(0)
+  pfEePaise              Int               @default(0)
+  esiEePaise             Int               @default(0)
+  ptPaise                Int               @default(0)
+  tdsPaise               Int               @default(0)
+  roundingPaise          Int               @default(0)
+  netPaise               Int               @default(0)
+  taxableMonthlyPaise    Int               @default(0)
+  trace                  Json              @default("[]")
+  errors                 Json              @default("[]")
+  holdReason             String?
+  lastCalculatedAt       DateTime          @default(now())
+
+  lines PayrollItemLine[]
+
+  @@unique([runId, employeeId])
+  @@index([tenantId, employeeId])
+}
+
+model PayrollItemLine {
+  id              String      @id @default(cuid())
+  tenantId        String
+  itemId          String
+  item            PayrollItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  componentCode   String
+  label           String
+  /// EARNING | DEDUCTION | EMPLOYER | INFO
+  kind            String
+  fullAmountPaise Int?
+  amountPaise     Int
+  adjustmentId    String?
+  order           Int         @default(0)
+
+  @@index([itemId])
+}
+
+model PayrollAdjustment {
+  id            String   @id @default(cuid())
+  tenantId      String
+  employeeId    String
+  /// LOP_REVERSAL | LOP_RECOVERY | IDLE_REVERSAL | IDLE_RECOVERY | BONUS | RECOVERY | REIMBURSEMENT | MANUAL_EARNING | MANUAL_DEDUCTION
+  type          String
+  days          Float?
+  /// Signed: positive = earning, negative = deduction.
+  amountPaise   Int
+  forPeriod     String
+  targetPeriod  String?
+  taxable       Boolean  @default(true)
+  pfApplicable  Boolean  @default(false)
+  esiApplicable Boolean  @default(false)
+  /// LEAVE_REQUEST | ATTENDANCE | TIMESHEET | MANUAL
+  sourceType    String   @default("MANUAL")
+  sourceId      String?
+  reason        String
+  /// PENDING | APPLIED | CANCELLED
+  status        String   @default("PENDING")
+  appliedRunId  String?
+  createdByName String?
+  createdAt     DateTime @default(now())
+
+  @@unique([tenantId, sourceType, sourceId, type, forPeriod])
+  @@index([tenantId, employeeId, status])
+}
+
+model Payslip {
+  id                 String   @id @default(cuid())
+  tenantId           String
+  employeeId         String
+  employee           Employee @relation("leavepay_PayslipEmployee", fields: [employeeId], references: [id])
+  runId              String
+  itemId             String   @unique
+  period             String // "2026-08"
+  periodYear         Int
+  periodMonth        Int
+  runType            String   @default("REGULAR")
+  workingDays        Float
+  paidDays           Float
+  lopDays            Float
+  idleMinutes        Int
+  idleDeductionPaise Int
+  grossPaise         Int
+  deductionsPaise    Int
+  netPaise           Int
+  fileId             String?
+  fileSha256         String?
+  /// DRAFT | PUBLISHED | VOID
+  status             String   @default("DRAFT")
+  version            Int      @default(1)
+  publishedAt        DateTime?
+  voidedAt           DateTime?
+  createdAt          DateTime @default(now())
+
+  @@index([tenantId, employeeId, periodYear, periodMonth])
+  @@index([runId])
+}
+
+model BankTransferFile {
+  id            String   @id @default(cuid())
+  tenantId      String
+  runId         String
+  format        String   @default("GENERIC_NEFT_CSV")
+  fileId        String
+  fileName      String
+  entryCount    Int
+  totalPaise    Int
+  sha256        String
+  /// GENERATED | DOWNLOADED | SUBMITTED | RECONCILED | VOID
+  status        String   @default("GENERATED")
+  /// [{employeeId, name, reason}]
+  excluded      Json     @default("[]")
+  generatedBy   String?
+  generatedAt   DateTime @default(now())
+  downloadedAt  DateTime?
+
+  @@index([tenantId, runId])
+}

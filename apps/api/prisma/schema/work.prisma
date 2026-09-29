@@ -1,0 +1,381 @@
+// ── Work: clients, projects, team boards, tasks, GitLab, archive, interns ──
+// Owner: work domain. Spine models (Client, Project, ProjectMember, Task + enums) follow
+// docs/ARCHITECTURE.md §4 exactly; extra fields/models are work-internal.
+// References to core Employee/Department/FileObject are plain scalar ids (resolved by a second query).
+
+enum TaskStatus {
+  OPEN
+  ALLOTTED
+  WIP
+  DEV_COMPLETED
+  QA
+  DONE
+  CANCELLED
+}
+
+enum ProjectStatus {
+  PLANNING
+  ACTIVE
+  ON_HOLD
+  COMPLETED
+  ARCHIVED
+  CANCELLED
+}
+
+enum ProjectHealth {
+  NA
+  ON_TRACK
+  AT_RISK
+  OFF_TRACK
+}
+
+enum GitSyncStatus {
+  NONE
+  PENDING
+  SYNCED
+  FAILED
+  SKIPPED
+}
+
+enum InternTaskStatus {
+  ASSIGNED
+  IN_PROGRESS
+  DONE
+  NOT_DONE
+}
+
+model Client {
+  id                      String   @id @default(cuid())
+  tenantId                String
+  code                    String // CL-0001
+  name                    String
+  legalName               String?
+  isInternal              Boolean  @default(false)
+  /// REGULAR | COMPOSITION | UNREGISTERED | SEZ | OVERSEAS
+  gstRegType              String   @default("REGULAR")
+  gstin                   String?
+  pan                     String?
+  address                 String?
+  city                    String?
+  pincode                 String?
+  /// 2-digit GST state code, e.g. "24" Gujarat
+  stateCode               String?
+  countryCode             String   @default("IN")
+  billingEmails           String[]
+  defaultRatePerHourPaise Int?
+  paymentTermsDays        Int      @default(15)
+  /// ACTIVE | INACTIVE
+  status                  String   @default("ACTIVE")
+  contactName             String?
+  contactPhone            String?
+  projects                Project[]
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  @@unique([tenantId, code])
+  @@unique([tenantId, name])
+  @@index([tenantId, status])
+}
+
+model Project {
+  id                   String        @id @default(cuid())
+  tenantId             String
+  /// "AT" — unique per tenant, immutable once tasks exist
+  key                  String
+  name                 String
+  description          String?
+  clientId             String?
+  client               Client?       @relation(fields: [clientId], references: [id])
+  isInternal           Boolean       @default(false)
+  /// Internal standing-activities project (INT): hidden from lists/KPIs, every employee may log on it.
+  isSystem             Boolean       @default(false)
+  /// WEB | MOBILE | INTERNAL | OTHER
+  category             String        @default("WEB")
+  techStack            String[]
+  leadEmployeeId       String?
+  startDate            DateTime?     @db.Date
+  deadline             DateTime?     @db.Date
+  billable             Boolean       @default(true)
+  ratePerHourPaise     Int?
+  /// Budget (estimate) in minutes
+  estimatedMinutes     Int           @default(0)
+  /// Cached Σ task loggedMinutes + openingLoggedMinutes
+  loggedMinutes        Int           @default(0)
+  /// Hours imported from before time tracking (not attributable to a task)
+  openingLoggedMinutes Int           @default(0)
+  progressPct          Int           @default(0)
+  status               ProjectStatus @default(PLANNING)
+  health               ProjectHealth @default(NA)
+  healthReason         String?
+  healthComputedAt     DateTime?
+  /// Department ids that have a team board on this project (Development / QA / Design)
+  boardDepartmentIds   String[]
+  gitRepoUrl           String?
+  gitProjectId         Int?
+  gitTargetBranch      String        @default("develop")
+  /// UNLINKED | LINKED | ERROR
+  gitLinkStatus        String        @default("UNLINKED")
+  gitLinkError         String?
+  taskSeq              Int           @default(0)
+  /// LEADS_ONLY | ALL_DEVELOPERS
+  archiveAccess        String        @default("LEADS_ONLY")
+  closedAt             DateTime?
+  archivedAt           DateTime?
+  archivedByEmployeeId String?
+  createdByEmployeeId  String?
+  modules              ProjectModule[]
+  members              ProjectMember[]
+  documents            ProjectDocument[]
+  boardMembers         BoardMember[]
+  tasks                Task[]
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  @@unique([tenantId, key])
+  @@unique([tenantId, name])
+  @@index([tenantId, status])
+  @@index([tenantId, leadEmployeeId])
+  @@index([tenantId, clientId])
+}
+
+model ProjectModule {
+  id               String   @id @default(cuid())
+  tenantId         String
+  projectId        String
+  project          Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name             String
+  estimatedMinutes Int?
+  sortOrder        Int      @default(0)
+  isArchived       Boolean  @default(false)
+  createdAt        DateTime @default(now())
+
+  @@unique([projectId, name])
+  @@index([tenantId, projectId])
+}
+
+model ProjectMember {
+  id            String    @id @default(cuid())
+  tenantId      String
+  projectId     String
+  project       Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  employeeId    String
+  /// LEAD | MEMBER | QA | DESIGN
+  role          String    @default("MEMBER")
+  allocationPct Int?
+  joinedAt      DateTime  @default(now())
+
+  @@unique([projectId, employeeId])
+  @@index([tenantId, employeeId])
+}
+
+/// Requirement / scope / design / asset documents on a project, or vault docs on a client (MSA, NDA, SOW).
+model ProjectDocument {
+  id                   String   @id @default(cuid())
+  tenantId             String
+  projectId            String?
+  project              Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  clientId             String?
+  fileId               String
+  /// REQUIREMENT | SCOPE | DESIGN | ASSET | CONTRACT | NDA | SOW | OTHER
+  kind                 String   @default("REQUIREMENT")
+  title                String
+  sizeBytes            Int      @default(0)
+  uploadedByEmployeeId String?
+  createdAt            DateTime @default(now())
+
+  @@index([tenantId, projectId])
+  @@index([tenantId, clientId])
+  @@index([tenantId, fileId])
+}
+
+/// Team-board allocation: the department lead allocates employees to the project's department board.
+model BoardMember {
+  id                    String   @id @default(cuid())
+  tenantId              String
+  projectId             String
+  project               Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  departmentId          String
+  employeeId            String
+  allocatedByEmployeeId String?
+  allocatedAt           DateTime @default(now())
+
+  @@unique([projectId, departmentId, employeeId])
+  @@index([tenantId, employeeId])
+  @@index([tenantId, projectId, departmentId])
+}
+
+model Task {
+  id                 String        @id @default(cuid())
+  tenantId           String
+  /// "AT-101" unique per tenant
+  key                String
+  number             Int
+  projectId          String
+  project            Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  moduleName         String?
+  /// Team board (department)
+  departmentId       String?
+  title              String
+  description        String?
+  status             TaskStatus    @default(OPEN)
+  /// Ordering within a column (lower first)
+  rank               Int           @default(0)
+  assigneeEmployeeId String?
+  reporterEmployeeId String?
+  estimatedMinutes   Int?
+  /// Cached: openingLoggedMinutes + tracked (TimesheetCell / ActivitySegment)
+  loggedMinutes      Int           @default(0)
+  openingLoggedMinutes Int         @default(0)
+  dueDate            DateTime?     @db.Date
+  /// INT meetings, code review etc. — not shown on kanban columns
+  isStanding         Boolean       @default(false)
+  gitBranch          String?
+  gitBranchUrl       String?
+  gitMrUrl           String?
+  gitMrIid           Int?
+  /// opened | merged | closed
+  gitMrState         String?
+  gitSyncStatus      GitSyncStatus @default(NONE)
+  gitSyncError       String?
+  pipelineStatus     String?
+  startedAt          DateTime?
+  devCompletedAt     DateTime?
+  qaAt               DateTime?
+  doneAt             DateTime?
+  statusChangedAt    DateTime      @default(now())
+  version            Int           @default(0)
+  comments           TaskComment[]
+  transitions        TaskTransition[]
+  commits            GitCommitLink[]
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  @@unique([tenantId, key])
+  @@unique([projectId, number])
+  @@index([tenantId, projectId, departmentId, status])
+  @@index([tenantId, assigneeEmployeeId, status])
+}
+
+model TaskComment {
+  id               String   @id @default(cuid())
+  tenantId         String
+  taskId           String
+  task             Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  authorEmployeeId String?
+  authorName       String
+  body             String
+  createdAt        DateTime @default(now())
+
+  @@index([tenantId, taskId, createdAt])
+}
+
+/// Status history / activity log for a task (transitions + git events).
+model TaskTransition {
+  id           String      @id @default(cuid())
+  tenantId     String
+  taskId       String
+  task         Task        @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  fromStatus   TaskStatus?
+  toStatus     TaskStatus?
+  /// MOVE | CREATE | ASSIGN | EDIT | GIT
+  kind         String      @default("MOVE")
+  note         String?
+  byEmployeeId String?
+  byName       String      @default("System")
+  at           DateTime    @default(now())
+
+  @@index([tenantId, taskId, at])
+}
+
+model GitIntegration {
+  id                  String    @id @default(cuid())
+  tenantId            String
+  provider            String    @default("GITLAB")
+  baseUrl             String    @default("https://gitlab.com")
+  /// CryptoService ciphertext
+  tokenEnc            String?
+  tokenLast4          String?
+  /// sha256(hex) of the webhook secret (X-Gitlab-Token)
+  webhookSecretHash   String    @unique
+  defaultTargetBranch String    @default("develop")
+  branchPattern       String    @default("feature/{key}")
+  mrTitlePattern      String    @default("{KEY}: {title}")
+  /// ACTIVE | AUTH_ERROR
+  status              String    @default("ACTIVE")
+  lastCheckedAt       DateTime?
+  updatedAt           DateTime  @updatedAt
+
+  @@unique([tenantId, provider])
+}
+
+model GitWebhookDelivery {
+  id          String    @id @default(cuid())
+  tenantId    String
+  eventUuid   String
+  eventType   String
+  payload     Json
+  receivedAt  DateTime  @default(now())
+  processedAt DateTime?
+  error       String?
+
+  @@unique([tenantId, eventUuid])
+  @@index([tenantId, receivedAt])
+}
+
+model GitCommitLink {
+  id          String   @id @default(cuid())
+  tenantId    String
+  taskId      String
+  task        Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  sha         String
+  message     String
+  authorName  String?
+  committedAt DateTime
+  url         String?
+
+  @@unique([taskId, sha])
+  @@index([tenantId, taskId])
+}
+
+model InternTask {
+  id                   String           @id @default(cuid())
+  tenantId             String
+  internEmployeeId     String
+  mentorEmployeeId     String
+  date                 DateTime         @db.Date
+  title                String
+  description          String?
+  estimatedMinutes     Int?
+  status               InternTaskStatus @default(ASSIGNED)
+  /// Self-reported (or linked-task) minutes
+  minutes              Int?
+  internNote           String?
+  mentorScore          Float?
+  mentorFeedback       String?
+  scoredAt             DateTime?
+  scoredByEmployeeId   String?
+  linkedTaskId         String?
+  carriedFromId        String?
+  assignedByEmployeeId String?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  @@index([tenantId, internEmployeeId, date])
+  @@index([tenantId, mentorEmployeeId, date])
+}
+
+/// Weekly mentor score (ISO week, Monday start). Overrides the mean of task scores when set.
+model InternWeekScore {
+  id                 String   @id @default(cuid())
+  tenantId           String
+  internEmployeeId   String
+  weekStart          DateTime @db.Date
+  score              Float
+  feedback           String?
+  scoredByEmployeeId String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([internEmployeeId, weekStart])
+  @@index([tenantId, weekStart])
+}

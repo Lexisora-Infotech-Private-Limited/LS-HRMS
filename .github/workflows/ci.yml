@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "feature/**"]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_USER: hrms, POSTGRES_PASSWORD: hrms, POSTGRES_DB: hrms }
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U hrms" --health-interval 5s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6380:6379"]
+    env:
+      DATABASE_URL: postgresql://hrms:hrms@localhost:5433/hrms?schema=public
+      REDIS_URL: redis://localhost:6380
+      JWT_ACCESS_SECRET: ci-access-secret
+      JWT_REFRESH_SECRET: ci-refresh-secret
+      DATA_ENCRYPTION_KEY: Y2ktZGF0YS1rZXktMzItYnl0ZXMtbG9uZy0hLSEhISE=
+      JOBS_DISABLED: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:shared
+      - run: cd apps/api && npx prisma generate && npx prisma db push --skip-generate
+      - run: pnpm -r typecheck
+      - run: pnpm -r test
+      - run: cd apps/api && npx tsx prisma/seed/index.ts
+      - run: pnpm --filter @lexisora/api build && pnpm --filter @lexisora/web build
+
+  tracker-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:shared
+      - run: pnpm --filter @lexisora/tracker test
+      - run: pnpm --filter @lexisora/tracker dist:win
+      - uses: actions/upload-artifact@v4
+        with: { name: lexisora-tracker-installer, path: apps/tracker/release/*.exe }

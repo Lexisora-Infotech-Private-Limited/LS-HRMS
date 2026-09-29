@@ -257,6 +257,14 @@ model Employee {
   // @backrel:time:Employee
   // @backrel:tracker:Employee
   // @backrel:leavepay:Employee
+  leavepayLedger         LeaveLedgerEntry[]      @relation("leavepay_LedgerEmployee")
+  leavepayBalances       LeaveBalance[]          @relation("leavepay_BalanceEmployee")
+  leavepayRequests       LeaveRequest[]          @relation("leavepay_RequestEmployee")
+  leavepayCompOffs       CompOffGrant[]          @relation("leavepay_CompOffEmployee")
+  leavepaySalaries       EmployeeSalary[]        @relation("leavepay_SalaryEmployee")
+  leavepayPayrollProfile EmployeePayrollProfile? @relation("leavepay_ProfileEmployee")
+  leavepayPayrollItems   PayrollItem[]           @relation("leavepay_ItemEmployee")
+  leavepayPayslips       Payslip[]               @relation("leavepay_PayslipEmployee")
   // @backrel:work:Employee
   // @backrel:finance:Employee
   // @backrel:workplace:Employee

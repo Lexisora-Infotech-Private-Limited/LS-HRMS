@@ -11,7 +11,8 @@
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run --passWithNoTests",
-    "dist:win": "electron-vite build && electron-builder --win"
+    "dist:win": "electron-vite build && electron-builder --win --x64 --config electron-builder.config.js --publish never",
+    "dist:dir": "electron-vite build && electron-builder --win --x64 --dir --config electron-builder.config.js --publish never"
   },
   "dependencies": {
     "@lexisora/shared": "workspace:*"

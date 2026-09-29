@@ -1,0 +1,380 @@
+// ── Finance: chart of accounts, double-entry vouchers, GST invoices, purchases, filing ──
+// Money = Int paise. GST rates = basis points (1800 = 18%). Dates = @db.Date (IST business day).
+// Cross-domain references (clientId, projectId, timesheetCellId, employeeId, userId, fileId) are
+// plain scalars — resolved with a second query.
+
+enum FinAccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  INCOME
+  EXPENSE
+}
+
+/// Chart of accounts. `systemKey` marks accounts the auto-postings use (CASH, BANK, AR, …).
+/// Client receivable sub-ledgers: partyType=CLIENT, partyId=Client.id, parent = AR group.
+model Account {
+  id          String         @id @default(cuid())
+  tenantId    String
+  code        String
+  name        String
+  type        FinAccountType
+  parentId    String?
+  parent      Account?       @relation("finance_AccountTree", fields: [parentId], references: [id])
+  children    Account[]      @relation("finance_AccountTree")
+  isGroup     Boolean        @default(false)
+  systemKey   String?
+  partyType   String? // CLIENT | VENDOR | EMPLOYEE
+  partyId     String?
+  isSystem    Boolean        @default(false)
+  isActive    Boolean        @default(true)
+  /// Opening balance, debit-positive (credit balances are negative).
+  openingPaise Int           @default(0)
+  lines       VoucherLine[]
+  createdAt   DateTime       @default(now())
+
+  @@unique([tenantId, code])
+  @@unique([tenantId, systemKey])
+  @@unique([tenantId, partyType, partyId])
+  @@index([tenantId, type])
+}
+
+enum FinVoucherType {
+  PAYMENT
+  RECEIPT
+  JOURNAL
+  HR
+  SALES
+  PURCHASE
+  CREDIT_NOTE
+  PAYROLL
+}
+
+enum FinVoucherSource {
+  MANUAL
+  INVOICE
+  INVOICE_PAYMENT
+  PURCHASE
+  CREDIT_NOTE
+  PAYROLL_RUN
+  REVERSAL
+}
+
+/// A posted double-entry voucher (Σ debit = Σ credit, enforced by LedgerService).
+model Voucher {
+  id               String        @id @default(cuid())
+  tenantId         String
+  number           String // RCPT-221, PMT-310, JV-012, HRV-044, SV-031, PV-018, CN-0001
+  type             FinVoucherType
+  date             DateTime      @db.Date
+  fy               String // 2026-27
+  narration        String
+  sourceType       FinVoucherSource @default(MANUAL)
+  sourceId         String?
+  /// Human reference of the source document (INV-0412, IN-8843, 2026-08 payroll).
+  sourceRef        String?
+  employeeId       String?
+  attachmentFileId String?
+  status           String        @default("POSTED") // POSTED | REVERSED
+  reversalOfId     String?       @unique
+  reversedById     String?
+  totalPaise       Int
+  postedByUserId   String?
+  postedByName     String?
+  lines            VoucherLine[]
+  createdAt        DateTime      @default(now())
+
+  @@unique([tenantId, fy, number])
+  @@unique([tenantId, sourceType, sourceId])
+  @@index([tenantId, date])
+  @@index([tenantId, type, date])
+}
+
+model VoucherLine {
+  id          String  @id @default(cuid())
+  tenantId    String
+  voucherId   String
+  voucher     Voucher @relation(fields: [voucherId], references: [id], onDelete: Cascade)
+  accountId   String
+  account     Account @relation(fields: [accountId], references: [id])
+  debitPaise  Int     @default(0)
+  creditPaise Int     @default(0)
+  narration   String?
+  sortOrder   Int     @default(0)
+
+  @@index([tenantId, accountId])
+  @@index([voucherId])
+}
+
+// ── GST invoices ────────────────────────────────────────────────────────────
+
+enum FinInvoiceStatus {
+  DRAFT
+  ISSUED
+  EMAILED
+  PARTIALLY_PAID
+  PAID
+  CANCELLED
+}
+
+enum FinSupplyType {
+  INTRA
+  INTER
+}
+
+model Invoice {
+  id                String           @id @default(cuid())
+  tenantId          String
+  /// Assigned at issue (drafts show "Draft"); continuous INV-{seq:4}.
+  number            String?
+  fy                String?
+  clientId          String
+  clientName        String
+  projectId         String?
+  projectName       String?
+  period            String // "2026-09"
+  periodStart       DateTime         @db.Date
+  periodEnd         DateTime         @db.Date
+  invoiceDate       DateTime?        @db.Date
+  dueDate           DateTime?        @db.Date
+  paymentTermsDays  Int              @default(15)
+  placeOfSupply     String? // "27-Maharashtra"
+  supplyType        FinSupplyType
+  gstRateBp         Int              @default(1800)
+  taxOverrideReason String?
+  sellerSnapshot    Json?
+  buyerSnapshot     Json
+  minutes           Int
+  /// Approved unbilled minutes when the invoice was prepared (differs from `minutes` when adjusted).
+  sourceMinutes     Int              @default(0)
+  adjustmentNote    String?
+  ratePaise         Int
+  subtotalPaise     Int
+  cgstPaise         Int              @default(0)
+  sgstPaise         Int              @default(0)
+  igstPaise         Int              @default(0)
+  roundOffPaise     Int              @default(0)
+  totalPaise        Int
+  receivedPaise     Int              @default(0)
+  tdsPaise          Int              @default(0)
+  balancePaise      Int
+  status            FinInvoiceStatus    @default(DRAFT)
+  emailTo           String[]
+  emailCc           String[]
+  emailedAt         DateTime?
+  lastEmailError    String?
+  paidAt            DateTime?
+  pdfFileId         String?
+  salesVoucherId    String?
+  notes             String?
+  createdByUserId   String?
+  issuedAt          DateTime?
+  cancelledAt       DateTime?
+  cancelReason      String?
+  lines             InvoiceLine[]
+  payments          InvoicePayment[]
+  creditNotes       InvoiceCreditNote[]
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@unique([tenantId, number])
+  @@index([tenantId, status])
+  @@index([tenantId, clientId])
+  @@index([tenantId, invoiceDate])
+}
+
+model InvoiceLine {
+  id             String             @id @default(cuid())
+  tenantId       String
+  invoiceId      String
+  invoice        Invoice            @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  sortOrder      Int                @default(0)
+  description    String
+  sac            String             @default("998314")
+  minutes        Int
+  ratePaise      Int
+  taxablePaise   Int
+  gstRateBp      Int                @default(1800)
+  cgstPaise      Int                @default(0)
+  sgstPaise      Int                @default(0)
+  igstPaise      Int                @default(0)
+  lineTotalPaise Int
+  projectId      String?
+  timeEntries    InvoiceTimeEntry[]
+
+  @@index([tenantId, invoiceId])
+}
+
+/// Locks an approved timesheet cell to exactly one invoice (released on draft delete / credit note).
+model InvoiceTimeEntry {
+  id              String      @id @default(cuid())
+  tenantId        String
+  invoiceId       String
+  invoiceLineId   String
+  line            InvoiceLine @relation(fields: [invoiceLineId], references: [id], onDelete: Cascade)
+  timesheetCellId String      @unique
+  employeeId      String?
+  taskId          String?
+  date            DateTime    @db.Date
+  minutes         Int
+
+  @@index([tenantId, invoiceId])
+}
+
+model InvoicePayment {
+  id              String   @id @default(cuid())
+  tenantId        String
+  invoiceId       String
+  invoice         Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  date            DateTime @db.Date
+  amountPaise     Int
+  tdsPaise        Int      @default(0)
+  mode            String   @default("BANK") // BANK | CASH | UPI | CHEQUE
+  reference       String?
+  voucherId       String?
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+
+  @@index([tenantId, invoiceId])
+}
+
+model InvoiceCreditNote {
+  id            String   @id @default(cuid())
+  tenantId      String
+  number        String // CN-0001
+  invoiceId     String
+  invoice       Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  date          DateTime @db.Date
+  reason        String
+  subtotalPaise Int
+  cgstPaise     Int      @default(0)
+  sgstPaise     Int      @default(0)
+  igstPaise     Int      @default(0)
+  roundOffPaise Int      @default(0)
+  totalPaise    Int
+  voucherId     String?
+  createdAt     DateTime @default(now())
+
+  @@unique([tenantId, number])
+  @@index([tenantId, invoiceId])
+}
+
+// ── Purchases & input GST ──────────────────────────────────────────────────
+
+model Vendor {
+  id        String     @id @default(cuid())
+  tenantId  String
+  name      String
+  gstin     String?
+  pan       String?
+  stateCode String?
+  email     String?
+  isActive  Boolean    @default(true)
+  purchases Purchase[]
+  createdAt DateTime   @default(now())
+
+  @@unique([tenantId, name])
+  @@index([tenantId, gstin])
+}
+
+model PurchaseCategory {
+  id                 String     @id @default(cuid())
+  tenantId           String
+  name               String
+  /// Expense (or fixed-asset) account debited for the taxable value.
+  accountId          String
+  defaultGstRateBp   Int        @default(1800)
+  itcEligibleDefault Boolean    @default(true)
+  createsAsset       Boolean    @default(false)
+  isActive           Boolean    @default(true)
+  sortOrder          Int        @default(0)
+  purchases          Purchase[]
+
+  @@unique([tenantId, name])
+}
+
+enum FinGstSource {
+  OCR
+  ESTIMATED
+  MANUAL
+}
+
+model Purchase {
+  id              String           @id @default(cuid())
+  tenantId        String
+  vendorId        String
+  vendor          Vendor           @relation(fields: [vendorId], references: [id])
+  vendorInvoiceNo String
+  billDate        DateTime         @db.Date
+  fy              String
+  categoryId      String
+  category        PurchaseCategory @relation(fields: [categoryId], references: [id])
+  /// Gross amount including GST.
+  amountPaise     Int
+  taxablePaise    Int
+  gstRateBp       Int              @default(1800)
+  cgstPaise       Int              @default(0)
+  sgstPaise       Int              @default(0)
+  igstPaise       Int              @default(0)
+  inputGstPaise   Int
+  gstSource       FinGstSource        @default(ESTIMATED)
+  ocrConfidence   Float?
+  itcEligible     Boolean          @default(true)
+  itcPeriod       String // "2026-09"
+  paidVia         String           @default("BANK") // UNPAID | BANK | CASH
+  billFileId      String?
+  status          String           @default("RECORDED") // RECORDED | CANCELLED
+  voucherId       String?
+  notes           String?
+  createdByUserId String?
+  createdAt       DateTime         @default(now())
+
+  @@unique([tenantId, vendorId, vendorInvoiceNo, fy])
+  @@index([tenantId, billDate])
+  @@index([tenantId, itcPeriod])
+}
+
+// ── Filing cabinet ──────────────────────────────────────────────────────────
+
+model FilingFolder {
+  id        String           @id @default(cuid())
+  tenantId  String
+  name      String
+  parentId  String?
+  parent    FilingFolder?    @relation("finance_FolderTree", fields: [parentId], references: [id])
+  children  FilingFolder[]   @relation("finance_FolderTree")
+  /// BILLS, SALES_INVOICES, GST_RETURNS, INCOME_TAX, CONTRACTS, REGISTRATION, VENDOR_AGREEMENTS
+  systemKey String?
+  isSystem  Boolean          @default(false)
+  sortOrder Int              @default(100)
+  documents FilingDocument[]
+  createdAt DateTime         @default(now())
+
+  @@unique([tenantId, systemKey])
+  @@index([tenantId, parentId])
+}
+
+model FilingDocument {
+  id               String       @id @default(cuid())
+  tenantId         String
+  folderId         String
+  folder           FilingFolder @relation(fields: [folderId], references: [id])
+  fileId           String
+  title            String
+  mime             String       @default("application/pdf")
+  sizeBytes        Int          @default(0)
+  tags             String[]
+  fy               String?
+  docDate          DateTime?    @db.Date
+  /// PURCHASE | INVOICE | GST_RETURN
+  linkedEntityType String?
+  linkedEntityId   String?
+  linkedRef        String?
+  uploadedByUserId String?
+  uploadedByName   String?
+  uploadedAt       DateTime     @default(now())
+  deletedAt        DateTime?
+
+  @@index([tenantId, folderId])
+  @@index([tenantId, linkedEntityType, linkedEntityId])
+}

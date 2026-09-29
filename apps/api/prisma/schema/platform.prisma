@@ -1,0 +1,303 @@
+// ── Platform: SaaS subscription & billing, promo codes, branding history, B2B support ──
+// Owner: platform domain. Roles/permissions, notifications and audit live in core.prisma.
+// Global (platform-wide) models have NO tenantId: Plan, PromoCode, MrrSnapshot.
+
+enum BillingCycle {
+  MONTHLY
+  YEARLY
+}
+
+enum SubscriptionStatus {
+  FREE
+  ACTIVE
+  PENDING_PAYMENT
+  PAST_DUE
+  READ_ONLY
+  SUSPENDED
+  CANCELLED
+}
+
+/// Catalogue of plans (FREE, GROWTH, ENTERPRISE, INTERNAL). Prices are per seat per month, in paise.
+model Plan {
+  code                String   @id
+  name                String
+  freeSeats           Int      @default(10)
+  maxActiveUsers      Int?
+  monthlyPaisePerSeat Int?
+  yearlyPaisePerSeat  Int?
+  features            String[]
+  isPublic            Boolean  @default(true)
+  sortOrder           Int      @default(0)
+}
+
+/// One per tenant. Other domains may read `planCode`, `quantity`, `status` for seat checks.
+model Subscription {
+  id                 String             @id @default(cuid())
+  tenantId           String             @unique
+  planCode           String
+  cycle              BillingCycle?
+  status             SubscriptionStatus @default(FREE)
+  /// Purchased seats including the 10 free ones (FREE plan: 10).
+  quantity           Int                @default(10)
+  /// Price snapshot for the current period (paise per seat per month).
+  unitPaise          Int?
+  contractPaisePerYear Int?
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+  cancelAtPeriodEnd  Boolean            @default(false)
+  /// {quantity?, cycle?} effective at renewal.
+  pendingChange      Json?
+  autoRenew          Boolean            @default(true)
+  collection         String             @default("GATEWAY") // GATEWAY | OFFLINE_INVOICE
+  pastDueSince       DateTime?
+  graceEndsAt        DateTime?
+  changes            SubscriptionChange[]
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  @@index([tenantId])
+  @@index([status])
+}
+
+model SubscriptionChange {
+  id             String       @id @default(cuid())
+  tenantId       String
+  subscriptionId String
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  /// CREATED UPGRADE DOWNGRADE_SCHEDULED DOWNGRADE_APPLIED SEATS_ADDED SEATS_REDUCE_SCHEDULED CYCLE_CHANGE RENEWED STATUS PROMO_APPLIED
+  type           String
+  from           Json?
+  to             Json?
+  /// Net change in purchased seats (drives "Seats billed +Δ this month").
+  seatDelta      Int          @default(0)
+  actorName      String?
+  createdAt      DateTime     @default(now())
+
+  @@index([tenantId, createdAt])
+}
+
+model PromoCode {
+  id             String         @id @default(cuid())
+  code           String         @unique
+  description    String
+  percentOff     Int?
+  amountOffPaise Int?
+  planCodes      String[]
+  cycles         BillingCycle[]
+  /// NEXT_INVOICE | REPEATING
+  duration       String         @default("NEXT_INVOICE")
+  durationCycles Int?
+  maxRedemptions Int?
+  redeemedCount  Int            @default(0)
+  validFrom      DateTime
+  validUntil     DateTime?
+  active         Boolean        @default(true)
+  redemptions    PromoRedemption[]
+  createdAt      DateTime       @default(now())
+}
+
+model PromoRedemption {
+  id              String    @id @default(cuid())
+  tenantId        String
+  promoId         String
+  promo           PromoCode @relation(fields: [promoId], references: [id])
+  subscriptionId  String
+  /// PENDING | APPLIED | VOID
+  status          String    @default("PENDING")
+  cyclesRemaining Int       @default(1)
+  appliedInvoiceIds String[]
+  redeemedByName  String?
+  createdAt       DateTime  @default(now())
+
+  @@unique([promoId, tenantId])
+  @@index([tenantId, status])
+}
+
+/// Lexisora's invoice to a tenant for the HRMS subscription (numbered LXS/26-27/0001).
+model SaasInvoice {
+  id              String    @id @default(cuid())
+  tenantId        String
+  number          String?   @unique
+  subscriptionId  String
+  /// RENEWAL | UPGRADE | SEATS | ENTERPRISE
+  kind            String    @default("RENEWAL")
+  fyLabel         String?
+  issueDate       DateTime?
+  dueDate         DateTime?
+  periodStart     DateTime
+  periodEnd       DateTime
+  planCode        String
+  cycle           BillingCycle?
+  quantity        Int
+  /// [{kind, description, quantity, unitPaise, amountPaise}]
+  lines           Json
+  subtotalPaise   Int
+  discountPaise   Int       @default(0)
+  taxablePaise    Int
+  cgstPaise       Int       @default(0)
+  sgstPaise       Int       @default(0)
+  igstPaise       Int       @default(0)
+  roundOffPaise   Int       @default(0)
+  totalPaise      Int
+  placeOfSupply   String
+  recipientGstin  String?
+  promoRedemptionId String?
+  /// DRAFT | ISSUED | PAID | OVERDUE | VOID
+  status          String    @default("DRAFT")
+  paidAt          DateTime?
+  payments        SaasPayment[]
+  createdAt       DateTime  @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([status])
+}
+
+model SaasPayment {
+  id               String      @id @default(cuid())
+  tenantId         String
+  invoiceId        String
+  invoice          SaasInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  /// MOCK | RAZORPAY | OFFLINE
+  gateway          String
+  gatewayOrderId   String      @unique
+  gatewayPaymentId String?
+  amountPaise      Int
+  /// CREATED | CAPTURED | FAILED | REFUNDED
+  status           String      @default("CREATED")
+  failureReason    String?
+  /// What the checkout changes on capture: {planCode, cycle, quantity, periodStart, periodEnd}
+  intent           Json
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  @@index([tenantId, createdAt])
+}
+
+/// Idempotency log for payment gateway webhooks.
+model GatewayWebhookEvent {
+  id             String    @id @default(cuid())
+  tenantId       String
+  gateway        String
+  eventId        String    @unique
+  type           String
+  payload        Json
+  signatureValid Boolean
+  receivedAt     DateTime  @default(now())
+  processedAt    DateTime?
+
+  @@index([tenantId])
+}
+
+/// "Contact sales" requests from the Enterprise card.
+model SalesLead {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  email     String
+  phone     String?
+  seats     Int?
+  message   String?
+  /// NEW | CONTACTED | WON | LOST
+  status    String   @default("NEW")
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+}
+
+/// Daily platform metrics snapshot (Tenants screen MRR delta).
+model MrrSnapshot {
+  date         DateTime @id @db.Date
+  mrrPaise     Int
+  paidTenants  Int
+  freeTenants  Int
+  seatsBilled  Int
+  createdAt    DateTime @default(now())
+}
+
+/// Published theme history (Branding → Restore previous).
+model BrandingVersion {
+  id              String    @id @default(cuid())
+  tenantId        String
+  version         Int
+  /// PUBLISHED | ARCHIVED
+  status          String    @default("PUBLISHED")
+  presetKey       String?
+  primaryHex      String
+  secondaryHex    String
+  logoFileId      String?
+  productName     String?
+  domain          String
+  publishedById   String?
+  publishedByName String?
+  publishedAt     DateTime  @default(now())
+
+  @@unique([tenantId, version])
+  @@index([tenantId, status])
+}
+
+// ── Lexisora support (B2B) ─────────────────────────────────────────────────
+
+enum SupportSeverity {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum SupportStatus {
+  OPEN
+  ENGINEER_ASSIGNED
+  IN_PROGRESS
+  WAITING_ON_CUSTOMER
+  RESOLVED
+  CLOSED
+}
+
+/// Raised by a client company admin (tenantId = that client); numbered from the platform sequence (SUP-222).
+model SupportTicket {
+  id                 String          @id @default(cuid())
+  tenantId           String
+  number             Int             @unique
+  code               String          @unique
+  openedByUserId     String?
+  openedByName       String
+  openedByEmail      String
+  subject            String
+  description        String
+  /// TECHNICAL | BILLING | ACCOUNT | FEATURE_REQUEST
+  category           String          @default("TECHNICAL")
+  severity           SupportSeverity @default(MEDIUM)
+  status             SupportStatus   @default(OPEN)
+  assigneeUserId     String?
+  assigneeName       String?
+  planAtOpen         String
+  firstResponseDueAt DateTime
+  firstRespondedAt   DateTime?
+  slaBreachedAt      DateTime?
+  resolvedAt         DateTime?
+  closedAt           DateTime?
+  reopenedCount      Int             @default(0)
+  csat               Int?
+  messages           SupportMessage[]
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  @@index([tenantId, status])
+  @@index([status, firstResponseDueAt])
+}
+
+model SupportMessage {
+  id           String        @id @default(cuid())
+  tenantId     String
+  ticketId     String
+  ticket       SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  /// TENANT_USER | PLATFORM_USER | SYSTEM
+  authorType   String
+  authorUserId String?
+  authorName   String
+  body         String
+  /// Internal notes are visible to Lexisora staff only.
+  internal     Boolean       @default(false)
+  createdAt    DateTime      @default(now())
+
+  @@index([tenantId, ticketId])
+}

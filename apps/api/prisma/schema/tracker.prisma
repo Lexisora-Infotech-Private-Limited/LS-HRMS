@@ -1,0 +1,220 @@
+// ── Tracker domain (desktop tracker ingest, devices, screenshots, idle claims) ──
+// Owner: tracker. Cross-domain references (taskId, projectId, employeeId, userId) are plain
+// scalar ids; spine models (ARCHITECTURE.md §4) keep their exact names and fields.
+
+/// A paired desktop tracker. status: PENDING (pair started) | ACTIVE | REVOKED.
+model TrackerDevice {
+  id              String    @id @default(cuid())
+  tenantId        String
+  userId          String
+  employeeId      String
+  hostname        String
+  os              String
+  appVersion      String
+  status          String    @default("PENDING") // PENDING|ACTIVE|REVOKED
+  pairedAt        DateTime?
+  lastSeenAt      DateTime?
+  lastSyncAt      DateTime?
+  queueDepth      Int       @default(0)
+  displays        Int       @default(1)
+  /// Live state from the last heartbeat (OUT|WORKING|BREAK|IDLE) + active task.
+  liveStatus      String?
+  liveTaskId      String?
+  lastSkewSec     Int?
+  approvalMethod  String? // PORTAL_CODE|HR|SEED
+  approvedByUserId String?
+  revokedAt       DateTime?
+  revokedByUserId String?
+  revokeReason    String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([tenantId, userId, status])
+  @@index([tenantId, employeeId])
+  @@index([tenantId, lastSeenAt])
+}
+
+/// Sign-in + pairing handshake from the desktop app.
+/// status: SIGNED_IN → PENDING (code issued) → APPROVED | AWAITING_HR → CLAIMED; or REJECTED | EXPIRED | CANCELLED.
+model DevicePairingRequest {
+  id               String    @id @default(cuid())
+  tenantId         String
+  userId           String
+  employeeId       String
+  sessionTokenHash String    @unique
+  sessionExpiresAt DateTime
+  mode             String    @default("PUNCH") // PUNCH|MONITOR_ONLY at sign-in time
+  status           String    @default("SIGNED_IN")
+  codeHash         String?
+  hostname         String?
+  os               String?
+  appVersion       String?
+  permissions      String[]
+  expiresAt        DateTime?
+  approvedAt       DateTime?
+  approvedByUserId String?
+  approvalMethod   String?
+  deviceId         String?   @unique
+  claimedAt        DateTime?
+  ip               String?
+  createdAt        DateTime  @default(now())
+
+  @@index([tenantId, userId, status])
+  @@index([tenantId, status, expiresAt])
+}
+
+/// Every code entered on the web (for the 5-wrong-codes-per-15-min rate limit).
+model DevicePairingAttempt {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String
+  ok        Boolean
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, userId, createdAt])
+}
+
+/// Raw device events (idempotent by clientId). `at` is skew-corrected; `clientAt` is device time.
+model TrackerEvent {
+  id         String    @id @default(cuid())
+  tenantId   String
+  clientId   String    @unique
+  deviceId   String
+  employeeId String
+  type       String
+  at         DateTime
+  clientAt   DateTime
+  workDate   DateTime  @db.Date
+  taskId     String?
+  resolution String?
+  idleFrom   DateTime?
+  note       String?
+  payload    Json?
+  skewSec    Int       @default(0)
+  receivedAt DateTime  @default(now())
+
+  @@index([tenantId, employeeId, workDate])
+  @@index([tenantId, deviceId, at])
+}
+
+/// Spine. kind WORK|BREAK|IDLE|IDLE_WORK; idleResolution for idle kinds: DEDUCTED|AS_BREAK|CLAIMED_WORK.
+model ActivitySegment {
+  id             String   @id @default(cuid())
+  tenantId       String
+  clientId       String   @unique
+  employeeId     String
+  deviceId       String?
+  workDate       DateTime @db.Date
+  kind           String
+  taskId         String?
+  projectId      String?
+  startAt        DateTime
+  endAt          DateTime
+  durationSec    Int
+  idleResolution String?
+  idleCause      String?
+  note           String?
+  keyboardEvents Int      @default(0)
+  mouseEvents    Int      @default(0)
+  flags          String[]
+  createdAt      DateTime @default(now())
+
+  @@index([tenantId, employeeId, workDate])
+  @@index([tenantId, taskId, workDate])
+}
+
+/// Spine. "I was working" idle claims, reviewed by the task's project lead (else the RM) inside L1 approvals.
+model IdleClaim {
+  id                 String    @id @default(cuid())
+  tenantId           String
+  employeeId         String
+  segmentId          String?   @unique
+  workDate           DateTime  @db.Date
+  startAt            DateTime
+  endAt              DateTime
+  minutes            Int
+  taskId             String?
+  projectId          String?
+  note               String?
+  status             String    @default("PENDING") // PENDING|APPROVED|REJECTED
+  reviewerEmployeeId String?
+  decidedByUserId    String?
+  decidedAt          DateTime?
+  comment            String?
+  createdAt          DateTime  @default(now())
+
+  @@index([tenantId, employeeId, workDate])
+  @@index([tenantId, reviewerEmployeeId, status])
+}
+
+/// Spine. fileId / thumbFileId are FileObject ids (category 'screenshot').
+model Screenshot {
+  id           String    @id @default(cuid())
+  tenantId     String
+  clientId     String    @unique
+  employeeId   String
+  deviceId     String?
+  capturedAt   DateTime
+  workDate     DateTime  @db.Date
+  taskId       String?
+  projectId    String?
+  fileId       String
+  thumbFileId  String?
+  blurred      Boolean   @default(false)
+  inIdle       Boolean   @default(false)
+  monitorCount Int       @default(1)
+  purgeAfter   DateTime?
+  purgedAt     DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([tenantId, employeeId, workDate])
+  @@index([tenantId, taskId, workDate])
+  @@index([tenantId, purgeAfter])
+}
+
+/// Spine. Day projection per employee. perTask: [{taskId, projectId, key, title, seconds}] (payable seconds).
+model TrackerDaySummary {
+  id               String    @id @default(cuid())
+  tenantId         String
+  employeeId       String
+  workDate         DateTime  @db.Date
+  workedSec        Int       @default(0)
+  breakSec         Int       @default(0)
+  idleSec          Int       @default(0)
+  idleDeductedSec  Int       @default(0)
+  idlePendingSec   Int       @default(0)
+  claimApprovedSec Int       @default(0)
+  screenshotCount  Int       @default(0)
+  perTask          Json      @default("[]")
+  timeline         Json      @default("[]")
+  firstInAt        DateTime?
+  lastOutAt        DateTime?
+  integrityFlags   Int       @default(0)
+  confirmedAt      DateTime?
+  lastProjectedAt  DateTime  @default(now())
+
+  @@unique([employeeId, workDate])
+  @@index([tenantId, workDate])
+}
+
+/// Integrity signals shown to reviewers (never change pay on their own).
+/// type: CLOCK_SKEW|CLOCK_CHANGED|APP_QUIT_WHILE_PUNCHED_IN|GAP|OVERLAP_REJECTED|SCREENSHOT_MISSING|OFFLINE_OVER_LIMIT
+model TrackerIntegrityEvent {
+  id                   String    @id @default(cuid())
+  tenantId             String
+  employeeId           String
+  deviceId             String?
+  workDate             DateTime  @db.Date
+  type                 String
+  severity             String    @default("INFO") // INFO|WARN|HIGH
+  occurredAt           DateTime
+  details              Json      @default("{}")
+  dedupeKey            String    @unique
+  acknowledgedByUserId String?
+  acknowledgedAt       DateTime?
+  comment              String?
+  createdAt            DateTime  @default(now())
+
+  @@index([tenantId, employeeId, workDate])
+  @@index([tenantId, severity, acknowledgedAt])
+}

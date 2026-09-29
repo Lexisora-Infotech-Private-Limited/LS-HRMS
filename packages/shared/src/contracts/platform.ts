@@ -1,4 +1,461 @@
 import { z } from 'zod';
+import { paginationQuery } from '../api';
+import type { PermissionKey } from '../permissions';
 
-/** Shared request/response contracts for the platform domain (zod schemas + inferred types). */
-export const __platformContracts = z.object({});
+/**
+ * Platform domain contracts: Roles & access, Audit log, Subscription & billing, Branding,
+ * Tenants, Data privacy and Lexisora support. Zod schemas validate API input; the
+ * constants and pure helpers are shared by the API (authoritative) and the web (preview).
+ */
+
+// ── Plans & pricing ──────────────────────────────────────────────────────────
+
+export const PLAN_CODES = ['FREE', 'GROWTH', 'ENTERPRISE', 'INTERNAL'] as const;
+export type PlanCode = (typeof PLAN_CODES)[number];
+export const BILLING_CYCLES = ['MONTHLY', 'YEARLY'] as const;
+export type BillingCycleKey = (typeof BILLING_CYCLES)[number];
+
+/** First 10 users are free on every plan. */
+export const FREE_SEATS = 10;
+/** Growth price per chargeable seat per month, in paise. */
+export const GROWTH_PRICE_PAISE: Record<BillingCycleKey, number> = { MONTHLY: 17900, YEARLY: 14900 };
+/** "Yearly · save 17%". */
+export const YEARLY_SAVINGS_PCT = Math.round((1 - GROWTH_PRICE_PAISE.YEARLY / GROWTH_PRICE_PAISE.MONTHLY) * 100);
+
+export const PLAN_CARDS: { code: 'FREE' | 'GROWTH' | 'ENTERPRISE'; name: string; unit: string; feats: string[] }[] = [
+  { code: 'FREE', name: 'Free', unit: 'up to 10 users', feats: ['Attendance & leave', 'Projects & tasks', 'Community support'] },
+  { code: 'GROWTH', name: 'Growth', unit: 'per user / month', feats: ['Everything in Free', 'Payroll, ledger & GST', 'Desktop tracker', 'White-label theme'] },
+  { code: 'ENTERPRISE', name: 'Enterprise', unit: '200+ users', feats: ['Dedicated database', 'CCTV & biometric integrations', '24/7 priority support'] },
+];
+
+export const PLAN_LABELS: Record<PlanCode, string> = { FREE: 'Free', GROWTH: 'Growth', ENTERPRISE: 'Enterprise', INTERNAL: 'Internal' };
+
+/** Plan rank used for feature gating. INTERNAL (the operator's own tenant) has everything. */
+export const PLAN_RANK: Record<PlanCode, number> = { FREE: 0, GROWTH: 1, ENTERPRISE: 2, INTERNAL: 3 };
+
+/**
+ * Permissions that need a paid plan (tenants on Free see these toggles disabled with a
+ * "Growth" tag, and the API answers 402 FEATURE_NOT_IN_PLAN).
+ */
+export const PERMISSION_MIN_PLAN: Partial<Record<PermissionKey, 'GROWTH' | 'ENTERPRISE'>> = {
+  'payroll.manage': 'GROWTH',
+  'ledger.manage': 'GROWTH',
+  'ledger.hrvoucher': 'GROWTH',
+  'invoices.manage': 'GROWTH',
+  'purchases.manage': 'GROWTH',
+  'filing.manage': 'GROWTH',
+  'branding.manage': 'GROWTH',
+  'candidates.manage': 'GROWTH',
+  'jobs.manage': 'GROWTH',
+  'appraisal.manage': 'GROWTH',
+  'assets.manage': 'GROWTH',
+  'welcomekit.manage': 'GROWTH',
+  'idcard.manage': 'GROWTH',
+  'lms.manage': 'GROWTH',
+  'kudos.eotm': 'GROWTH',
+  'facility.manage': 'GROWTH',
+};
+
+/**
+ * Permission dependencies: enabling a key also enables what it requires; disabling a key
+ * that another enabled key requires is refused unless cascaded.
+ */
+export const PERMISSION_REQUIRES: Partial<Record<PermissionKey, PermissionKey[]>> = {
+  'payroll.manage': ['employees.compensation'],
+  'employees.compensation': ['employees.view'],
+  'employees.manage': ['employees.view'],
+  'onboarding.manage': ['employees.view'],
+  'candidates.manage': ['candidates.view'],
+  'appraisal.manage': ['appraisal.view'],
+  'projects.manage': ['projects.view'],
+  'tasks.viewAllBoards': ['tasks.board'],
+  'kudos.eotm': ['kudos.give'],
+  'kudos.give': ['kudos.view'],
+  'helpdesk.agent': ['helpdesk.use'],
+  'lms.manage': ['lms.view'],
+  'policies.manage': ['policies.view'],
+  'facility.manage': ['facility.use'],
+  'notices.publish.global': ['notices.view'],
+  'notices.publish.team': ['notices.view'],
+};
+
+/** Matrix rows / keys that ask for confirmation before changing. */
+export const HIGH_RISK_KEYS: PermissionKey[] = ['mobile.access', 'payroll.manage', 'ledger.manage', 'cctv.view', 'roles.manage'];
+
+/** Brand palette presets (wireframe PALS). */
+export const BRAND_PRESETS = [
+  { key: 'lexisora-pink-blue', name: 'Lexisora · pink & blue', primary: '#d6457a', secondary: '#2f5fb3' },
+  { key: 'acme-red-black', name: 'Acme · red & black', primary: '#c62828', secondary: '#1c1c1c' },
+  { key: 'default-gold-ink', name: 'Default · gold & ink', primary: '#b68235', secondary: '#2d2b2b' },
+] as const;
+
+// ── Pure helpers shared with the web preview ────────────────────────────────
+
+/** Paise for one seat over a whole period (monthly 17900, yearly 178800). */
+export function seatPeriodPaise(cycle: BillingCycleKey, unitPaise = GROWTH_PRICE_PAISE[cycle]): number {
+  return cycle === 'YEARLY' ? unitPaise * 12 : unitPaise;
+}
+
+export function chargeableSeats(quantity: number, freeSeats = FREE_SEATS): number {
+  return Math.max(0, quantity - freeSeats);
+}
+
+/** WCAG relative luminance contrast ratio between two #rrggbb colours. */
+export function contrastRatio(a: string, b: string): number {
+  const lum = (hex: string) => {
+    const n = hex.replace('#', '');
+    const ch = [0, 2, 4].map((i) => parseInt(n.slice(i, i + 2), 16) / 255).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * ch[0]! + 0.7152 * ch[1]! + 0.0722 * ch[2]!;
+  };
+  const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p) as [number, number];
+  return Math.round(((x + 0.05) / (y + 0.05)) * 100) / 100;
+}
+
+export const HEX_RE = /^#[0-9a-fA-F]{6}$/;
+/** Hostname such as acme.hrms.app or hr.acme.com. */
+export const HOST_RE = /^(?=.{4,100}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
+
+// ── Roles & access ──────────────────────────────────────────────────────────
+
+export const createRoleSchema = z.object({
+  name: z.string().trim().min(2, 'Role name needs at least 2 characters').max(40, 'Role name is too long'),
+  copyFromRoleId: z
+    .string()
+    .nullish()
+    .transform((v) => (v ? v : null)),
+  description: z.string().trim().max(200).nullish(),
+});
+export type CreateRoleInput = z.infer<typeof createRoleSchema>;
+
+export const updateRoleSchema = z.object({
+  name: z.string().trim().min(2).max(40).optional(),
+  description: z.string().trim().max(200).nullish(),
+});
+export type UpdateRoleInput = z.infer<typeof updateRoleSchema>;
+
+export const setPermissionSchema = z.object({
+  enabled: z.boolean(),
+  cascade: z.boolean().optional(),
+});
+export type SetPermissionInput = z.infer<typeof setPermissionSchema>;
+
+export const setMatrixRowSchema = z.object({
+  row: z.string().min(1),
+  enabled: z.boolean(),
+});
+export type SetMatrixRowInput = z.infer<typeof setMatrixRowSchema>;
+
+export const roleMembersSchema = z.object({ userIds: z.array(z.string().min(1)).min(1, 'Pick at least one person') });
+export type RoleMembersInput = z.infer<typeof roleMembersSchema>;
+
+export type MatrixCellState = 'all' | 'some' | 'none';
+
+export type RoleDto = {
+  id: string;
+  key: string;
+  name: string;
+  shortName: string;
+  description: string | null;
+  isSystem: boolean;
+  permissions: string[];
+  memberCount: number;
+  isMine: boolean;
+};
+
+export type RolesResponse = {
+  roles: RoleDto[];
+  matrix: { label: string; keys: string[]; cells: Record<string, MatrixCellState> }[];
+  groups: { group: string; items: { key: string; label: string; minPlan: 'GROWTH' | 'ENTERPRISE' | null; locked: boolean; requires: string[]; highRisk: boolean }[] }[];
+  plan: PlanCode;
+};
+
+export type RoleChangeResult = { role: RoleDto; added: string[]; removed: string[] };
+
+export type RoleMemberDto = { userId: string; name: string; email: string; empCode: string | null; department: string | null; status: string; since: string };
+
+// ── Audit log ───────────────────────────────────────────────────────────────
+
+export const AUDIT_TABS = ['all', 'security', 'access', 'platform'] as const;
+export const auditQuerySchema = paginationQuery.extend({
+  tab: z.enum(AUDIT_TABS).default('all'),
+  actor: z.string().optional(),
+  action: z.string().optional(),
+  entity: z.string().optional(),
+  entityId: z.string().optional(),
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+export type AuditQuery = z.infer<typeof auditQuerySchema>;
+
+export type AuditRowDto = {
+  id: string;
+  createdAt: string;
+  actorUserId: string | null;
+  actorName: string;
+  action: string;
+  module: string;
+  entity: string;
+  entityId: string | null;
+  summary: string;
+  ip: string | null;
+  meta: unknown;
+  platform: boolean;
+};
+
+export type AuditFacets = { actors: { value: string; label: string }[]; entities: string[]; modules: string[] };
+
+// ── Subscription & billing ─────────────────────────────────────────────────
+
+export const quoteSchema = z.object({
+  planCode: z.literal('GROWTH'),
+  cycle: z.enum(BILLING_CYCLES),
+  quantity: z.coerce.number().int().min(FREE_SEATS + 1, 'Growth needs at least 11 seats').max(100000),
+});
+export type QuoteInput = z.infer<typeof quoteSchema>;
+export const checkoutSchema = quoteSchema;
+export type CheckoutInput = QuoteInput;
+
+export const seatsSchema = z.object({ quantity: z.coerce.number().int().min(1).max(100000) });
+export const promoSchema = z.object({ code: z.string().trim().min(2, 'Enter a promo code').max(40).transform((s) => s.toUpperCase()) });
+export const contactSalesSchema = z.object({
+  name: z.string().trim().min(2, 'Name is required'),
+  email: z.string().trim().email('Enter a valid email'),
+  phone: z.string().trim().max(20).nullish(),
+  seats: z.coerce.number().int().min(1).nullish(),
+  message: z.string().trim().max(2000).nullish(),
+});
+export type ContactSalesInput = z.infer<typeof contactSalesSchema>;
+export const confirmPaymentSchema = z.object({ outcome: z.enum(['success', 'fail']) });
+
+export type QuoteLine = { kind: 'SEATS' | 'PRORATION' | 'DISCOUNT'; description: string; quantity: number; unitPaise: number; amountPaise: number };
+export type QuoteDto = {
+  lines: QuoteLine[];
+  subtotalPaise: number;
+  discountPaise: number;
+  taxablePaise: number;
+  cgstPaise: number;
+  sgstPaise: number;
+  igstPaise: number;
+  roundOffPaise: number;
+  totalPaise: number;
+  placeOfSupply: string;
+  periodStart: string;
+  periodEnd: string;
+  promo: string | null;
+};
+
+export type BillingOverview = {
+  planCode: PlanCode;
+  planName: string;
+  cycle: BillingCycleKey | null;
+  status: string;
+  quantity: number;
+  seatsUsed: number;
+  freeSeats: number;
+  prices: Record<BillingCycleKey, number>;
+  savingsPct: number;
+  currentPeriodStart: string | null;
+  currentPeriodEnd: string | null;
+  cancelAtPeriodEnd: boolean;
+  pendingChange: { quantity?: number; cycle?: BillingCycleKey } | null;
+  pastDueSince: string | null;
+  graceEndsAt: string | null;
+  promo: { code: string; description: string } | null;
+  gateway: 'MOCK' | 'RAZORPAY';
+  billingState: string | null;
+};
+
+export type SaasInvoiceDto = {
+  id: string;
+  number: string | null;
+  issueDate: string | null;
+  periodStart: string;
+  periodEnd: string;
+  description: string;
+  amountPaise: number;
+  gstPaise: number;
+  totalPaise: number;
+  status: string;
+};
+
+export type CheckoutDto = {
+  orderId: string;
+  gateway: 'MOCK' | 'RAZORPAY';
+  amountPaise: number;
+  checkoutPath: string;
+  keyId?: string;
+};
+
+export type CheckoutDetailDto = {
+  orderId: string;
+  status: string;
+  gateway: string;
+  amountPaise: number;
+  tenantName: string;
+  description: string;
+  quote: QuoteDto;
+};
+
+// ── Branding ────────────────────────────────────────────────────────────────
+
+export const publishBrandingSchema = z.object({
+  presetKey: z.string().nullish(),
+  primaryHex: z.string().regex(HEX_RE, 'Use a colour like #c62828'),
+  secondaryHex: z.string().regex(HEX_RE, 'Use a colour like #1c1c1c'),
+  logoFileId: z.string().nullish(),
+  productName: z.string().trim().max(40, 'Keep the product name under 40 characters').nullish(),
+  domain: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .regex(HOST_RE, 'Enter a domain like acme.hrms.app'),
+});
+export type PublishBrandingInput = z.infer<typeof publishBrandingSchema>;
+
+export type BrandingDto = {
+  presetKey: string | null;
+  primaryHex: string;
+  secondaryHex: string;
+  logoFileId: string | null;
+  logoUrl: string | null;
+  productName: string | null;
+  tenantName: string;
+  domain: string;
+  version: number | null;
+  publishedAt: string | null;
+  publishedByName: string | null;
+  locked: boolean;
+  planCode: PlanCode;
+  versions: { id: string; version: number; status: string; presetKey: string | null; primaryHex: string; secondaryHex: string; publishedAt: string; publishedByName: string | null }[];
+};
+
+// ── Tenants (platform operators only) ──────────────────────────────────────
+
+export const createTenantSchema = z.object({
+  company: z.string().trim().min(2, 'Company name is required').max(120),
+  domain: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .min(2, 'Login domain is required')
+    .max(100)
+    .regex(/^[a-z0-9-]+(\.[a-z0-9-]+)*$/, 'Use letters, numbers and hyphens'),
+  planCode: z.enum(['FREE', 'GROWTH', 'ENTERPRISE']),
+  cycle: z.enum(BILLING_CYCLES).nullish(),
+  seats: z.coerce.number().int().min(1).max(100000).nullish(),
+  adminEmail: z.string().trim().toLowerCase().email('Enter the admin’s email'),
+  adminName: z.string().trim().max(80).nullish(),
+  stateCode: z.string().regex(/^\d{2}$/).nullish(),
+});
+export type CreateTenantInput = z.infer<typeof createTenantSchema>;
+
+export const TENANT_TABS = ['all', 'paid', 'free', 'attention'] as const;
+export const tenantsQuerySchema = paginationQuery.extend({ tab: z.enum(TENANT_TABS).default('all') });
+
+export type TenantRowDto = {
+  id: string;
+  company: string;
+  domain: string;
+  planCode: PlanCode;
+  planLabel: string;
+  seats: string;
+  seatsUsed: number;
+  quantity: number;
+  renewal: string;
+  status: string;
+  statusTone: 'accent' | 'outline' | 'neutral' | 'danger';
+  tenantStatus: string;
+  isOperator: boolean;
+  createdAt: string;
+};
+
+export type TenantsResponse = {
+  kpis: { tenants: number; freeTier: number; seatsBilled: number; seatsDelta: number; mrrPaise: number; mrrDeltaPct: number | null };
+  items: TenantRowDto[];
+  counts: Record<(typeof TENANT_TABS)[number], number>;
+};
+
+export type TenantDetailDto = TenantRowDto & {
+  adminContacts: { name: string; email: string; status: string }[];
+  activeUsers: number;
+  subscription: { status: string; cycle: string | null; currentPeriodEnd: string | null; pastDueSince: string | null; graceEndsAt: string | null } | null;
+  invoices: SaasInvoiceDto[];
+  tickets: { id: string; code: string; subject: string; status: string; severity: string }[];
+  platformAudit: { id: string; action: string; actorName: string; createdAt: string; summary: string }[];
+};
+
+// ── Data privacy ────────────────────────────────────────────────────────────
+
+export type PrivacyOverview = {
+  rows: { data: string; tenantAdmin: string; platformAdmin: string; platformTone: 'accent' | 'neutral'; encryption: string }[];
+  controls: { title: string; detail: string }[];
+  blockedModels: string[];
+  key: { algorithm: string; provider: string; version: string };
+  platformAccess: { id: string; action: string; actorName: string; createdAt: string; summary: string }[];
+};
+
+// ── Lexisora support ────────────────────────────────────────────────────────
+
+export const SUPPORT_SEVERITIES = ['HIGH', 'MEDIUM', 'LOW'] as const;
+export const SUPPORT_CATEGORIES = ['TECHNICAL', 'BILLING', 'ACCOUNT', 'FEATURE_REQUEST'] as const;
+export const SUPPORT_STATUSES = ['OPEN', 'ENGINEER_ASSIGNED', 'IN_PROGRESS', 'WAITING_ON_CUSTOMER', 'RESOLVED', 'CLOSED'] as const;
+export type SupportStatusKey = (typeof SUPPORT_STATUSES)[number];
+export const SUPPORT_STATUS_LABELS: Record<SupportStatusKey, string> = {
+  OPEN: 'Open',
+  ENGINEER_ASSIGNED: 'Engineer assigned',
+  IN_PROGRESS: 'In progress',
+  WAITING_ON_CUSTOMER: 'Waiting on you',
+  RESOLVED: 'Resolved',
+  CLOSED: 'Closed',
+};
+
+export const createSupportTicketSchema = z.object({
+  subject: z.string().trim().min(4, 'Add a short subject').max(160),
+  severity: z.enum(SUPPORT_SEVERITIES).default('MEDIUM'),
+  category: z.enum(SUPPORT_CATEGORIES).default('TECHNICAL'),
+  description: z.string().trim().min(5, 'Describe the problem').max(8000),
+});
+export type CreateSupportTicketInput = z.infer<typeof createSupportTicketSchema>;
+
+export const supportMessageSchema = z.object({
+  body: z.string().trim().min(1, 'Write a reply').max(8000),
+  internal: z.boolean().optional(),
+});
+export const supportUpdateSchema = z.object({
+  status: z.enum(SUPPORT_STATUSES).optional(),
+  assignToMe: z.boolean().optional(),
+});
+export const supportCsatSchema = z.object({ score: z.coerce.number().int().min(1).max(5) });
+export const SUPPORT_TABS = ['open', 'resolved', 'all'] as const;
+export const supportQuerySchema = paginationQuery.extend({
+  tab: z.enum(SUPPORT_TABS).default('open'),
+  scope: z.enum(['tenant', 'all']).default('tenant'),
+});
+
+export type SupportTicketRowDto = {
+  id: string;
+  code: string;
+  subject: string;
+  severity: string;
+  category: string;
+  status: SupportStatusKey;
+  statusLabel: string;
+  opened: string;
+  createdAt: string;
+  tenantName: string | null;
+  assigneeName: string | null;
+  slaDueAt: string;
+  slaBreached: boolean;
+};
+
+export type SupportTicketDetailDto = SupportTicketRowDto & {
+  description: string;
+  openedByName: string;
+  openedByEmail: string;
+  planAtOpen: string;
+  resolvedAt: string | null;
+  csat: number | null;
+  canReopen: boolean;
+  isPlatformView: boolean;
+  messages: { id: string; authorType: string; authorName: string; body: string; internal: boolean; createdAt: string }[];
+};
