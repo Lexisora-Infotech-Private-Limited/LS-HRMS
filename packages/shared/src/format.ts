@@ -52,16 +52,38 @@ export function istDateKey(d: Date = new Date()): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
 }
 
+/**
+ * Three-letter months as in the wireframe. Newer ICU data prints September as "Sept" for
+ * en-IN/en-GB, so month names come from this table instead of Intl.
+ */
+export const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;
+
+/** Day, month index and year of an instant in IST. */
+export function istParts(d: Date | string): { day: number; month: number; year: number } {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: TIMEZONE, year: 'numeric', month: 'numeric', day: 'numeric' }).formatToParts(new Date(d));
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value);
+  return { day: get('day'), month: get('month') - 1, year: get('year') };
+}
+
 /** "29 Sep 2026" */
 export function formatDate(d: Date | string | null | undefined): string {
   if (!d) return '—';
-  return new Intl.DateTimeFormat('en-IN', { timeZone: TIMEZONE, day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(d));
+  const p = istParts(d);
+  return `${p.day} ${MONTHS_SHORT[p.month]} ${p.year}`;
 }
 
 /** "29 Sep" */
 export function formatDayMonth(d: Date | string | null | undefined): string {
   if (!d) return '—';
-  return new Intl.DateTimeFormat('en-IN', { timeZone: TIMEZONE, day: 'numeric', month: 'short' }).format(new Date(d));
+  const p = istParts(d);
+  return `${p.day} ${MONTHS_SHORT[p.month]}`;
+}
+
+/** "Sep 2026" */
+export function formatMonthYear(d: Date | string | null | undefined): string {
+  if (!d) return '—';
+  const p = istParts(d);
+  return `${MONTHS_SHORT[p.month]} ${p.year}`;
 }
 
 /** "09:41" in IST */

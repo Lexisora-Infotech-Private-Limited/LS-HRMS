@@ -23,6 +23,14 @@ export function AppShell() {
   const granted = new Set(me.permissions);
 
   const count = useQuery({ queryKey: ['notifications', 'count'], queryFn: () => get<{ unread: number }>('/notifications/count'), refetchInterval: 60_000 });
+  // Keyed under the workplace notices prefix so reading/publishing a notice refreshes the badge.
+  const noticesUnread = useQuery({
+    queryKey: ['workplace', 'notices', 'unread'],
+    queryFn: () => get<{ unread: number }>('/notices/unread-count'),
+    enabled: granted.has('notices.view'),
+    refetchInterval: 120_000,
+  });
+  const badges: Record<string, number | undefined> = { notif: count.data?.unread, notices: noticesUnread.data?.unread };
 
   useEffect(() => {
     return onRealtime<{ title: string }>('notification', (n) => {
@@ -53,7 +61,7 @@ export function AppShell() {
             {g.items.map((it) => (
               <NavLink key={it.id} to={it.path} className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}>
                 <span>{it.label}</span>
-                {it.id === 'notif' && !!count.data?.unread && <span className="tnum" style={{ color: 'var(--color-accent-700)' }}>{count.data.unread}</span>}
+                {!!badges[it.id] && <span className="tnum" style={{ color: 'var(--color-accent-700)' }}>{badges[it.id]}</span>}
               </NavLink>
             ))}
           </nav>

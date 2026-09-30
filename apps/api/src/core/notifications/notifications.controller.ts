@@ -1,16 +1,14 @@
 import { Controller, Get, HttpCode, Param, Post } from '@nestjs/common';
-import { formatDayMonth } from '@lexisora/shared';
+import { formatDayMonth, istDateKey } from '@lexisora/shared';
 import { requireContext } from '../context/request-context';
 import { RequirePerm } from '../auth/decorators';
 import { NotificationsService } from './notifications.service';
 
+/** "Today" / "Yesterday" / "26 Sep", judged on the IST business day (not server time). */
 function whenLabel(d: Date): string {
-  const today = new Date();
-  const y = new Date(today);
-  y.setDate(today.getDate() - 1);
-  const same = (a: Date, b: Date) => a.toDateString() === b.toDateString();
-  if (same(d, today)) return 'Today';
-  if (same(d, y)) return 'Yesterday';
+  const key = istDateKey(d);
+  if (key === istDateKey()) return 'Today';
+  if (key === istDateKey(new Date(Date.now() - 86400_000))) return 'Yesterday';
   return formatDayMonth(d);
 }
 
