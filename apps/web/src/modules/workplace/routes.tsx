@@ -1,12 +1,20 @@
+import { lazy, Suspense, type ReactNode } from 'react';
 import type { RouteObject } from 'react-router-dom';
 import { guard } from '@/layout/Guard';
+import { Loading } from '@/components/ui';
 import { Placeholder } from '@/components/Placeholder';
+
+const DashboardPage = lazy(() => import('./pages/DashboardPage'));
+const NoticesPage = lazy(() => import('./pages/NoticesPage'));
+
+const s = (el: ReactNode) => <Suspense fallback={<Loading />}>{el}</Suspense>;
 
 /** workplace domain routes (relative to the app shell). Collected automatically by App.tsx. */
 export const routes: RouteObject[] = [
-  { path: 'dashboard', element: guard('dashboard.view', <Placeholder title='Dashboard' screen='dashboard' />) },
+  { path: 'dashboard', element: guard('dashboard.view', s(<DashboardPage />)) },
+  { path: 'notices', element: guard('notices.view', s(<NoticesPage />)) },
+  // Next workplace release (feed, chat, policies, helpdesk, learning, kudos, facility, CCTV, wellness):
   { path: 'feed', element: guard('feed.view', <Placeholder title='Company feed' screen='feed' />) },
-  { path: 'notices', element: guard('notices.view', <Placeholder title='Notice board' screen='notices' />) },
   { path: 'chat', element: guard('chat.use', <Placeholder title='Comms hub' screen='chat' />) },
   { path: 'policies', element: guard('policies.view', <Placeholder title='Policies & rulebook' screen='policies' />) },
   { path: 'helpdesk', element: guard('helpdesk.use', <Placeholder title='Helpdesk' screen='helpdesk' />) },

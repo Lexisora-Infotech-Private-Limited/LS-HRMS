@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { paginationQuery } from '../api';
-import type { PermissionKey } from '../permissions';
+import { istDateKey } from '../format';
+import { NAV, canSee } from '../nav';
+import { PERMISSIONS, type PermissionKey } from '../permissions';
 
 /**
  * Platform domain contracts: Roles & access, Audit log, Subscription & billing, Branding,
@@ -148,7 +150,27 @@ export type SetMatrixRowInput = z.infer<typeof setMatrixRowSchema>;
 export const roleMembersSchema = z.object({ userIds: z.array(z.string().min(1)).min(1, 'Pick at least one person') });
 export type RoleMembersInput = z.infer<typeof roleMembersSchema>;
 
+/** Replace a role's whole permission set (used by "Undo" and bulk edits). Requires are auto-added. */
+export const setRolePermissionsSchema = z.object({ permissions: z.array(z.string().min(1)).max(500) });
+export type SetRolePermissionsInput = z.infer<typeof setRolePermissionsSchema>;
+
 export type MatrixCellState = 'all' | 'some' | 'none';
+
+/**
+ * Matrix rows whose keys are alternatives rather than a bundle: "Approve timesheets" covers
+ * Level 1 (Project Lead) and Level 2 (Reporting Manager); approvers only see steps routed to them,
+ * so holding either level shows the row as on (wireframe: Team Lead ✓, Rep. Manager ✓).
+ */
+export const MATRIX_ANY_OF_ROWS: readonly string[] = ['Approve timesheets'];
+
+/** Cell state for a role on a matrix row: every key → all, some keys → some (half fill), none → none. */
+export function matrixCell(perms: Iterable<string>, row: { label: string; keys: readonly string[] }): MatrixCellState {
+  const set = new Set(perms);
+  const held = row.keys.filter((k) => set.has(k)).length;
+  if (held === 0) return 'none';
+  if (held === row.keys.length || MATRIX_ANY_OF_ROWS.includes(row.label)) return 'all';
+  return 'some';
+}
 
 export type RoleDto = {
   id: string;
@@ -171,21 +193,144 @@ export type RolesResponse = {
 
 export type RoleChangeResult = { role: RoleDto; added: string[]; removed: string[] };
 
-export type RoleMemberDto = { userId: string; name: string; email: string; empCode: string | null; department: string | null; status: string; since: string };
+export type RoleMemberDto = {
+  userId: string;
+  name: string;
+  email: string;
+  empCode: string | null;
+  department: string | null;
+  status: string;
+  /** When the person was moved into this role (last `rbac.member.added`), else when their login was created. */
+  since: string;
+  assignedBy: string | null;
+};
+
+/** Toast copy for dependency auto-enables: "Also enabled: People › View compensation". */
+export function alsoEnabledCopy(added: readonly string[], toggled: readonly string[]): string | null {
+  const order = Object.keys(PERMISSIONS);
+  const extra = added.filter((k) => !toggled.includes(k)).sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  if (!extra.length) return null;
+  const defs = PERMISSIONS as Record<string, { label: string; group: string }>;
+  return `Also enabled: ${extra.map((k) => (defs[k] ? `${defs[k]!.group} › ${defs[k]!.label}` : k)).join(', ')}`;
+}
+
+/** Mobile access is meant for top-level roles only (wireframe note). */
+export const TOP_LEVEL_ROLE_KEYS = ['hr', 'admin'] as const;
+
+// ── Alerts (core /notifications, rendered by the platform Alerts screen) ──────
+
+export const ALERT_TABS = ['all', 'unread', 'approvals', 'reminders'] as const;
+export type AlertTab = (typeof ALERT_TABS)[number];
+export type AlertCategory = 'approval' | 'reminder' | 'info';
+
+/** Buckets free-form notification types for the Alerts tabs. */
+export function alertCategory(type: string, link?: string | null, title?: string | null): AlertCategory {
+  const t = type.toLowerCase();
+  const ttl = (title ?? '').toLowerCase();
+  if ((link ?? '').startsWith('/approvals') || /approv|request|submitted|claim|pending|awaiting_decision/.test(t) || /awaiting your (approval|decision)|needs your approval/.test(ttl)) return 'approval';
+  if (/remind|due|acknowledg|birthday|anniversar|expir|incomplete|missing|renewal/.test(t) || /^(reminder|acknowledge|birthday)|awaiting your submission|due (today|tomorrow)/.test(ttl)) return 'reminder';
+  return 'info';
+}
+
+/** "Today" / "Yesterday" / "26 Sep" / "26 Sep 2025" — business days in IST. */
+export function alertWhenLabel(at: Date | string, now: Date = new Date()): string {
+  const d = new Date(at);
+  const key = istDateKey(d);
+  if (key === istDateKey(now)) return 'Today';
+  if (key === istDateKey(new Date(now.getTime() - 86_400_000))) return 'Yesterday';
+  // Anything else — including a future date such as an upcoming birthday — shows the date.
+  // Built from the IST date key so every runtime prints "Sep" (some ICU builds say "Sept").
+  const [y, m, day] = key.split('-');
+  const label = `${Number(day)} ${MONTH_SHORT[Number(m) - 1]}`;
+  return y === istDateKey(now).slice(0, 4) ? label : `${label} ${y}`;
+}
+const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+export type AlertDto = {
+  id: string;
+  type: string;
+  title: string;
+  body: string | null;
+  link: string | null;
+  fromLabel: string;
+  readAt: string | null;
+  createdAt: string;
+  when?: string;
+};
+
+// ── Global search (core /search, rendered by the platform header component) ──
+
+export type SearchGroupDto = { type: string; hits: { type: string; id: string; title: string; subtitle?: string; link: string }[] };
+
+const SEARCH_TYPE_LABELS: Record<string, string> = {
+  people: 'People',
+  tasks: 'Tasks',
+  projects: 'Projects',
+  documents: 'Documents',
+  notices: 'Notices & posts',
+  tickets: 'Tickets',
+  candidates: 'Candidates',
+  payslips: 'Payslips',
+  goto: 'Go to',
+};
+/** Display order of result groups in the header dropdown (unknown types go last, alphabetically). */
+export const SEARCH_TYPE_ORDER = ['goto', 'people', 'tasks', 'projects', 'documents', 'notices', 'tickets', 'candidates', 'payslips'];
+
+export function searchTypeLabel(type: string): string {
+  const k = type.toLowerCase();
+  return SEARCH_TYPE_LABELS[k] ?? type.charAt(0).toUpperCase() + type.slice(1).replace(/[-_]/g, ' ');
+}
+
+export function sortSearchGroups<T extends { type: string }>(groups: T[]): T[] {
+  const rank = (t: string) => {
+    const i = SEARCH_TYPE_ORDER.indexOf(t.toLowerCase());
+    return i === -1 ? SEARCH_TYPE_ORDER.length : i;
+  };
+  return [...groups].sort((a, b) => rank(a.type) - rank(b.type) || a.type.localeCompare(b.type));
+}
+
+/** "Go to" results: sidebar screens the user can open whose label matches every word of the query. */
+export function navMatches(q: string, granted: ReadonlySet<string>, limit = 5): { id: string; label: string; path: string; group: string }[] {
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  const out: { id: string; label: string; path: string; group: string }[] = [];
+  for (const g of NAV) {
+    for (const it of g.items) {
+      if (!canSee(it, granted)) continue;
+      const hay = `${it.label} ${g.group}`.toLowerCase();
+      if (words.every((w) => hay.includes(w))) out.push({ id: it.id, label: it.label, path: it.path, group: g.group });
+    }
+  }
+  // Label-prefix matches first ("rol" → Roles & access before Payroll).
+  out.sort((a, b) => Number(!a.label.toLowerCase().startsWith(words[0]!)) - Number(!b.label.toLowerCase().startsWith(words[0]!)));
+  return out.slice(0, limit);
+}
 
 // ── Audit log ───────────────────────────────────────────────────────────────
 
 export const AUDIT_TABS = ['all', 'security', 'access', 'platform'] as const;
+export const AUDIT_RESULTS = ['success', 'denied', 'failure'] as const;
+export type AuditResult = (typeof AUDIT_RESULTS)[number];
 export const auditQuerySchema = paginationQuery.extend({
   tab: z.enum(AUDIT_TABS).default('all'),
   actor: z.string().optional(),
   action: z.string().optional(),
+  module: z.string().regex(/^[a-zA-Z0-9_-]+$/).optional(),
+  result: z.enum(AUDIT_RESULTS).optional(),
   entity: z.string().optional(),
   entityId: z.string().optional(),
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 export type AuditQuery = z.infer<typeof auditQuerySchema>;
+
+/** Result column: denials (RBAC, blocked punches, rejected syncs) and failures (failed sign-ins, errors). */
+export function auditResultOf(action: string): AuditResult {
+  const a = action.toLowerCase();
+  if (/(^|\.)(denied|blocked|forbidden)$/.test(a) || a === 'punch.rejected' || a === 'tracker.sync.rejected') return 'denied';
+  if (/fail|error/.test(a)) return 'failure';
+  return 'success';
+}
 
 export type AuditRowDto = {
   id: string;
@@ -200,6 +345,7 @@ export type AuditRowDto = {
   ip: string | null;
   meta: unknown;
   platform: boolean;
+  result: AuditResult;
 };
 
 export type AuditFacets = { actors: { value: string; label: string }[]; entities: string[]; modules: string[] };

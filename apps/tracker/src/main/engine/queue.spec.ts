@@ -15,7 +15,7 @@ describe('OutboxQueue — offline replay order and idempotency', () => {
     expect(b.ids).toEqual(['e1', 's1', 'e2']);
     expect(b.events.map((e) => e.clientId)).toEqual(['e1', 'e2']);
     expect(q.nextShot()?.clientId).toBe('p1');
-    expect(q.counts()).toEqual({ event: 2, segment: 1, shot: 1, total: 4 });
+    expect(q.counts()).toEqual({ punch: 0, event: 2, segment: 1, shot: 1, total: 4 });
   });
 
   it('acked ids leave the queue, and re-appending or re-acking them is a no-op', () => {

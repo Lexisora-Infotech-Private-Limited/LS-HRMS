@@ -8,6 +8,7 @@ import {
   ROLE_KEYS,
   ROLE_MATRIX_ROWS,
   ROLE_SHORT_LABELS,
+  matrixCell,
   type CreateRoleInput,
   type PermissionKey,
   type PlanCode,
@@ -31,9 +32,9 @@ import {
   isPermissionKey,
   label,
   lockedKeys,
-  matrixCellState,
   matrixRow,
   planAllows,
+  replacePermissions,
   roleKeyFor,
 } from './rbac.logic';
 
@@ -89,7 +90,7 @@ export class RolesService {
     const matrix = ROLE_MATRIX_ROWS.map((row) => ({
       label: row.label,
       keys: row.keys as string[],
-      cells: Object.fromEntries(roles.map((r) => [r.id, matrixCellState(r.permissions, row.keys)])),
+      cells: Object.fromEntries(roles.map((r) => [r.id, matrixCell(r.permissions, row)])),
     }));
     const groups: RolesResponse['groups'] = [];
     for (const key of PERMISSION_KEYS) {
@@ -208,9 +209,27 @@ export class RolesService {
     return { role: this.dto(updated, await this.myRoleId()), added, removed };
   }
 
+  /**
+   * People who no longer hold `mobile.access` are signed out of the mobile app: their mobile refresh
+   * tokens expire now (expiring rather than revoking avoids tripping refresh-token reuse detection,
+   * which would also end their web sessions). The access token lapses within its 15-minute TTL.
+   */
+  private async endMobileSessions(userIds: string[], reason: string) {
+    if (!userIds.length) return;
+    const now = new Date();
+    const r = await this.prisma.refreshToken.updateMany({
+      where: { userId: { in: userIds }, client: 'mobile', revokedAt: null, expiresAt: { gt: now } },
+      data: { expiresAt: now },
+    });
+    if (r.count) {
+      await this.audit.record({ action: 'security.sessions.revoked', entity: 'User', entityId: userIds.length === 1 ? userIds[0]! : null, meta: { summary: `Signed out ${r.count} mobile session(s) · ${reason}`, client: 'mobile', users: userIds.length } });
+    }
+  }
+
   /** Alert + live refresh for everyone holding the role. */
   private async announce(roleId: string, added: string[], removed: string[]) {
     const members = await this.prisma.user.findMany({ where: { roleId, status: { not: 'DISABLED' } }, select: { id: true } });
+    if (removed.includes('mobile.access')) await this.endMobileSessions(members.map((m) => m.id), 'Mobile app access was turned off for their role');
     const ids = members.map((m) => m.id).filter((id) => id !== requireContext().userId);
     this.realtime.toUsers(members.map((m) => m.id), 'rbac.changed', { roleId });
     if (ids.length) {
@@ -239,6 +258,18 @@ export class RolesService {
     return this.commit(role, r.next, r.added, r.removed, `matrix row “${row.label}”`);
   }
 
+  /**
+   * Replace the whole permission set (the screen's "Undo", bulk edits). Unknown keys are refused;
+   * everything a key requires is added; legacy keys already on the role are kept.
+   */
+  async setAll(id: string, permissions: string[]): Promise<RoleChangeResult> {
+    const unknown = permissions.filter((k) => !isPermissionKey(k));
+    if (unknown.length) throw badRequest(`Unknown permission ${unknown[0]}`, 'UNKNOWN_PERMISSION');
+    const role = await this.load(id);
+    const r = replacePermissions(role.permissions, permissions);
+    return this.commit(role, r.next, r.added, r.removed, 'restored');
+  }
+
   async members(id: string): Promise<RoleMemberDto[]> {
     await this.load(id);
     const users = await this.prisma.user.findMany({
@@ -246,15 +277,29 @@ export class RolesService {
       include: { employee: { select: { empCode: true, department: { select: { name: true } } } } },
       orderBy: { name: 'asc' },
     });
-    return users.map((u) => ({
-      userId: u.id,
-      name: u.name,
-      email: u.email,
-      empCode: u.employee?.empCode ?? null,
-      department: u.employee?.department?.name ?? null,
-      status: u.status,
-      since: u.updatedAt.toISOString(),
-    }));
+    // "Assigned on / by" = the latest move into a role for each member (seeded users have none).
+    const moves = users.length
+      ? await this.prisma.auditLog.findMany({
+          where: { action: 'rbac.member.added', entity: 'User', entityId: { in: users.map((u) => u.id) } },
+          orderBy: { createdAt: 'desc' },
+          select: { entityId: true, actorName: true, createdAt: true },
+        })
+      : [];
+    const lastMove = new Map<string, { actorName: string | null; createdAt: Date }>();
+    for (const m of moves) if (m.entityId && !lastMove.has(m.entityId)) lastMove.set(m.entityId, m);
+    return users.map((u) => {
+      const mv = lastMove.get(u.id);
+      return {
+        userId: u.id,
+        name: u.name,
+        email: u.email,
+        empCode: u.employee?.empCode ?? null,
+        department: u.employee?.department?.name ?? null,
+        status: u.status,
+        since: (mv?.createdAt ?? u.createdAt).toISOString(),
+        assignedBy: mv ? (mv.actorName ?? 'System') : null,
+      };
+    });
   }
 
   /** People who can be moved into a role (everyone in the tenant, with their current role). */
@@ -281,6 +326,9 @@ export class RolesService {
       await this.audit.record({ action: 'rbac.member.added', entity: 'User', entityId: u.id, meta: { summary: `${u.name}: ${u.role.name} → ${role.name}`, from: u.role.name, to: role.name } });
     }
     if (moving.length) {
+      if (!role.permissions.includes('mobile.access')) {
+        await this.endMobileSessions(moving.filter((u) => u.role.permissions.includes('mobile.access')).map((u) => u.id), `moved to ${role.name}`);
+      }
       this.realtime.toUsers(moving.map((u) => u.id), 'rbac.changed', { roleId: id });
       await this.notifications.notify({ userIds: moving.map((u) => u.id).filter((x) => x !== ctx.userId), type: 'rbac.role_changed', title: `Your role is now ${role.name}`, link: '/dashboard', from: 'Admin' });
     }
@@ -303,6 +351,7 @@ export class RolesService {
     }
     await this.prisma.user.update({ where: { id: u.id }, data: { roleId: fallback.id } });
     await this.audit.record({ action: 'rbac.member.removed', entity: 'User', entityId: u.id, meta: { summary: `${u.name}: ${role.name} → ${fallback.name}`, from: role.name, to: fallback.name } });
+    if (role.permissions.includes('mobile.access') && !fallback.permissions.includes('mobile.access')) await this.endMobileSessions([u.id], `moved to ${fallback.name}`);
     this.realtime.toUser(u.id, 'rbac.changed', { roleId: fallback.id });
     await this.notifications.notify({ userIds: [u.id], type: 'rbac.role_changed', title: `Your role is now ${fallback.name}`, link: '/dashboard', from: 'Admin' });
     return this.members(id);

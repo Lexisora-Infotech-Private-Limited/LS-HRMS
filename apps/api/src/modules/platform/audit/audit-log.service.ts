@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
-import type { AuditFacets, AuditQuery, AuditRowDto, Paginated } from '@lexisora/shared';
+import { auditResultOf, type AuditFacets, type AuditQuery, type AuditRowDto, type Paginated } from '@lexisora/shared';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { pageArgs, paginated } from '../../../core/http/paginate';
 import { istEnd, istStart } from '../platform.util';
@@ -14,6 +14,29 @@ export function tabWhere(tab: AuditQuery['tab']): Prisma.AuditLogWhereInput {
       return { action: { startsWith: 'rbac.' } };
     case 'platform':
       return { action: { startsWith: 'platform.' } };
+    default:
+      return {};
+  }
+}
+
+/** Result filter → action patterns (mirrors `auditResultOf` in the shared contract). */
+export function resultWhere(result: AuditQuery['result']): Prisma.AuditLogWhereInput {
+  const denied: Prisma.AuditLogWhereInput = {
+    OR: [
+      { action: { endsWith: '.denied', mode: 'insensitive' } },
+      { action: { endsWith: '.blocked', mode: 'insensitive' } },
+      { action: { endsWith: '.forbidden', mode: 'insensitive' } },
+      { action: { in: ['punch.rejected', 'tracker.sync.rejected'] } },
+    ],
+  };
+  const failure: Prisma.AuditLogWhereInput = { OR: [{ action: { contains: 'fail', mode: 'insensitive' } }, { action: { contains: 'error', mode: 'insensitive' } }] };
+  switch (result) {
+    case 'denied':
+      return denied;
+    case 'failure':
+      return { AND: [failure, { NOT: denied }] };
+    case 'success':
+      return { NOT: { OR: [denied, failure] } };
     default:
       return {};
   }
@@ -41,6 +64,8 @@ export class AuditLogService {
     if (q.actor === 'system') and.push({ actorUserId: null });
     else if (q.actor) and.push({ actorUserId: q.actor });
     if (q.action) and.push({ action: { contains: q.action, mode: 'insensitive' } });
+    if (q.module) and.push({ OR: [{ action: { startsWith: `${q.module}.` } }, { action: q.module }] });
+    if (q.result) and.push(resultWhere(q.result));
     if (q.entity) and.push({ entity: q.entity });
     if (q.entityId) and.push({ entityId: { contains: q.entityId } });
     if (q.from || q.to) and.push({ createdAt: { ...(q.from ? { gte: istStart(q.from) } : {}), ...(q.to ? { lte: istEnd(q.to) } : {}) } });
@@ -62,6 +87,7 @@ export class AuditLogService {
       ip: r.ip,
       meta: r.meta,
       platform: r.action.startsWith('platform.'),
+      result: auditResultOf(r.action),
     };
   }
 
@@ -104,10 +130,10 @@ export class AuditLogService {
       const s = v === null || v === undefined ? '' : String(v);
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
-    const lines = [['When (UTC)', 'Actor', 'Action', 'Entity', 'Entity id', 'Summary', 'IP'].join(',')];
+    const lines = [['When (UTC)', 'Actor', 'Action', 'Module', 'Entity', 'Entity id', 'Summary', 'IP', 'Result'].join(',')];
     for (const r of rows) {
       const d = this.row(r);
-      lines.push([d.createdAt, d.actorName, d.action, d.entity, d.entityId, d.summary, d.ip].map(esc).join(','));
+      lines.push([d.createdAt, d.actorName, d.action, d.module, d.entity, d.entityId, d.summary, d.ip, d.result].map(esc).join(','));
     }
     return lines.join('\n');
   }

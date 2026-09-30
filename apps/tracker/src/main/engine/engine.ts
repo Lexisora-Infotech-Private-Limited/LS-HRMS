@@ -400,7 +400,13 @@ export class TrackerEngine {
     const span = this.idle.resolve(now)!;
     const kind = resolution === 'WORKING' ? 'IDLE_WORK' : resolution === 'BREAK' ? 'BREAK' : 'IDLE';
     const taskId = kind === 'IDLE_WORK' ? this.s.activeTaskId : null;
-    this.push(out, this.seg.span(kind, taskId, span.since, span.end));
+    const idleSeg = this.seg.span(kind, taskId, span.since, span.end);
+    if (idleSeg) {
+      idleSeg.resolution = resolution;
+      idleSeg.cause = span.cause;
+      if (note && resolution === 'WORKING') idleSeg.note = note.slice(0, 140);
+    }
+    this.push(out, idleSeg);
     if (span.end < now) this.push(out, this.seg.span('WORK', this.s.activeTaskId, span.end, now));
     this.s.open = this.seg.open('WORK', this.s.activeTaskId, now);
     this.s.status = 'WORKING';

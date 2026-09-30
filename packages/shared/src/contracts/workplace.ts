@@ -91,6 +91,31 @@ export function quoteIndexFor(localDate: string, count: number): number {
   return ((days % count) + count) % count;
 }
 
+export const dashboardQuery = z.object({ sections: z.string().max(200).optional() });
+export type QuoteRow = { id: string; text: string; author: string | null; scheduledFor: string | null; active: boolean; sortOrder: number; isToday: boolean };
+export type PersonalTodoRow = { id: string; title: string; note: string | null; dueDate: string | null; due: string; overdue: boolean; completedAt: string | null };
+export type TodosResponse = { items: DashboardTodo[]; personal: PersonalTodoRow[] };
+export const eventsQuery = z.object({
+  from: dateStr.optional(),
+  to: dateStr.optional(),
+  days: z.coerce.number().int().min(1).max(366).optional(),
+});
+export type CompanyEventRow = {
+  id: string;
+  title: string;
+  description: string | null;
+  kind: (typeof WP_EVENT_KINDS)[number];
+  startsAt: string;
+  endsAt: string | null;
+  location: string | null;
+  /** "3 Oct, 5 pm" (IST) */
+  when: string;
+  date: string;
+  cancelled: boolean;
+  canManage: boolean;
+};
+export const WP_EVENT_KIND_LABEL: Record<(typeof WP_EVENT_KINDS)[number], string> = { TOWN_HALL: 'Town hall', CELEBRATION: 'Celebration', TRAINING: 'Training', OTHER: 'Event' };
+
 // ── Notices ────────────────────────────────────────────────────────────────
 export const noticeUpsertSchema = z
   .object({
@@ -139,7 +164,30 @@ export type NoticeDetail = NoticeRow & {
   attachments: { fileId: string; name: string; sizeBytes: number; mime: string }[];
   audiences: WpAudienceRule[];
   authorEmployeeId: string;
+  authorTitle: string | null;
+  editedAt: string | null;
+  emailRecipients: boolean;
 };
+export type NoticeTab = 'all' | 'global' | 'teams' | 'drafts';
+export type NoticeListResponse = { items: NoticeRow[]; total: number; page: number; pageSize: number; counts: Record<NoticeTab, number> };
+export type NoticeReceipt = { employeeId: string; name: string; initials: string; department: string | null; readAt: string | null; exited: boolean };
+export type NoticeReceipts = { recipientCount: number; readCount: number; read: NoticeReceipt[]; unread: NoticeReceipt[]; canRemind: boolean; lastRemindedAt: string | null };
+export type NoticeAudienceOptions = {
+  canGlobal: boolean;
+  canTeam: boolean;
+  /** May target any department/project (HR/Admin); otherwise only teams the user leads or manages. */
+  anyTeam: boolean;
+  canPin: boolean;
+  departments: { value: string; label: string }[];
+  projects: { value: string; label: string }[];
+};
+/** "Read" column: `read / recipients` for the author and moderators, else my own state. */
+export function noticeReadLabel(r: Pick<NoticeRow, 'canManage' | 'readCount' | 'recipientCount' | 'myRead' | 'status'>): { text: string; tone: 'accent' | 'outline' | 'neutral' | 'plain' } {
+  if (r.status === 'DRAFT' || r.status === 'SCHEDULED') return { text: '—', tone: 'plain' };
+  if (r.canManage) return { text: `${r.readCount} / ${r.recipientCount}`, tone: 'plain' };
+  if (r.myRead === null) return { text: '—', tone: 'plain' };
+  return r.myRead ? { text: 'Read', tone: 'accent' } : { text: 'New', tone: 'outline' };
+}
 
 // ── Feed ───────────────────────────────────────────────────────────────────
 export const FEED_EDITOR_TOOLS = ['B', 'I', 'H2', 'Link', 'Image', 'List'] as const;

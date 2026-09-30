@@ -7,7 +7,13 @@
  *  - acked entries (ACCEPTED or DUPLICATE on the server) leave the queue; acking twice is harmless;
  *  - entries older than the retention window are dropped (reported so the UI can warn).
  */
-export type QueueKind = 'event' | 'segment' | 'shot';
+/**
+ * punch   — POST /tracker/punch (delivered first, in order: the server creates the attendance session from it)
+ * event   — POST /tracker/sync events
+ * segment — POST /tracker/sync segments
+ * shot    — POST /tracker/screenshots (blob stored separately)
+ */
+export type QueueKind = 'punch' | 'event' | 'segment' | 'shot';
 
 export interface QueueEntry<T = unknown> {
   seq: number;
@@ -32,15 +38,17 @@ export class OutboxQueue {
   }
 
   counts() {
+    let punch = 0;
     let event = 0;
     let segment = 0;
     let shot = 0;
     for (const e of this.items.values()) {
-      if (e.kind === 'event') event++;
+      if (e.kind === 'punch') punch++;
+      else if (e.kind === 'event') event++;
       else if (e.kind === 'segment') segment++;
       else shot++;
     }
-    return { event, segment, shot, total: event + segment + shot };
+    return { punch, event, segment, shot, total: punch + event + segment + shot };
   }
 
   has(clientId: string) {
@@ -91,7 +99,7 @@ export class OutboxQueue {
     const events: QueueEntry[] = [];
     const segments: QueueEntry[] = [];
     for (const e of this.pending()) {
-      if (e.kind === 'shot') continue;
+      if (e.kind === 'shot' || e.kind === 'punch') continue;
       if (e.kind === 'event') {
         if (events.length >= maxEvents) break;
         events.push(e);
@@ -101,6 +109,11 @@ export class OutboxQueue {
       }
     }
     return { events, segments, ids: [...events, ...segments].sort((a, b) => a.seq - b.seq).map((e) => e.clientId) };
+  }
+
+  /** Oldest pending punch (punches are replayed strictly in order, before any batch). */
+  nextPunch(): QueueEntry | null {
+    return this.pending('punch')[0] ?? null;
   }
 
   /** Oldest pending screenshot. */

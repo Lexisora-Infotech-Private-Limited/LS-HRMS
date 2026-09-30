@@ -15,6 +15,11 @@ export interface Segment {
   taskId: string | null;
   startedAt: number;
   endedAt: number;
+  /** Set on spans produced by the idle dialog: how the user classified them and why they were idle. */
+  resolution?: Resolution;
+  cause?: IdleCause;
+  /** "I was working" note (≤ 140 chars) — becomes the idle claim note for the Project Lead. */
+  note?: string;
 }
 
 export interface OpenSegment {

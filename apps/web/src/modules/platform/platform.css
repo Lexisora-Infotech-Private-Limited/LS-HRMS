@@ -1,0 +1,55 @@
+/* Platform module: Roles & access, Alerts, Audit log, header search. Uses design-system tokens only. */
+
+/* ── Roles matrix ─────────────────────────────────────────────────────────── */
+.pf-matrix th.pf-rc, .pf-matrix td.pf-rc { text-align: center; white-space: nowrap; }
+.pf-matrix td:first-child { min-width: 200px; }
+.pf-role-head { font: inherit; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--color-neutral-600); background: transparent; border: 0; padding: 2px 4px; border-radius: 3px; cursor: pointer; white-space: nowrap; }
+.pf-role-head:hover, .pf-role-head[aria-expanded='true'] { color: var(--color-accent-700); background: color-mix(in srgb, var(--color-accent) 8%, transparent); }
+.pf-role-head .pf-mine { text-transform: none; letter-spacing: 0; color: var(--color-accent-700); margin-left: 4px; }
+.pf-head-wrap { position: relative; display: inline-block; }
+.pf-head-wrap .menu { right: auto; left: 50%; transform: translateX(-50%); text-transform: none; letter-spacing: 0; }
+.pf-head-wrap .menu > button:disabled { opacity: .5; cursor: default; }
+.check.pf-some { border-color: var(--color-accent); background: linear-gradient(135deg, var(--color-accent) 50%, transparent 50%); }
+.pf-cell { display: inline-flex; align-items: center; gap: 6px; }
+.pf-lock { font-size: 10.5px; letter-spacing: .04em; text-transform: uppercase; color: var(--color-neutral-600); border: 1px solid var(--color-divider); border-radius: 3px; padding: 0 5px; line-height: 16px; }
+.pf-legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--color-neutral-600); align-items: center; }
+.pf-legend .check { width: 14px; height: 14px; font-size: 9px; cursor: default; }
+.pf-undo { display: flex; align-items: center; gap: 10px; justify-content: space-between; font-size: 13px; border: 1px solid var(--color-accent); border-radius: 4px; padding: 8px 12px; color: var(--color-accent-800); background: color-mix(in srgb, var(--color-accent) 6%, var(--color-bg)); }
+.pf-group-row td { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--color-accent-700); background: color-mix(in srgb, var(--color-text) 3%, transparent); padding-top: 12px; }
+.pf-perm-label { display: flex; flex-direction: column; gap: 2px; }
+.pf-perm-label small { color: var(--color-neutral-600); font-size: 11.5px; }
+.pf-key { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; color: var(--color-neutral-600); }
+
+/* ── Alerts ───────────────────────────────────────────────────────────────── */
+.pf-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--color-accent); margin-right: 8px; vertical-align: middle; flex: none; }
+.pf-alert-title { display: flex; align-items: baseline; gap: 0; }
+.pf-alert-title.unread { font-weight: 600; }
+.pf-alert-body { font-size: 12.5px; color: var(--color-neutral-600); margin-top: 2px; }
+
+/* ── Audit log ────────────────────────────────────────────────────────────── */
+.pf-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+.pf-filters .field { display: flex; flex-direction: column; gap: 4px; min-width: 130px; flex: 1 1 130px; max-width: 220px; }
+.pf-filters .field > label { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--color-neutral-600); }
+.pf-when { white-space: nowrap; font-feature-settings: 'tnum'; }
+.pf-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+.pf-json { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; background: color-mix(in srgb, var(--color-text) 4%, transparent); border: 1px solid var(--color-divider); border-radius: 4px; padding: 10px; overflow: auto; max-height: 320px; white-space: pre-wrap; word-break: break-word; margin: 0; }
+.pf-kv { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 6px 12px; font-size: 13px; }
+.pf-kv dt { color: var(--color-neutral-600); }
+.pf-kv dd { margin: 0; word-break: break-word; }
+
+/* ── Header search ────────────────────────────────────────────────────────── */
+.pf-search { position: relative; flex: 1 1 220px; max-width: 320px; min-width: 150px; }
+.pf-search .input { width: 100%; padding-right: 44px; }
+.pf-search-kbd { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font-size: 10.5px; color: var(--color-neutral-500); border: 1px solid var(--color-divider); border-radius: 3px; padding: 0 5px; line-height: 16px; pointer-events: none; }
+.pf-search-panel { position: absolute; top: calc(100% + 6px); left: 0; width: min(480px, calc(100vw - 32px)); max-height: min(70vh, 560px); overflow: auto; background: var(--color-bg); border: 1px solid var(--color-divider); border-radius: 6px; box-shadow: var(--shadow-md); z-index: 45; padding: 6px; }
+.pf-search-group { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--color-neutral-600); padding: 8px 10px 4px; }
+.pf-search-item { display: flex; flex-direction: column; gap: 1px; width: 100%; text-align: left; font: inherit; font-size: 13.5px; padding: 7px 10px; border: 0; background: transparent; cursor: pointer; border-radius: 4px; color: inherit; }
+.pf-search-item small { font-size: 12px; color: var(--color-neutral-600); }
+.pf-search-item[aria-selected='true'] { background: color-mix(in srgb, var(--color-accent) 12%, transparent); }
+.pf-search-foot { display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--color-divider); margin-top: 6px; padding: 8px 10px 4px; font-size: 12px; color: var(--color-neutral-600); }
+.pf-search-empty { padding: 12px 10px; font-size: 13px; color: var(--color-neutral-600); }
+@media (max-width: 560px) {
+  .pf-search { max-width: none; flex-basis: 100%; order: 10; }
+  .pf-search-kbd { display: none; }
+  .pf-kv { grid-template-columns: 1fr; }
+}

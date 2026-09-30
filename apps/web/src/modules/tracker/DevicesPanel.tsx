@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { formatDate, TRACKER_FOOTER_NOTE, type DeviceRow } from '@lexisora/shared';
-import { useMe } from '@/lib/auth';
+import { useCan, useMe } from '@/lib/auth';
 import { onRealtime } from '@/lib/socket';
 import { DataTable, type Column } from '@/components/table';
 import { Card, ErrorBlock, Loading } from '@/components/ui';
@@ -21,6 +22,17 @@ export function DevicesPanel({ employeeId }: { employeeId?: string }) {
   const me = useMe();
   const own = !employeeId || employeeId === me.employeeId;
   return own ? <OwnDevices /> : <EmployeeDevices employeeId={employeeId!} />;
+}
+
+/** HR shortcut to the tenant-wide device list (/devices is not in the side nav). */
+function AllDevicesLink() {
+  const can = useCan();
+  if (!can('devices.manage')) return null;
+  return (
+    <Link className="btn btn-ghost btn-sm" to="/devices">
+      All devices →
+    </Link>
+  );
 }
 
 function OwnDevices() {
@@ -76,9 +88,12 @@ function OwnDevices() {
           <p className="faint" style={{ margin: 0, fontSize: 13, maxWidth: 620 }}>
             Laptops paired to your account. Sign in to Lexisora Tracker, then enter the 6-digit code it shows here. {TRACKER_FOOTER_NOTE}
           </p>
-          <button className="btn btn-primary" onClick={() => setPairing(true)}>
-            Pair device
-          </button>
+          <div className="row" style={{ gap: 8 }}>
+            <AllDevicesLink />
+            <button className="btn btn-primary" onClick={() => setPairing(true)}>
+              Pair device
+            </button>
+          </div>
         </div>
         {waiting && (
           <div className="note row-between" role="status">
@@ -145,9 +160,12 @@ function EmployeeDevices({ employeeId }: { employeeId: string }) {
   return (
     <div className="stack" data-screen-label="Profile · Devices">
       <Card kicker="Devices" title="Desktop tracker">
-        <p className="faint" style={{ margin: '0 0 8px', fontSize: 13 }}>
-          {canManage ? 'Tracker devices paired to this employee. Revoking signs the tracker out within seconds.' : 'Tracker devices paired to this employee (read-only).'}
-        </p>
+        <div className="row-between" style={{ marginBottom: 8 }}>
+          <p className="faint" style={{ margin: 0, fontSize: 13 }}>
+            {canManage ? 'Tracker devices paired to this employee. Revoking signs the tracker out within seconds.' : 'Tracker devices paired to this employee (read-only).'}
+          </p>
+          <AllDevicesLink />
+        </div>
         {q.isLoading ? (
           <Loading />
         ) : q.error ? (

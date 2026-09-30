@@ -78,6 +78,7 @@ export class CertificatesService implements OnModuleInit {
     const emp = await this.prisma.employee.findUniqueOrThrow({ where: { id: i.recipientEmployeeId }, select: { fullName: true, userId: true } });
     const cert = await this.prisma.certificate.create({
       data: {
+        tenantId: i.tenantId ?? requireContext().tenantId,
         type: i.type,
         recipientEmployeeId: i.recipientEmployeeId,
         holderName: emp.fullName,

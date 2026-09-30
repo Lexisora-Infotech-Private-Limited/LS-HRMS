@@ -4,11 +4,13 @@ import {
   roleMembersSchema,
   setMatrixRowSchema,
   setPermissionSchema,
+  setRolePermissionsSchema,
   updateRoleSchema,
   type CreateRoleInput,
   type RoleMembersInput,
   type SetMatrixRowInput,
   type SetPermissionInput,
+  type SetRolePermissionsInput,
   type UpdateRoleInput,
 } from '@lexisora/shared';
 import { RequirePerm } from '../../../core/auth/decorators';
@@ -54,6 +56,11 @@ export class RolesController {
   @Put(':id/matrix')
   setMatrixRow(@Param('id') id: string, @Body(new ZodPipe(setMatrixRowSchema)) dto: SetMatrixRowInput) {
     return this.roles.setMatrixRow(id, dto.row, dto.enabled);
+  }
+
+  @Put(':id/permissions')
+  setAll(@Param('id') id: string, @Body(new ZodPipe(setRolePermissionsSchema)) dto: SetRolePermissionsInput) {
+    return this.roles.setAll(id, dto.permissions);
   }
 
   @Get(':id/members')

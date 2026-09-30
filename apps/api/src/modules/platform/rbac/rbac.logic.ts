@@ -5,6 +5,7 @@ import {
   PERMISSION_REQUIRES,
   PLAN_RANK,
   ROLE_MATRIX_ROWS,
+  matrixCell,
   type MatrixCellState,
   type PermissionKey,
   type PlanCode,
@@ -14,12 +15,12 @@ import {
 
 export const isPermissionKey = (k: string): k is PermissionKey => (PERMISSION_KEYS as string[]).includes(k);
 
-/** Matrix cell for a role: all keys of the row held → "all", some → "some" (half fill), none → "none". */
-export function matrixCellState(perms: Iterable<string>, rowKeys: readonly string[]): MatrixCellState {
-  const set = new Set(perms);
-  const held = rowKeys.filter((k) => set.has(k)).length;
-  if (held === 0) return 'none';
-  return held === rowKeys.length ? 'all' : 'some';
+/**
+ * Matrix cell for a role: all keys of the row held → "all", some → "some" (half fill), none → "none".
+ * Rows listed in MATRIX_ANY_OF_ROWS (alternative levels) show "all" when any key is held.
+ */
+export function matrixCellState(perms: Iterable<string>, rowKeys: readonly string[], rowLabel = ''): MatrixCellState {
+  return matrixCell(perms, { label: rowLabel, keys: rowKeys });
 }
 
 export function matrixRow(label: string) {
@@ -97,7 +98,23 @@ export function applyToggle(current: readonly string[], keys: readonly string[],
       removed.push(k);
     }
   }
-  return { next: PERMISSION_KEYS.filter((k) => set.has(k)).concat([...set].filter((k) => !isPermissionKey(k))), added, removed };
+  // Catalogue order first, then any unknown/legacy keys (kept so nothing is silently dropped).
+  const ordered: string[] = (PERMISSION_KEYS as readonly string[]).filter((k) => set.has(k));
+  return { next: ordered.concat([...set].filter((k) => !isPermissionKey(k))), added, removed };
+}
+
+/**
+ * Replace the catalogue keys of a permission set with `wanted` plus everything it requires.
+ * Unknown (legacy) keys already on the role are kept untouched.
+ */
+export function replacePermissions(current: readonly string[], wanted: readonly string[]): ToggleResult {
+  const closure = requiresClosure(wanted.filter(isPermissionKey));
+  const cur = new Set(current);
+  const ordered: string[] = (PERMISSION_KEYS as readonly string[]).filter((k) => closure.has(k));
+  const added = ordered.filter((k) => !cur.has(k));
+  const removed = current.filter((k) => isPermissionKey(k) && !closure.has(k));
+  const legacy = current.filter((k) => !isPermissionKey(k));
+  return { next: ordered.concat(legacy), added, removed };
 }
 
 /** Does the tenant's plan include the feature behind this permission? */

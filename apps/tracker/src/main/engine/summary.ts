@@ -124,28 +124,30 @@ const KIND_LABEL: Record<SegmentKind, string> = {
   IDLE_WORK: 'Active (claimed)',
 };
 
+/** One coloured span of the day (server timeline block or local segment). `label` is the task key. */
+export interface TimelineSpan {
+  kind: SegmentKind;
+  label: string | null;
+  from: number;
+  to: number;
+}
+
 /**
  * Timeline bar from first punch-in to now / last punch-out: adjacent spans of the same
- * kind+task merge, gaps between sessions are blank.
+ * kind+task merge, gaps between sessions (> 1 min) are blank.
  */
-export function buildTimeline({ segments, live, taskKey }: TimelineInput): Bar[] {
-  const spans: { kind: SegmentKind; taskId: string | null; from: number; to: number }[] = segments.map((s) => ({
-    kind: s.kind,
-    taskId: s.taskId,
-    from: s.startedAt,
-    to: s.endedAt,
-  }));
-  if (live?.open && live.openEnd > live.open.startedAt)
-    spans.push({ kind: live.open.kind, taskId: live.open.taskId, from: live.open.startedAt, to: live.openEnd });
-  if (live?.pendingIdle && live.pendingIdle.end > live.pendingIdle.since)
-    spans.push({ kind: 'IDLE', taskId: null, from: live.pendingIdle.since, to: live.pendingIdle.end });
+export function timelineFromSpans(input: readonly TimelineSpan[]): Bar[] {
+  const spans = input.filter((s) => s.to > s.from).map((s) => ({ ...s }));
   spans.sort((a, b) => a.from - b.from);
 
-  const merged: typeof spans = [];
+  const merged: TimelineSpan[] = [];
   for (const s of spans) {
     const last = merged[merged.length - 1];
-    if (last && last.kind === s.kind && last.taskId === s.taskId && s.from - last.to <= 1000) last.to = Math.max(last.to, s.to);
-    else merged.push({ ...s });
+    if (last && last.kind === s.kind && last.label === s.label && s.from - last.to <= 1000) last.to = Math.max(last.to, s.to);
+    else if (last && s.from < last.to) {
+      // overlapping spans (server block + a local span it already contains): keep the later part only
+      if (s.to > last.to) merged.push({ ...s, from: last.to });
+    } else merged.push(s);
   }
 
   const bars: Bar[] = [];
@@ -154,9 +156,24 @@ export function buildTimeline({ segments, live, taskKey }: TimelineInput): Bar[]
     if (cursor !== null && s.from - cursor > 60_000) {
       bars.push({ kind: 'GAP', flex: (s.from - cursor) / 1000, label: `${clock(cursor)}–${clock(s.from)} Not tracked` });
     }
-    const task = s.kind === 'WORK' || s.kind === 'IDLE_WORK' ? ` · ${taskKey(s.taskId)}` : '';
+    const task = (s.kind === 'WORK' || s.kind === 'IDLE_WORK') && s.label ? ` · ${s.label}` : '';
     bars.push({ kind: s.kind, flex: (s.to - s.from) / 1000, label: `${clock(s.from)}–${clock(s.to)} ${KIND_LABEL[s.kind]}${task}` });
     cursor = cursor === null ? s.to : Math.max(cursor, s.to);
   }
   return bars;
+}
+
+/** Local spans (closed segments + the live open segment + an unresolved idle span). */
+export function localSpans(segments: readonly Segment[], live: LiveState | null | undefined, taskKey: (taskId: string | null) => string): TimelineSpan[] {
+  const label = (kind: SegmentKind, taskId: string | null) => (kind === 'WORK' || kind === 'IDLE_WORK' ? taskKey(taskId) : null);
+  const spans: TimelineSpan[] = segments.map((s) => ({ kind: s.kind, label: label(s.kind, s.taskId), from: s.startedAt, to: s.endedAt }));
+  if (live?.open && live.openEnd > live.open.startedAt)
+    spans.push({ kind: live.open.kind, label: label(live.open.kind, live.open.taskId), from: live.open.startedAt, to: live.openEnd });
+  if (live?.pendingIdle && live.pendingIdle.end > live.pendingIdle.since)
+    spans.push({ kind: 'IDLE', label: null, from: live.pendingIdle.since, to: live.pendingIdle.end });
+  return spans;
+}
+
+export function buildTimeline({ segments, live, taskKey }: TimelineInput): Bar[] {
+  return timelineFromSpans(localSpans(segments, live, taskKey));
 }
