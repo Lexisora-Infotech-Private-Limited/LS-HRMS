@@ -363,6 +363,15 @@ export const devicesQuery = z.object({
 });
 export type DevicesQuery = z.infer<typeof devicesQuery>;
 
+/** GET /devices/me — own devices + pairing requests waiting for a code on this account. */
+export type MyDevicesResponse = {
+  items: DeviceRow[];
+  waiting: { deviceId: string; hostname: string; expiresAt: string }[];
+};
+
+/** GET /devices/employee/:employeeId — another employee's devices (HR manage, RM read-only). */
+export type EmployeeDevicesResponse = { items: DeviceRow[]; canManage: boolean };
+
 export type PairingLookup = {
   requestId: string;
   deviceId: string;

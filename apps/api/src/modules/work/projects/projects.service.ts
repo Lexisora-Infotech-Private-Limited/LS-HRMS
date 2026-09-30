@@ -264,6 +264,7 @@ export class ProjectsService {
     const isInternal = client.isInternal;
     const project = await this.prisma.project.create({
       data: {
+        tenantId,
         key,
         name: input.name,
         description: input.description,
@@ -331,7 +332,7 @@ export class ProjectsService {
       data.leadEmployeeId = lead.id;
       await this.prisma.projectMember.upsert({
         where: { projectId_employeeId: { projectId: id, employeeId: lead.id } },
-        create: { projectId: id, employeeId: lead.id, role: 'LEAD' },
+        create: { tenantId: currentTenantId(), projectId: id, employeeId: lead.id, role: 'LEAD' },
         update: { role: 'LEAD' },
       });
       if (p.leadEmployeeId) await this.prisma.projectMember.updateMany({ where: { projectId: id, employeeId: p.leadEmployeeId, role: 'LEAD' }, data: { role: 'MEMBER' } });
@@ -398,7 +399,7 @@ export class ProjectsService {
     await this.requireManage(id);
     if (await this.prisma.projectModule.count({ where: { projectId: id, name: { equals: name, mode: 'insensitive' } } })) throw conflict(`Module ${name} already exists`);
     const max = await this.prisma.projectModule.aggregate({ where: { projectId: id }, _max: { sortOrder: true } });
-    const m = await this.prisma.projectModule.create({ data: { projectId: id, name, estimatedMinutes: estimatedHours != null ? Math.round(estimatedHours * 60) : null, sortOrder: (max._max.sortOrder ?? -1) + 1 } });
+    const m = await this.prisma.projectModule.create({ data: { tenantId: currentTenantId(), projectId: id, name, estimatedMinutes: estimatedHours != null ? Math.round(estimatedHours * 60) : null, sortOrder: (max._max.sortOrder ?? -1) + 1 } });
     await this.audit.record({ action: 'project.module.added', entity: 'Project', entityId: id, meta: { module: name } });
     return m;
   }
@@ -437,7 +438,7 @@ export class ProjectsService {
     const e = await this.prisma.employee.findFirst({ where: { id: input.employeeId }, select: { id: true, fullName: true, userId: true, status: true } });
     if (!e || e.status === 'EXITED') throw badRequest('Employee not found');
     if (await this.prisma.projectMember.count({ where: { projectId: id, employeeId: e.id } })) throw conflict(`${e.fullName} is already on this project`);
-    await this.prisma.projectMember.create({ data: { projectId: id, employeeId: e.id, role: input.role, allocationPct: input.allocationPct ?? null } });
+    await this.prisma.projectMember.create({ data: { tenantId: currentTenantId(), projectId: id, employeeId: e.id, role: input.role, allocationPct: input.allocationPct ?? null } });
     await this.audit.record({ action: 'project.member.added', entity: 'Project', entityId: id, meta: { employeeId: e.id, name: e.fullName, role: input.role } });
     this.events.emit('project.member.added', { projectId: id, employeeId: e.id });
     if (e.userId) await this.notifications.notify({ userIds: [e.userId], type: 'project.member', title: `You were added to ${p.name}`, link: `/projects/${id}`, from: v.name });
@@ -478,7 +479,7 @@ export class ProjectsService {
     const fOf = new Map(files.map((f) => [f.id, f]));
     for (const d of docs) {
       const f = fOf.get(d.fileId)!;
-      await this.prisma.projectDocument.create({ data: { projectId: id, fileId: f.id, title: d.title || f.filename, kind: d.kind, sizeBytes: f.size, uploadedByEmployeeId: v.employeeId } });
+      await this.prisma.projectDocument.create({ data: { tenantId: currentTenantId(), projectId: id, fileId: f.id, title: d.title || f.filename, kind: d.kind, sizeBytes: f.size, uploadedByEmployeeId: v.employeeId } });
     }
     await this.audit.record({ action: 'project.document.added', entity: 'Project', entityId: id, meta: { count: docs.length, titles: docs.map((d) => d.title ?? fOf.get(d.fileId)?.filename ?? '') } });
     return { ok: true };

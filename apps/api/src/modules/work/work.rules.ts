@@ -58,7 +58,7 @@ export function computeProgress(
 // ── Health ─────────────────────────────────────────────────────────────────
 
 export type HealthOptions = {
-  /** AT_RISK when burn − progress exceeds this (0.10 = logged 10 points ahead of progress). */
+  /** AT_RISK when burn − progress exceeds this (0.15 = logged 15 points ahead of progress). */
   burnGap: number;
   /** AT_RISK when the deadline is within this many days and progress is below `nearProgressPct`. */
   nearDays: number;
@@ -66,7 +66,7 @@ export type HealthOptions = {
   /** AT_RISK when time elapsed − progress exceeds this and the deadline is ≤ 30 days away. */
   elapsedGap: number;
 };
-export const DEFAULT_HEALTH: HealthOptions = { burnGap: 0.1, nearDays: 14, nearProgressPct: 80, elapsedGap: 0.15 };
+export const DEFAULT_HEALTH: HealthOptions = { burnGap: 0.15, nearDays: 14, nearProgressPct: 80, elapsedGap: 0.15 };
 
 export function computeHealth(
   p: { status: ProjectStatus; estimatedMinutes: number; loggedMinutes: number; progressPct: number; startDate: Date | null; deadline: Date | null },

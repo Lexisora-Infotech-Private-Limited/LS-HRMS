@@ -183,7 +183,7 @@ export class GitService {
       }
       await this.prisma.task.update({ where: { id: task.id }, data });
       if (notes.length) {
-        await this.prisma.taskTransition.create({ data: { taskId: task.id, kind: 'GIT', note: notes.join(' · '), byName: 'GitLab' } });
+        await this.prisma.taskTransition.create({ data: { tenantId: currentTenantId(), taskId: task.id, kind: 'GIT', note: notes.join(' · '), byName: 'GitLab' } });
       }
       if (br.created) await this.audit.record({ action: 'gitlab.branch.created', entity: 'Task', entityId: task.id, meta: { branch: br.name, ref: br.ref } });
       this.events.boardChanged(p.id, task.departmentId, task.id);
@@ -192,7 +192,7 @@ export class GitService {
       const msg = (e as Error).message.slice(0, 300);
       this.log.warn(`${task.key} git ${action} failed: ${msg}`);
       await this.prisma.task.update({ where: { id: task.id }, data: { gitSyncStatus: 'FAILED', gitSyncError: msg, gitBranch: task.gitBranch ?? name } });
-      await this.prisma.taskTransition.create({ data: { taskId: task.id, kind: 'GIT', note: `GitLab sync failed: ${msg}`, byName: 'GitLab' } });
+      await this.prisma.taskTransition.create({ data: { tenantId: currentTenantId(), taskId: task.id, kind: 'GIT', note: `GitLab sync failed: ${msg}`, byName: 'GitLab' } });
       await this.audit.record({ action: 'gitlab.sync.failed', entity: 'Task', entityId: task.id, meta: { error: msg } });
       const lead = task.departmentId ? await this.prisma.department.findFirst({ where: { id: task.departmentId }, select: { leadEmployeeId: true } }) : null;
       await this.notifications.notify({
@@ -226,7 +226,7 @@ export class GitService {
       const eventType = headers.event ?? String(payload?.object_kind ?? 'unknown');
       const eventUuid = headers.uuid ?? sha256(JSON.stringify(payload ?? {}));
       try {
-        await this.prisma.gitWebhookDelivery.create({ data: { eventUuid, eventType, payload: (payload ?? {}) as Prisma.InputJsonValue } });
+        await this.prisma.gitWebhookDelivery.create({ data: { tenantId: integ.tenantId, eventUuid, eventType, payload: (payload ?? {}) as Prisma.InputJsonValue } });
       } catch (e: any) {
         if (e?.code === 'P2002') return { status: 'duplicate' as const };
         throw e;
@@ -257,7 +257,7 @@ export class GitService {
         where: { id: task.id },
         data: { gitMrState: state, gitMrIid: a.iid ?? task.gitMrIid, gitMrUrl: a.url ?? task.gitMrUrl, gitBranch: task.gitBranch ?? src, gitSyncStatus: 'SYNCED', gitSyncError: null },
       });
-      await this.prisma.taskTransition.create({ data: { taskId: task.id, kind: 'GIT', note: `MR !${a.iid ?? task.gitMrIid ?? '?'} ${state}`, byName: 'GitLab' } });
+      await this.prisma.taskTransition.create({ data: { tenantId: currentTenantId(), taskId: task.id, kind: 'GIT', note: `MR !${a.iid ?? task.gitMrIid ?? '?'} ${state}`, byName: 'GitLab' } });
       this.events.boardChanged(task.projectId, task.departmentId, task.id);
       return true;
     }
@@ -272,7 +272,7 @@ export class GitService {
         for (const t of tasks) {
           await this.prisma.gitCommitLink.upsert({
             where: { taskId_sha: { taskId: t.id, sha: String(c.id) } },
-            create: { taskId: t.id, sha: String(c.id), message: String(c.message ?? '').slice(0, 1000), authorName: c.author?.name ?? null, committedAt: c.timestamp ? new Date(c.timestamp) : new Date(), url: c.url ?? null },
+            create: { tenantId: currentTenantId(), taskId: t.id, sha: String(c.id), message: String(c.message ?? '').slice(0, 1000), authorName: c.author?.name ?? null, committedAt: c.timestamp ? new Date(c.timestamp) : new Date(), url: c.url ?? null },
             update: {},
           });
           this.events.boardChanged(t.projectId, t.departmentId, t.id);

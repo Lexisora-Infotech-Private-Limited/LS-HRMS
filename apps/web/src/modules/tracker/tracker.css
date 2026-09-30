@@ -1,0 +1,67 @@
+/* Tracker domain (Profile → Devices, /devices admin, reviewer widgets). */
+.trk-code {
+  position: relative;
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin: 6px 0 2px;
+}
+.trk-code input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  width: 100%;
+  font-size: 16px;
+  cursor: text;
+}
+.trk-code .box {
+  width: 44px;
+  height: 54px;
+  border: 1px solid var(--color-divider);
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-heading);
+  font-size: 28px;
+  font-feature-settings: 'tnum';
+  background: var(--color-surface, transparent);
+}
+.trk-code .box.filled { border-color: var(--color-accent); }
+.trk-code .box.caret { border-color: var(--color-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 25%, transparent); }
+.trk-code.invalid .box { border-color: var(--color-danger); }
+@media (max-width: 420px) {
+  .trk-code .box { width: 38px; height: 48px; font-size: 24px; }
+}
+
+.trk-device {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.trk-device strong { font-weight: 600; letter-spacing: 0.02em; }
+.trk-device small { font-size: 12px; color: var(--color-neutral-600); }
+
+.trk-meta { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; border-top: 1px solid var(--color-divider); padding-top: 10px; }
+
+.trk-search { max-width: 280px; }
+
+.trk-shots {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+@media (max-width: 720px) {
+  .trk-shots { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.trk-shot { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--color-neutral-700); }
+.trk-shot a { display: block; }
+.trk-shot img {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  border: 1px solid var(--color-divider);
+  border-radius: 4px;
+  display: block;
+}
+.trk-shot.idle img { outline: 2px dashed var(--color-danger); outline-offset: -2px; }

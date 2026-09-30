@@ -242,7 +242,7 @@ export class DevicesService {
     const req = await this.prisma.devicePairingRequest.findFirst({
       where: { userId: ctx.userId!, status: 'PENDING', expiresAt: { gt: new Date() }, codeHash: codeHash(ctx.tenantId, ctx.userId!, code) },
     });
-    await this.prisma.devicePairingAttempt.create({ data: { userId: ctx.userId!, ok: !!req } });
+    await this.prisma.devicePairingAttempt.create({ data: { tenantId: ctx.tenantId, userId: ctx.userId!, ok: !!req } });
     if (!req || !req.deviceId) throw new AppError(404, 'CODE_NOT_FOUND', 'Code not found. Check the code shown on your tracker, or get a new code.');
     return req;
   }

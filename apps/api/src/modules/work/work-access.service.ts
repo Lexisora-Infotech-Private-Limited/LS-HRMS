@@ -102,6 +102,34 @@ export class WorkAccessService {
     return { all: false, keys };
   }
 
+  /** employeeId → full name for a set of ids. */
+  async names(ids: (string | null | undefined)[]): Promise<Map<string, string>> {
+    const list = [...new Set(ids.filter((x): x is string => !!x))];
+    if (!list.length) return new Map();
+    const rows = await this.prisma.employee.findMany({ where: { id: { in: list } }, select: { id: true, fullName: true } });
+    return new Map(rows.map((r) => [r.id, r.fullName]));
+  }
+
+  /** Load a task with its project, enforcing board visibility (403 BOARD_PRIVATE / 404). */
+  async requireTask(v: Viewer, taskId: string) {
+    const t = await this.prisma.task.findFirst({ where: { id: taskId }, include: { project: true } });
+    if (!t) throw notFound('Task');
+    if (!t.project.isSystem && !(await this.canSeeProject(v, t.projectId)) && !(v.employeeId && t.assigneeEmployeeId === v.employeeId)) throw notFound('Task');
+    let rights: BoardRights;
+    if (t.project.isSystem) rights = { canView: true, canManage: v.viewAll, canAllocate: false };
+    else if (!t.departmentId) {
+      const lead = !!v.employeeId && t.project.leadEmployeeId === v.employeeId;
+      rights = { canView: true, canManage: v.viewAll || lead, canAllocate: false };
+    } else rights = await this.boardRights(v, t.project, t.departmentId);
+    // The assignee always keeps access to their own card (e.g. after a board revoke).
+    if (!rights.canView && v.employeeId && t.assigneeEmployeeId === v.employeeId) rights = { ...rights, canView: true };
+    if (!rights.canView) {
+      const d = await this.prisma.department.findFirst({ where: { id: t.departmentId! }, select: { name: true } });
+      throw this.boardLockedError(d?.name ?? 'team', t.departmentId!);
+    }
+    return { task: t, project: t.project, rights };
+  }
+
   boardLockedError(departmentName: string, departmentId: string) {
     return new AppError(403, 'BOARD_PRIVATE', `This board is private to the ${departmentName} team`, { department: departmentName, departmentId });
   }

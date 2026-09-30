@@ -679,3 +679,41 @@ export function initials(name: string): string {
     .slice(0, 2)
     .join('');
 }
+
+// ── Compensation split (offer Annexure A when Payroll has no structure yet) ─
+
+/**
+ * Split an annual CTC into the wireframe's components: employer PF is 12% of basic capped
+ * at ₹1,800/month; the rest is gross, split Basic 50% · HRA 25% · Special allowance 25%.
+ * ₹10,29,600 → Basic 42,000 · HRA 21,000 · Special 21,000 · PF 1,800 · CTC 85,800 a month.
+ */
+export function splitCtc(annualPaise: number): { code: string; label: string; monthlyPaise: number; annualPaise: number }[] {
+  const monthly = Math.round(annualPaise / 12);
+  let pf = 180_000;
+  let gross = monthly - pf;
+  if (Math.round(gross * 0.5 * 0.12) < pf) {
+    // Low salaries: PF = 12% of basic where basic = 50% of gross → gross = monthly / 1.06
+    gross = Math.round(monthly / 1.06);
+    pf = monthly - gross;
+  }
+  const basic = Math.round(gross * 0.5);
+  const hra = Math.round(gross * 0.25);
+  const special = gross - basic - hra;
+  const rows = [
+    { code: 'BASIC', label: 'Basic', monthlyPaise: basic },
+    { code: 'HRA', label: 'HRA', monthlyPaise: hra },
+    { code: 'SPECIAL', label: 'Special allowance', monthlyPaise: special },
+    { code: 'PF_ER', label: 'PF (employer)', monthlyPaise: pf },
+  ];
+  return rows.map((r) => ({ ...r, annualPaise: r.monthlyPaise * 12 }));
+}
+
+/** Loose holder-name match for bank details (token overlap), flags for HR attention. */
+export function namesMatch(a: string, b: string): boolean {
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z\s]/g, '').split(/\s+/).filter((x) => x.length > 1);
+  const A = new Set(norm(a));
+  const B = norm(b);
+  if (!A.size || !B.length) return false;
+  const hit = B.filter((x) => A.has(x)).length;
+  return hit / Math.max(A.size, B.length) >= 0.5;
+}

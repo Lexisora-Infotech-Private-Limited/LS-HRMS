@@ -168,10 +168,11 @@ export class IngestService {
     if (now.getTime() - at.getTime() > policy.offlineRetentionDays * 86400_000) {
       throw badRequest('This punch is older than the offline limit. Raise a regularization instead.', 'PUNCH_TOO_OLD');
     }
-    await this.time.punch({ employeeId, direction: input.direction, source: 'DESKTOP', at, deviceId });
+    await this.time.punch({ employeeId, direction: input.direction, source: 'DESKTOP', at, deviceId, clientEventId: input.clientId ?? null });
     const workDate = trackerWorkDate(at);
     await this.prisma.trackerEvent.create({
       data: {
+        tenantId: currentTenantId(),
         clientId: input.clientId ?? randomUUID(),
         deviceId,
         employeeId,
@@ -208,6 +209,7 @@ export class IngestService {
           const wd = trackerWorkDate(at);
           workDates.add(wd);
           return {
+            tenantId: currentTenantId(),
             clientId: e.clientId,
             deviceId,
             employeeId,
@@ -423,6 +425,7 @@ export class IngestService {
         where: { dedupeKey: `${tenantId}:${i.dedupeKey}` },
         update: {},
         create: {
+          tenantId,
           employeeId: i.employeeId,
           deviceId: i.deviceId ?? null,
           workDate: dbDate(i.workDate),
@@ -501,7 +504,7 @@ export class IngestService {
     };
     return this.prisma.trackerDaySummary.upsert({
       where: { employeeId_workDate: { employeeId, workDate: date } },
-      create: { employeeId, workDate: date, ...data },
+      create: { tenantId: currentTenantId(), employeeId, workDate: date, ...data },
       update: data,
     });
   }
@@ -578,6 +581,7 @@ export class IngestService {
     try {
       const row = await this.prisma.screenshot.create({
         data: {
+          tenantId: currentTenantId(),
           clientId: meta.clientId,
           employeeId,
           deviceId,

@@ -4,7 +4,7 @@ import { clientStateName, type ClientDetail, type ClientInput, type ClientRow } 
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { AuditService } from '../../../core/audit/audit.service';
 import { SequenceService } from '../../../core/registry/sequence.service';
-import { requireContext } from '../../../core/context/request-context';
+import { currentTenantId, requireContext } from '../../../core/context/request-context';
 import { AppError, conflict, notFound } from '../../../core/http/errors';
 import { paginated } from '../../../core/http/paginate';
 import { WorkDocsService } from '../projects/work-docs.service';
@@ -108,7 +108,7 @@ export class ClientsService {
     if (await this.prisma.client.count({ where: { name: { equals: input.name, mode: 'insensitive' } } })) throw conflict(`A client named ${input.name} already exists`);
     const code = await this.seq.next('client.code', { prefix: 'CL-', pad: 4 });
     const warning = await this.gstinWarning(input.gstin);
-    const c = await this.prisma.client.create({ data: { code, ...this.normalize(input) } });
+    const c = await this.prisma.client.create({ data: { tenantId: currentTenantId(), code, ...this.normalize(input) } });
     await this.audit.record({ action: 'client.created', entity: 'Client', entityId: c.id, meta: { name: c.name, gstin: c.gstin } });
     return { id: c.id, code, warning };
   }
@@ -151,7 +151,7 @@ export class ClientsService {
     const c = await this.prisma.client.findFirst({ where: { id } });
     if (!c) throw notFound('Client');
     const [f] = await this.docs.files([doc.fileId]);
-    const d = await this.prisma.projectDocument.create({ data: { clientId: id, fileId: f!.id, title: doc.title || f!.filename, kind: doc.kind, sizeBytes: f!.size, uploadedByEmployeeId: requireContext().employeeId ?? null } });
+    const d = await this.prisma.projectDocument.create({ data: { tenantId: currentTenantId(), clientId: id, fileId: f!.id, title: doc.title || f!.filename, kind: doc.kind, sizeBytes: f!.size, uploadedByEmployeeId: requireContext().employeeId ?? null } });
     await this.audit.record({ action: 'client.document.added', entity: 'Client', entityId: id, meta: { title: d.title, kind: d.kind } });
     return { id: d.id };
   }
