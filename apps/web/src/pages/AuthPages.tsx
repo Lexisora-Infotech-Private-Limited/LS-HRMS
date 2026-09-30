@@ -41,8 +41,8 @@ export function ForgotPasswordPage() {
             }
           }}
         >
-          <div className="field"><label>Workspace</label><input className="input" value={workspace} onChange={(e) => setWorkspace(e.target.value)} required /></div>
-          <div className="field"><label>Official email</label><input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></div>
+          <div className="field"><label htmlFor="fp-ws">Workspace</label><input id="fp-ws" className="input" value={workspace} onChange={(e) => setWorkspace(e.target.value)} required /></div>
+          <div className="field"><label htmlFor="fp-email">Official email</label><input id="fp-email" className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></div>
           {error && <div className="field-error">{error}</div>}
           <button className="btn btn-primary btn-block">Send reset link</button>
         </form>
@@ -74,8 +74,8 @@ function SetPasswordForm({ submitLabel, onSubmit }: { submitLabel: string; onSub
         }
       }}
     >
-      <div className="field"><label>New password</label><input className="input" type="password" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="new-password" /></div>
-      <div className="field"><label>Confirm password</label><input className="input" type="password" value={pw2} onChange={(e) => setPw2(e.target.value)} autoComplete="new-password" /></div>
+      <div className="field"><label htmlFor="pw-new">New password</label><input id="pw-new" className="input" type="password" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="new-password" /></div>
+      <div className="field"><label htmlFor="pw-confirm">Confirm password</label><input id="pw-confirm" className="input" type="password" value={pw2} onChange={(e) => setPw2(e.target.value)} autoComplete="new-password" /></div>
       {error && <div className="field-error">{error}</div>}
       <button className="btn btn-primary btn-block" disabled={busy}>{submitLabel}</button>
     </form>
@@ -126,7 +126,7 @@ export function ChangePasswordPage() {
   return (
     <div className="stack" style={{ maxWidth: 420, gap: 16 }}>
       <PageHeader title="Change password" />
-      <div className="field"><label>Current password</label><input className="input" type="password" value={current} onChange={(e) => setCurrent(e.target.value)} /></div>
+      <div className="field"><label htmlFor="pw-current">Current password</label><input id="pw-current" className="input" type="password" value={current} onChange={(e) => setCurrent(e.target.value)} /></div>
       <SetPasswordForm
         submitLabel="Update password"
         onSubmit={async (newPassword) => {

@@ -15,3 +15,4 @@ apps/api/storage/
 apps/api/prisma/*.db
 .turbo/
 .db-sync.lock/
+e2e/.storage/

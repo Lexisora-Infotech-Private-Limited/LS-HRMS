@@ -14,6 +14,7 @@ test.describe.serial('Flow 05 · Hire to day one', () => {
     const d = page.getByRole('dialog');
     await d.getByLabel('Full name').fill('Esha Test');
     await d.getByLabel('Official email').fill(email);
+    await d.getByLabel('Phone').fill('+91 98250 12345');
     const personal = d.getByLabel(/Personal email/);
     if (await personal.count()) await personal.fill(email);
     await d.getByLabel(/Joining date/).fill(new Date(Date.now() + 7 * 86400_000).toISOString().slice(0, 10));

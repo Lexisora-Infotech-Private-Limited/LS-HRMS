@@ -27,7 +27,9 @@ test.describe.serial('Flow 01 · Employee daily start', () => {
   test('office employee cannot web punch', async ({ page }) => {
     await signIn(page, PERSONA.office);
     await page.locator('header.topbar').getByRole('button', { name: 'Punch in' }).click();
-    await expectToast(page, /biometric/i);
+    // Wireframe copy: "Office mode: punch in with the biometric sensor" / "Use the fingerprint sensor…"
+    await expectToast(page, /biometric|fingerprint/i);
+    await expect(page.locator('main')).toContainText(/Web punch disabled/i);
   });
 
   test('task board shows the Atlas CRM cards', async ({ page }) => {
