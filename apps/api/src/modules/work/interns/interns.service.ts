@@ -55,7 +55,8 @@ export class InternsService {
     }
     if (!m.employeeId) return [];
     const or: object[] = [{ id: m.employeeId }];
-    if (m.canAssign) or.push({ managerId: m.employeeId });
+    // Mentor = the intern's reporting manager (relationship scope, independent of interns.manage).
+    or.push({ managerId: m.employeeId });
     return this.prisma.employee.findMany({ where: { ...base, OR: or }, select: this.internSelect, orderBy: { fullName: 'asc' } });
   }
 
@@ -63,7 +64,7 @@ export class InternsService {
     const e = await this.prisma.employee.findFirst({ where: { id: internId }, select: this.internSelect });
     if (!e) throw notFound('Intern');
     const isSelf = e.id === m.employeeId;
-    const isMentor = !!m.employeeId && e.managerId === m.employeeId && m.canAssign;
+    const isMentor = !!m.employeeId && e.managerId === m.employeeId;
     if (!isSelf && !isMentor && !m.viewAll) throw notFound('Intern');
     return { ...e, isSelf, isMentor };
   }
@@ -134,7 +135,7 @@ export class InternsService {
     return {
       isIntern: self?.employmentType === 'INTERN',
       isMentor: mentees.some((i) => i.managerId === m.employeeId),
-      canAssign: m.canAssign && mentees.length > 0,
+      canAssign: mentees.length > 0,
       canViewAll: m.viewAll,
       mentees: mentees.map((i) => ({ value: i.id, label: i.fullName })),
       today: todayKey(),
@@ -178,7 +179,7 @@ export class InternsService {
   // ── Assign / update ─────────────────────────────────────────────────────
   async assign(input: InternTaskInput) {
     const m = this.me();
-    if (!m.canAssign) throw forbidden('Only mentors, HR and admins can assign intern tasks');
+    if (!m.canAssign && !m.employeeId) throw forbidden('Only mentors, HR and admins can assign intern tasks');
     const intern = await this.prisma.employee.findFirst({ where: { id: input.internEmployeeId }, select: this.internSelect });
     if (!intern) throw notFound('Intern');
     if (intern.employmentType !== 'INTERN') throw new AppError(422, 'NOT_AN_INTERN', `${intern.fullName} is not an intern`);

@@ -1,11 +1,24 @@
+import { lazy, Suspense, type ReactNode } from 'react';
 import type { RouteObject } from 'react-router-dom';
 import { guard } from '@/layout/Guard';
-import { Placeholder } from '@/components/Placeholder';
+import { Loading } from '@/components/ui';
+
+const ProjectsPage = lazy(() => import('./pages/ProjectsPage'));
+const ProjectDetailPage = lazy(() => import('./pages/ProjectDetailPage'));
+const ClientsPage = lazy(() => import('./pages/ClientsPage'));
+const BoardPage = lazy(() => import('./pages/BoardPage'));
+const ArchivePage = lazy(() => import('./pages/ArchivePage'));
+const InternsPage = lazy(() => import('./pages/InternsPage'));
+
+const s = (el: ReactNode) => <Suspense fallback={<Loading />}>{el}</Suspense>;
 
 /** work domain routes (relative to the app shell). Collected automatically by App.tsx. */
 export const routes: RouteObject[] = [
-  { path: 'projects', element: guard('projects.view', <Placeholder title='Projects' screen='projects' />) },
-  { path: 'board', element: guard('tasks.board', <Placeholder title='Task board' screen='kanban' />) },
-  { path: 'archive', element: guard('archive.view', <Placeholder title='Project archive & client vault' screen='archive' />) },
-  { path: 'interns', element: guard('interns.manage', <Placeholder title='Intern task sheets' screen='interns' />) },
+  { path: 'projects', element: guard('projects.view', s(<ProjectsPage />)) },
+  { path: 'projects/:id', element: guard(['projects.view', 'tasks.board'], s(<ProjectDetailPage />)) },
+  { path: 'clients', element: guard('clients.manage', s(<ClientsPage />)) },
+  { path: 'board', element: guard(['tasks.board', 'tasks.viewAllBoards'], s(<BoardPage />)) },
+  { path: 'archive', element: guard(['archive.view', 'archive.manage'], s(<ArchivePage />)) },
+  // Interns reach their own sheet here without a nav item; the API scopes what each user sees.
+  { path: 'interns', element: guard(['interns.manage', 'interns.viewAll', 'tasks.board'], s(<InternsPage />)) },
 ];

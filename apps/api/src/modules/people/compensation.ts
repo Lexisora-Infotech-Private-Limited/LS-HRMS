@@ -20,7 +20,7 @@ export async function loadCompensation(prisma: PrismaService, crypto: CryptoServ
       const rows: ProfilePayRow[] = struct
         .filter((r) => (r.monthlyPaise ?? 0) > 0 || (r.annualPaise ?? 0) > 0)
         .map((r) => ({ component: r.label ?? r.code ?? '—', monthlyPaise: r.monthlyPaise ?? Math.round((r.annualPaise ?? 0) / 12), annualPaise: r.annualPaise ?? (r.monthlyPaise ?? 0) * 12 }));
-      const rowsOrSplit = rows.length ? rows : splitCtc(sal.ctcAnnualPaise).map((r) => ({ component: r.label, monthlyPaise: r.monthlyPaise, annualPaise: r.annualPaise }));
+      const rowsOrSplit: ProfilePayRow[] = rows.length ? rows : splitCtc(sal.ctcAnnualPaise).map((r) => ({ component: r.label, monthlyPaise: r.monthlyPaise, annualPaise: r.annualPaise }));
       rowsOrSplit.push({ component: 'CTC', monthlyPaise: Math.round(sal.ctcAnnualPaise / 12), annualPaise: sal.ctcAnnualPaise, isTotal: true });
       return { rows: rowsOrSplit, ctcAnnualPaise: sal.ctcAnnualPaise, effectiveFrom: dbDateKey(sal.effectiveFrom), source: 'PAYROLL' };
     }

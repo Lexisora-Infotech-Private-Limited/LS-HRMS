@@ -78,8 +78,8 @@ export class IdCardsService {
     if (await this.prisma.idCardTemplate.count()) return;
     const c = classicPortrait();
     const l = landscapeMinimal();
-    await this.prisma.idCardTemplate.create({ data: { name: 'Classic portrait', orientation: 'PORTRAIT', widthMm: 53.98, heightMm: 85.6, front: c.front, back: c.back, isDefault: true } as Prisma.IdCardTemplateUncheckedCreateInput });
-    await this.prisma.idCardTemplate.create({ data: { name: 'Landscape minimal', orientation: 'LANDSCAPE', widthMm: 85.6, heightMm: 53.98, front: l.front, back: l.back, isDefault: false } as Prisma.IdCardTemplateUncheckedCreateInput });
+    await this.prisma.idCardTemplate.create({ data: { name: 'Classic portrait', orientation: 'PORTRAIT', widthMm: 53.98, heightMm: 85.6, front: c.front, back: c.back, isDefault: true } as unknown as Prisma.IdCardTemplateUncheckedCreateInput });
+    await this.prisma.idCardTemplate.create({ data: { name: 'Landscape minimal', orientation: 'LANDSCAPE', widthMm: 85.6, heightMm: 53.98, front: l.front, back: l.back, isDefault: false } as unknown as Prisma.IdCardTemplateUncheckedCreateInput });
   }
 
   private tplDto(t: IdCardTemplate): IdCardTemplateDto {
@@ -107,7 +107,7 @@ export class IdCardsService {
   async createTemplate(i: IdCardTemplateInput) {
     const dims = i.orientation === 'LANDSCAPE' ? { widthMm: 85.6, heightMm: 53.98 } : { widthMm: 53.98, heightMm: 85.6 };
     const row = await this.prisma.idCardTemplate.create({
-      data: { name: i.name, orientation: i.orientation, ...dims, front: i.front, back: i.back, frontBgFileId: i.frontBgFileId ?? null, backBgFileId: i.backBgFileId ?? null, isDefault: false } as Prisma.IdCardTemplateUncheckedCreateInput,
+      data: { name: i.name, orientation: i.orientation, ...dims, front: i.front, back: i.back, frontBgFileId: i.frontBgFileId ?? null, backBgFileId: i.backBgFileId ?? null, isDefault: false } as unknown as Prisma.IdCardTemplateUncheckedCreateInput,
     });
     if (i.isDefault) await this.setDefault(row.id);
     await this.audit.record({ action: 'idcard.template.created', entity: 'IdCardTemplate', entityId: row.id, meta: { name: i.name } });

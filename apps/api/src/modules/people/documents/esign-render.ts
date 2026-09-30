@@ -104,7 +104,7 @@ export function renderEsignDocument(doc: Pdf, d: EsignDocData, stamp?: Signature
   if (stamp) {
     if (stamp.signatureType === 'DRAWN' && stamp.png) {
       try {
-        doc.image(stamp.png, rx, by + 12, { fit: [half, 34], align: 'left', valign: 'center' });
+        doc.image(stamp.png, rx, by + 12, { fit: [half, 34], valign: 'center' });
       } catch {
         doc.font('Times-Italic').fontSize(18).fillColor(PDF_COLORS.ink).text(stamp.signerName, rx, by + 18, { width: half });
       }

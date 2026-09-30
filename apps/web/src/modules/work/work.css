@@ -1,0 +1,41 @@
+/* Work domain: task board, project detail, drawers. */
+.wk-board { display: grid; grid-template-columns: repeat(5, minmax(200px, 1fr)); gap: 12px; overflow-x: auto; padding-bottom: 4px; }
+.wk-board.with-done { grid-template-columns: repeat(6, minmax(200px, 1fr)); }
+.wk-col { border: 1px solid var(--color-divider); border-radius: 4px; padding: 10px; display: flex; flex-direction: column; gap: 8px; min-height: 380px; background: transparent; transition: background 0.12s; }
+.wk-col.over { background: color-mix(in srgb, var(--color-accent) 8%, transparent); border-color: var(--color-accent); }
+.wk-col-head { display: flex; justify-content: space-between; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-accent-700); }
+.wk-card { border: 1px solid var(--color-divider); border-radius: 4px; padding: 10px; background: var(--color-bg); cursor: grab; display: flex; flex-direction: column; gap: 6px; box-shadow: var(--shadow-sm); text-align: left; }
+.wk-card.dragging { opacity: 0.45; }
+.wk-card.readonly { cursor: pointer; }
+.wk-card-meta { font-size: 11px; color: var(--color-neutral-600); display: flex; justify-content: space-between; gap: 6px; }
+.wk-card-title { font-family: var(--font-heading); font-size: 16px; line-height: 1.2; }
+.wk-card-foot { display: flex; justify-content: space-between; align-items: center; font-size: 11.5px; gap: 6px; }
+.wk-next { font: inherit; font-size: 11.5px; border: 0; background: transparent; color: var(--color-accent-700); cursor: pointer; text-align: left; padding: 0; }
+.wk-next:disabled { color: var(--color-neutral-500); cursor: default; }
+.wk-locked { border: 1px dashed var(--color-accent); border-radius: 4px; padding: 40px; text-align: center; display: flex; flex-direction: column; gap: 6px; align-items: center; }
+.wk-locked .serif { font-family: var(--font-heading); font-size: 22px; }
+.wk-toolbar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.wk-toolbar .spacer { flex: 1; }
+.wk-progress { display: flex; align-items: center; gap: 8px; min-width: 110px; }
+.wk-progress-bar { flex: 1; height: 4px; background: var(--color-divider); border-radius: 2px; overflow: hidden; }
+.wk-progress-bar > span { display: block; height: 100%; background: var(--color-accent); }
+.wk-drawer-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.25); z-index: 60; display: flex; justify-content: flex-end; }
+.wk-drawer { width: min(560px, 100%); height: 100%; background: var(--color-bg); border-left: 1px solid var(--color-divider); box-shadow: var(--shadow-lg, 0 10px 30px rgba(0,0,0,.2)); overflow-y: auto; padding: 22px; display: flex; flex-direction: column; gap: 16px; }
+.wk-drawer-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.wk-section-title { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-accent-700); margin-bottom: 6px; }
+.wk-kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 12px; font-size: 13.5px; align-items: center; }
+.wk-kv > span:nth-child(odd) { color: var(--color-neutral-600); font-size: 12.5px; }
+.wk-history { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
+.wk-history > div { border-left: 2px solid var(--color-divider); padding-left: 10px; }
+.wk-comment { border: 1px solid var(--color-divider); border-radius: 4px; padding: 8px 10px; font-size: 13.5px; }
+.wk-comment .faint { font-size: 11.5px; }
+.wk-detail-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 18px; }
+.wk-inline-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; }
+.wk-inline-form .input { min-width: 140px; }
+.wk-search { max-width: 280px; }
+.wk-week { display: grid; grid-template-columns: repeat(6, minmax(140px, 1fr)); gap: 10px; overflow-x: auto; }
+.wk-week > div { border: 1px solid var(--color-divider); border-radius: 4px; padding: 8px; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; min-height: 110px; }
+@media (max-width: 860px) {
+  .wk-detail-grid { grid-template-columns: 1fr; }
+  .wk-kv { grid-template-columns: 110px 1fr; }
+}

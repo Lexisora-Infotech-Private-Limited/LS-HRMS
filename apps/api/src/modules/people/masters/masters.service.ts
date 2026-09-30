@@ -113,7 +113,7 @@ export class MastersService {
     if (await this.prisma.interviewRound.findFirst({ where: { name: { equals: i.name, mode: 'insensitive' } } })) throw conflict(`“${i.name}” already exists`, 'DUPLICATE_NAME');
     const order = await this.prisma.interviewRound.count();
     const criteria = (i.criteria.length ? i.criteria : ['Problem solving', 'Communication', 'Culture fit']).map((label) => ({ key: label.toLowerCase().replace(/[^a-z0-9]+/g, '_'), label }));
-    return this.prisma.interviewRound.create({ data: { name: i.name, defaultDurationMin: i.defaultDurationMin, criteria, order } as Prisma.InterviewRoundUncheckedCreateInput });
+    return this.prisma.interviewRound.create({ data: { name: i.name, defaultDurationMin: i.defaultDurationMin, criteria, order } as unknown as Prisma.InterviewRoundUncheckedCreateInput });
   }
 
   async deactivateRound(id: string) {

@@ -561,6 +561,7 @@ export const scorecardSchema = z.object({
   overall: z.coerce.number().min(0).max(10).optional().nullable(),
   recommendation: z.enum(RECOMMENDATIONS).optional().nullable(),
   notes: z.string().max(4000).optional().nullable(),
+  submit: z.boolean().default(true),
 });
 export type ScorecardInput = z.infer<typeof scorecardSchema>;
 export const interviewResultSchema = z.object({ result: z.enum(INTERVIEW_RESULTS) });
@@ -789,3 +790,32 @@ export type VCardDto = {
 
 // ── Search / misc ──────────────────────────────────────────────────────────
 export type PeopleUpcomingEvent = { type: 'BIRTHDAY' | 'ANNIVERSARY'; employeeId: string; name: string; date: string; label: string };
+
+// ── List queries / extra DTOs (web ↔ api) ──────────────────────────────────
+export const candidateListQuery = z.object({
+  tab: z.enum(CANDIDATE_TABS).default('all'),
+  q: z.string().trim().optional(),
+  jobId: z.string().optional(),
+});
+export type CandidateListQuery = z.infer<typeof candidateListQuery>;
+export const INTERVIEW_TABS = ['upcoming', 'past', 'all'] as const;
+export const interviewListQuery = z.object({
+  tab: z.enum(INTERVIEW_TABS).default('all'),
+  mine: z.coerce.boolean().optional(),
+});
+export const assetListQuery = z.object({
+  tab: z.enum(ASSET_TABS).default('all'),
+  q: z.string().trim().optional(),
+  categoryId: z.string().optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(200).default(50),
+});
+export const cancelInterviewSchema = z.object({ reason: optStr });
+export type KraTemplateDto = { id: string; name: string; version: number; status: string; items: { id: string; title: string; description: string | null; measurement: string | null; weight: number }[]; cycles: number };
+export type MyReviewRow = { id: string; cycleName: string; cycleStatus: string; employee: string; role: 'SELF' | 'REVIEWER'; selfStatus: string; managerStatus: string; finalScore: number | null; band: string | null; due: string | null };
+export type ProfileKitSummary = { issued: number; total: number; date: string | null } | null;
+export type PeopleSearchHit = { type: string; id: string; title: string; subtitle?: string; link: string };
+export const exitStatusSchema = z.object({ status: z.enum(['PENDING', 'DONE', 'NA']), note: optStr });
+export const verifyBankSchema = z.object({ decision: z.enum(['VERIFIED', 'REJECTED']), reason: optStr });
+export const reopenStepSchema = z.object({ key: z.enum(ONBOARDING_STEP_KEYS), reason: z.string().trim().min(2, 'Give a reason').max(500) });
+export const kitSizeSchema = z.object({ tshirtSize: z.enum(TSHIRT_SIZES) });

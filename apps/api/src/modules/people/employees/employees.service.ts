@@ -586,7 +586,7 @@ export class EmployeesService {
         rows: valid as unknown as Prisma.InputJsonValue,
         rowErrors: errors as unknown as Prisma.InputJsonValue,
         createdByUserId: requireContext().userId ?? null,
-      } as Prisma.EmployeeImportUncheckedCreateInput,
+      } as unknown as Prisma.EmployeeImportUncheckedCreateInput,
     });
     await this.audit.record({ action: 'employee.import_validated', entity: 'EmployeeImport', entityId: imp.id, meta: { total: raw.length, valid: valid.length } });
     return this.importDto(imp.id);

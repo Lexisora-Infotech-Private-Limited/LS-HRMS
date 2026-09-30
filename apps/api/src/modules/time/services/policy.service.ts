@@ -5,6 +5,7 @@ import { PrismaService } from '../../../core/prisma/prisma.service';
 import { AuditService } from '../../../core/audit/audit.service';
 import { RealtimeGateway } from '../../../core/realtime/realtime.gateway';
 import { NotificationsService } from '../../../core/notifications/notifications.service';
+import { EventsService } from '../../../core/registry/events.service';
 import { requireContext } from '../../../core/context/request-context';
 import { AppError } from '../../../core/http/errors';
 import { CrossReader } from '../cross';
@@ -161,6 +162,7 @@ export class PolicyService {
     private readonly realtime: RealtimeGateway,
     private readonly notifications: NotificationsService,
     private readonly cross: CrossReader,
+    private readonly events: EventsService,
   ) {}
 
   // ── policy ──
@@ -199,6 +201,7 @@ export class PolicyService {
     // Push to web tabs + trackers (they refetch policy on this event).
     this.realtime.toTenant(ctx.tenantId, 'policy.updated', { audience, version: saved.version });
     this.realtime.toTenant(ctx.tenantId, 'tracker.policy.updated', { audience, version: saved.version });
+    this.events.emit('policy.updated', { audience, version: saved.version, updatedAt: saved.updatedAt.toISOString() });
 
     const affected = await this.employeesInAudience(audience);
     const pushedTo = await this.cross.activeTrackerDevices(affected.map((e) => e.id));
