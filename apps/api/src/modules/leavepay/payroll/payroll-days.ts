@@ -103,10 +103,15 @@ export function classifyDays(inp: DayClassInput): DayClassResult {
 }
 
 export type GateInput = { required: boolean; statuses: string[] };
-/** Timesheet gate: APPROVED only when every overlapping weekly timesheet is RM-approved (or locked). */
+/**
+ * Timesheet gate (spec P3 §5 step 10): APPROVED only when every weekly timesheet overlapping
+ * [periodStart, lockDate] is RM-approved (or locked). Weeks without a timesheet row don't block
+ * (spec acceptance: only employees with a timesheet pending RM are held back); a DRAFT sheet
+ * counts as NOT_SUBMITTED.
+ */
 export function timesheetGate(g: GateInput): string {
   if (!g.required) return 'NOT_REQUIRED';
-  if (!g.statuses.length) return 'NOT_SUBMITTED';
+  if (!g.statuses.length) return 'APPROVED';
   const order = ['NOT_SUBMITTED', 'SENT_BACK', 'PENDING_PL', 'PENDING_RM'];
   const mapped: string[] = g.statuses.map((s) => (s === 'APPROVED' || s === 'LOCKED' ? 'APPROVED' : s === 'DRAFT' ? 'NOT_SUBMITTED' : s === 'RETURNED' ? 'SENT_BACK' : s === 'SUBMITTED' ? 'PENDING_PL' : s === 'PENDING_RM' ? 'PENDING_RM' : 'NOT_SUBMITTED'));
   for (const o of order) if (mapped.includes(o)) return o;

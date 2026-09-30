@@ -56,7 +56,7 @@ export function toLeaveTypeRow(t: LeaveType, hasLedger = false): LeaveTypeRow {
     name: t.name,
     annualQuota: t.annualQuota,
     quotaLabel: onApproval ? 'On approval' : t.hidden && !t.annualQuota ? '—' : fmtDays(t.annualQuota),
-    carryForwardLabel: t.isCompOff ? `${t.expiryDays ?? 60} days` : t.carryForwardMax === null ? 'No' : `Up to ${fmtDays(t.carryForwardMax)}`,
+    carryForwardLabel: t.isCompOff ? `${t.expiryDays ?? 60} days` : !t.carryForwardMax ? 'No' : `Up to ${fmtDays(t.carryForwardMax)}`,
     encashable: t.encashable,
     appliesTo: t.appliesTo,
     appliesToLabel: appliesToLabel(t.appliesTo),
@@ -129,8 +129,9 @@ export class LeaveAdminService {
 
   // ── leave types ───────────────────────────────────────────────────────
 
+  /** HR sees every type (incl. inactive and HR-only); employees see active, visible types. */
   async types(includeInactive = true): Promise<LeaveTypeRow[]> {
-    const rows = await this.prisma.leaveType.findMany({ where: includeInactive ? {} : { active: true }, orderBy: [{ displayOrder: 'asc' }, { name: 'asc' }] });
+    const rows = await this.prisma.leaveType.findMany({ where: includeInactive ? {} : { active: true, hidden: false }, orderBy: [{ displayOrder: 'asc' }, { name: 'asc' }] });
     const used = await this.prisma.leaveLedgerEntry.groupBy({ by: ['leaveTypeId'], _count: { _all: true } });
     const set = new Set(used.map((u) => u.leaveTypeId));
     return rows.map((t) => toLeaveTypeRow(t, set.has(t.id)));

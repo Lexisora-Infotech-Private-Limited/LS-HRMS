@@ -2,14 +2,14 @@ import { Injectable } from '@nestjs/common';
 import type { PayrollItemStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { currentTenantId } from '../../../core/context/request-context';
-import { addDays, dd, dk, fyPriorPeriods, monthBounds, type DateKey } from '../common/dates';
+import { addDays, dd, dk, fyPriorPeriods, monthBounds, todayKey, type DateKey } from '../common/dates';
 import { WorkCalendarService } from '../common/calendar.service';
 import { leaveSummaryLabel } from '../leave/leave-calc';
 import { calculateItem, type CalcAdjustment, type CalcResult } from './payroll-calc';
 import { classifyDays, GATE_OK, timesheetGate, type AttendanceOnDay, type DayClassResult, type LeaveOnDay } from './payroll-days';
 import { SalaryService, resolveProfile } from './salary.service';
 
-export type EngineOptions = { period: string; lockDate: DateKey; includeIdle: boolean; employeeIds?: string[] };
+export type EngineOptions = { period: string; lockDate: DateKey; includeIdle: boolean; employeeIds?: string[]; today?: DateKey };
 
 export type EngineRow = {
   employeeId: string;
@@ -55,6 +55,7 @@ export class PayrollEngineService {
   async compute(opts: EngineOptions): Promise<EngineRow[]> {
     const b = monthBounds(opts.period);
     const lock = opts.lockDate;
+    const today = opts.today ?? todayKey();
     const emps = await this.prisma.employee.findMany({
       where: {
         ...(opts.employeeIds ? { id: { in: opts.employeeIds } } : {}),
@@ -86,7 +87,6 @@ export class PayrollEngineService {
       : [];
     const runPeriod = new Map(priorRuns.map((r) => [r.id, r.period]));
 
-    const tenantUsesTimesheets = sheets.length > 0;
     const out: EngineRow[] = [];
     for (const e of emps) {
       const prof = resolveProfile(e.leavepayPayrollProfile, e);
@@ -97,7 +97,8 @@ export class PayrollEngineService {
         leave.set(k, [...(leave.get(k) ?? []), { units: l.units, isPaid: l.isPaid, code: l.request.leaveType.code }]);
       }
       const attendance = new Map<DateKey, AttendanceOnDay>();
-      for (const a of attRows.filter((x) => x.employeeId === e.id)) attendance.set(dk(a.date), { status: a.status, presentFraction: a.presentFraction, idleDeductibleMinutes: a.idleDeductibleMinutes });
+      // Today's (and later) attendance is still in progress — never LOP it; those days count as projected present.
+      for (const a of attRows.filter((x) => x.employeeId === e.id && dk(x.date) < today)) attendance.set(dk(a.date), { status: a.status, presentFraction: a.presentFraction, idleDeductibleMinutes: a.idleDeductibleMinutes });
       const trackerIdle = Math.round(trackerRows.filter((x) => x.employeeId === e.id).reduce((s, x) => s + x.idleDeductedSec, 0) / 60);
       const days = classifyDays({ period: opts.period, lockDate: lock, joinDate: e.joiningDate ? dk(e.joiningDate) : null, exitDate: e.exitDate ? dk(e.exitDate) : null, calendar: cal.calendar, leave, attendance, fallbackIdleMinutes: trackerIdle });
 
@@ -105,7 +106,8 @@ export class PayrollEngineService {
       const deductIdle = opts.includeIdle && (policy?.deductIdleFromPayroll ?? true) && !prof.idleDeductionExempt;
       const allowance = policy?.monthlyIdleAllowanceMinutes ?? 60;
 
-      const gate = timesheetGate({ required: tenantUsesTimesheets && e.employmentType !== 'INTERN', statuses: sheets.filter((s) => s.employeeId === e.id).map((s) => s.status) });
+      // Interns keep intern task sheets instead of weekly timesheets (NOT_REQUIRED).
+      const gate = timesheetGate({ required: e.employmentType !== 'INTERN', statuses: sheets.filter((s) => s.employeeId === e.id).map((s) => s.status) });
 
       const sal = salaries.get(e.id);
       const errors: string[] = [];

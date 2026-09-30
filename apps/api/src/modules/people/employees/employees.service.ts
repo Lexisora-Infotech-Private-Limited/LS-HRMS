@@ -580,7 +580,7 @@ export class EmployeesService {
     const imp = await this.prisma.employeeImport.create({
       data: {
         filename: file.originalname,
-        options: { createMissingMasters },
+        options: { createMissingMasters, raw: raw.slice(0, 200).map((r, i) => ({ row: i + 1, fullName: r.full_name ?? '', officialEmail: r.official_email ?? '', department: r.department ?? '', employmentType: r.employment_type ?? '' })) },
         totalRows: raw.length,
         validRows: valid.length,
         rows: valid as unknown as Prisma.InputJsonValue,
@@ -600,7 +600,10 @@ export class EmployeesService {
     const errRows = new Set(errors.map((e) => e.row));
     const preview = [
       ...valid.map((v) => ({ row: v.row, fullName: v.fullName, officialEmail: v.officialEmail, department: v.department, employmentType: v.employmentType, ok: true })),
-      ...[...errRows].map((row) => ({ row, fullName: '', officialEmail: '', department: '', employmentType: '', ok: false })),
+      ...[...errRows].map((row) => {
+        const r = ((imp.options as { raw?: { row: number; fullName: string; officialEmail: string; department: string; employmentType: string }[] } | null)?.raw ?? []).find((x) => x.row === row);
+        return { row, fullName: r?.fullName ?? '', officialEmail: r?.officialEmail ?? '', department: r?.department ?? '', employmentType: r?.employmentType ?? '', ok: false };
+      }),
     ].sort((a, b) => a.row - b.row);
     return { id: imp.id, filename: imp.filename, totalRows: imp.totalRows, validRows: imp.validRows, errors, preview: preview.slice(0, 200), status: imp.status, importedRows: imp.importedRows };
   }

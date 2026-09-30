@@ -136,7 +136,8 @@ export class LeaveRequestsService {
         if (next) metas.push(`${fmtDays(next.remaining)} expires ${dayMonth(next.expiresOn)}`);
       } else {
         if (b.opening > 0) metas.push(`incl. ${fmtDays(b.opening)} carried forward`);
-        const more = round2(b.entitlement - b.accrued - Math.max(0, b.credited) - b.opening);
+        // entitlement = scheduled accrual + positive credits (opening is not part of it).
+        const more = round2(b.entitlement - b.accrued - Math.max(0, b.credited));
         if (t.accrualFrequency === 'MONTHLY' && more > 0 && year === yearOf(today)) metas.push(`${fmtDays(more)} more accruing by Dec`);
       }
       if (b.pending > 0) metas.push(`${fmtDays(b.pending)} pending approval`);
