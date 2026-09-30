@@ -79,10 +79,14 @@ export const wpApi = {
   deleteQuote: (id: string) => del<{ ok: true }>(`/quotes/${id}`),
 };
 
+/** Fixed month names — recent CLDR renders en-GB September as "Sept"; the product copy uses "Sep". */
+const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
 /** "27 Sep" (IST) from an ISO instant. */
 export function dayMonthOf(iso: string | null | undefined): string {
   if (!iso) return '—';
-  return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' }).format(new Date(iso));
+  const s = new Date(new Date(iso).getTime() + 330 * 60_000);
+  return `${s.getUTCDate()} ${MONTHS_SHORT[s.getUTCMonth()]}`;
 }
 
 /** "2 Oct, 10:00" (IST). */

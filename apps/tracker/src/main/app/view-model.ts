@@ -7,13 +7,14 @@ import type { EngineStatus, IdleCauseView, IdleDialogView, Prefs, SettingsRow, T
  * spec-tracker T1–T7, with the COVERAGE-AUDIT copy fixes). Unit-tested; no electron here.
  */
 
-export const FOOTER_NOTE = 'Available to Remote / WFH employees. Office staff punch with biometric.';
-/** Audit fix #9 (pairing copy). */
-export const PAIR_HELP = 'Enter this code in the web portal under My profile → Devices, or ask HR to approve it.';
-/** Audit fix #1 (screenshot disclosure copy). */
-export const SCREENSHOT_AUDIENCE = 'Visible to your Project Lead and Reporting Manager';
-export const HR_POLICY_FOOTNOTE = 'Rules marked "HR policy" are set by your admin and can\'t be changed here.';
-export const WEEK_SUBMITTED_HINT = 'Week already submitted — changes go to your Project Lead as an update';
+export {
+  FOOTER_NOTE,
+  PAIR_HELP,
+  SCREENSHOT_AUDIENCE,
+  HR_POLICY_FOOTNOTE,
+  WEEK_SUBMITTED_HINT,
+  MONITOR_ONLY_NOTE as MONITOR_ONLY_MESSAGE,
+} from '@tracker-shared/copy';
 export const DEFAULT_PERMISSIONS = ['activity monitor', 'screen capture'];
 
 export type DotState = 'WORKING' | 'IDLE' | 'BREAK' | 'OUT';

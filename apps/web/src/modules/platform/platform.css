@@ -20,6 +20,13 @@
 .pf-perm-label small { color: var(--color-neutral-600); font-size: 11.5px; }
 .pf-key { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; color: var(--color-neutral-600); }
 
+/* ── Per-role editor (All permissions → one role) ──────────────────────────── */
+.pf-perm-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 14px; align-items: start; }
+.pf-perm-card { gap: 0; }
+.pf-perm-card > .row-between { padding-bottom: 6px; }
+.pf-perm-item { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; border-top: 1px solid var(--color-divider); }
+.pf-perm-item > span:first-child { flex: none; padding-top: 1px; }
+
 /* ── Alerts ───────────────────────────────────────────────────────────────── */
 .pf-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--color-accent); margin-right: 8px; vertical-align: middle; flex: none; }
 .pf-alert-title { display: flex; align-items: baseline; gap: 0; }
@@ -31,6 +38,7 @@
 .pf-filters .field { display: flex; flex-direction: column; gap: 4px; min-width: 130px; flex: 1 1 130px; max-width: 220px; }
 .pf-filters .field > label { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--color-neutral-600); }
 .pf-when { white-space: nowrap; font-feature-settings: 'tnum'; }
+.pf-nowrap { white-space: nowrap; }
 .pf-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
 .pf-json { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; background: color-mix(in srgb, var(--color-text) 4%, transparent); border: 1px solid var(--color-divider); border-radius: 4px; padding: 10px; overflow: auto; max-height: 320px; white-space: pre-wrap; word-break: break-word; margin: 0; }
 .pf-kv { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 6px 12px; font-size: 13px; }
@@ -43,11 +51,20 @@
 .pf-search-kbd { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font-size: 10.5px; color: var(--color-neutral-500); border: 1px solid var(--color-divider); border-radius: 3px; padding: 0 5px; line-height: 16px; pointer-events: none; }
 .pf-search-panel { position: absolute; top: calc(100% + 6px); left: 0; width: min(480px, calc(100vw - 32px)); max-height: min(70vh, 560px); overflow: auto; background: var(--color-bg); border: 1px solid var(--color-divider); border-radius: 6px; box-shadow: var(--shadow-md); z-index: 45; padding: 6px; }
 .pf-search-group { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--color-neutral-600); padding: 8px 10px 4px; }
-.pf-search-item { display: flex; flex-direction: column; gap: 1px; width: 100%; text-align: left; font: inherit; font-size: 13.5px; padding: 7px 10px; border: 0; background: transparent; cursor: pointer; border-radius: 4px; color: inherit; }
+.pf-search-item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; font: inherit; font-size: 13.5px; padding: 7px 10px; border: 0; background: transparent; cursor: pointer; border-radius: 4px; color: inherit; }
+.pf-search-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.pf-search-text > span, .pf-search-text > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pf-search-item small { font-size: 12px; color: var(--color-neutral-600); }
+.pf-results-row { display: flex; align-items: center; gap: 12px; width: 100%; background: transparent; border: 0; border-top: 1px solid var(--color-divider); font: inherit; text-align: left; cursor: pointer; color: inherit; padding: 10px 2px; }
+.pf-results-row:hover { background: color-mix(in srgb, var(--color-accent) 6%, transparent); }
+.pf-changes td, .pf-changes th { font-size: 12.5px; }
 .pf-search-item[aria-selected='true'] { background: color-mix(in srgb, var(--color-accent) 12%, transparent); }
 .pf-search-foot { display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--color-divider); margin-top: 6px; padding: 8px 10px 4px; font-size: 12px; color: var(--color-neutral-600); }
 .pf-search-empty { padding: 12px 10px; font-size: 13px; color: var(--color-neutral-600); }
+.pf-search-card { display: flex; align-items: center; gap: 12px; padding: 12px 10px 8px; }
+.pf-search-card small { font-size: 12.5px; color: var(--color-neutral-600); }
+.pf-results-static { cursor: default; }
+.pf-results-static:hover { background: transparent; }
 @media (max-width: 560px) {
   .pf-search { max-width: none; flex-basis: 100%; order: 10; }
   .pf-search-kbd { display: none; }

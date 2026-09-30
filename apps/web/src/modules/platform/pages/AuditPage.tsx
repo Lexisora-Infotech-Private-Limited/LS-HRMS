@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { istDateKey, type AuditQuery, type AuditResult, type AuditRowDto } from '@lexisora/shared';
+import { auditChangeRows, istDateKey, type AuditQuery, type AuditResult, type AuditRowDto } from '@lexisora/shared';
 import { ErrorBlock, Modal, PageHeader, Tabs, Tag, type Tone } from '@/components/ui';
 import { DataTable, Pager, type Column } from '@/components/table';
 import { download } from '@/lib/api';
@@ -24,8 +24,45 @@ export function auditWhen(iso: string, withYear = false): string {
   return `${Number(parts.day)} ${MONTHS[Number(parts.month) - 1]}${withYear ? ` ${parts.year}` : ''}, ${hour}:${parts.minute}:${parts.second}`;
 }
 
+/** "attendance_policy" → "Attendance policy" (action prefixes are the module keys). */
+const moduleLabel = (m: string) => {
+  const s = m.replace(/[_-]+/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
+  return s === 'rbac' ? 'Roles & access' : s.charAt(0).toUpperCase() + s.slice(1);
+};
+
 const RESULT_TONE: Record<AuditResult, Tone> = { success: 'accent', denied: 'danger', failure: 'outline' };
 const RESULT_LABEL: Record<AuditResult, string> = { success: 'Success', denied: 'Denied', failure: 'Failure' };
+
+/** Before → after table for entries whose producer recorded the change. */
+function AuditChanges({ meta }: { meta: unknown }) {
+  const rows = auditChangeRows(meta);
+  if (!rows.length) return null;
+  return (
+    <div className="stack" style={{ '--gap': '6px' } as React.CSSProperties}>
+      <div className="kicker">Changes</div>
+      <div style={{ overflowX: 'auto' }}>
+        <table className="table pf-changes">
+          <thead>
+            <tr>
+              <th>Field</th>
+              <th>Before</th>
+              <th>After</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.field}>
+                <td>{r.field}</td>
+                <td className="faint">{r.before}</td>
+                <td>{r.after}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
 
 function defaults(): Filters {
   const now = new Date();
@@ -75,9 +112,9 @@ export default function AuditPage() {
 
   const columns: Column<AuditRowDto>[] = [
     { key: 'when', header: 'When', render: (r) => <span className="pf-when">{auditWhen(r.createdAt)}</span> },
-    { key: 'actor', header: 'Actor', render: (r) => (r.platform ? <span>{r.actorName} <Tag tone="outline">Lexisora</Tag></span> : r.actorName) },
+    { key: 'actor', header: 'Actor', render: (r) => <span className="pf-nowrap">{r.actorName}{r.platform && <> <Tag tone="outline">Lexisora</Tag></>}</span> },
     { key: 'action', header: 'Action', render: (r) => <span className="pf-mono">{r.action}</span> },
-    { key: 'module', header: 'Module', render: (r) => r.module },
+    { key: 'module', header: 'Module', render: (r) => <span className="pf-nowrap">{moduleLabel(r.module)}</span> },
     { key: 'entity', header: 'Entity', render: (r) => (<span>{r.entity}{r.entityId && <span className="faint pf-mono"> …{r.entityId.slice(-6)}</span>}</span>) },
     { key: 'summary', header: 'Summary', render: (r) => <span style={{ display: 'inline-block', maxWidth: 380 }}>{r.summary}</span> },
     { key: 'ip', header: 'IP', render: (r) => (r.ip ? <span className="pf-mono">{r.ip}</span> : <span className="faint">—</span>) },
@@ -90,7 +127,7 @@ export default function AuditPage() {
     <div className="stack" style={{ '--gap': '18px' } as React.CSSProperties} data-screen-label="Audit log">
       <PageHeader
         title="Audit log"
-        sub="Every sign-in, permission change and sensitive action, tamper-evident."
+        sub="Every sign-in, permission change and sensitive action in your workspace."
         actions={
           <button className="btn btn-secondary" onClick={() => void exportCsv()} disabled={exporting}>
             {exporting ? 'Exporting…' : 'Export CSV'}
@@ -134,7 +171,7 @@ export default function AuditPage() {
           <select id="au-module" className="input" value={f.module} onChange={(e) => set({ module: e.target.value })}>
             <option value="">All modules</option>
             {(facets.data?.modules ?? []).map((m) => (
-              <option key={m} value={m}>{m}</option>
+              <option key={m} value={m}>{moduleLabel(m)}</option>
             ))}
           </select>
         </div>
@@ -212,7 +249,7 @@ export default function AuditPage() {
               <dt>Action</dt>
               <dd className="pf-mono">{open.action}</dd>
               <dt>Module</dt>
-              <dd>{open.module}</dd>
+              <dd>{moduleLabel(open.module)}</dd>
               <dt>Entity</dt>
               <dd>{open.entity}{open.entityId && <span className="pf-mono faint"> {open.entityId}</span>}</dd>
               <dt>IP address</dt>
@@ -220,6 +257,7 @@ export default function AuditPage() {
               <dt>Result</dt>
               <dd><Tag tone={RESULT_TONE[open.result]}>{RESULT_LABEL[open.result]}</Tag></dd>
             </dl>
+            <AuditChanges meta={open.meta} />
             {open.meta !== null && open.meta !== undefined && (
               <div className="stack" style={{ '--gap': '6px' } as React.CSSProperties}>
                 <div className="kicker">Details</div>

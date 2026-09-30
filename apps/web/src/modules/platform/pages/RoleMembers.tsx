@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { formatDate, type RoleDto, type RoleMemberDto } from '@lexisora/shared';
+import { dayMonthYear, type RoleDto, type RoleMemberDto } from '@lexisora/shared';
 import { Avatar, ConfirmDialog, Pills, StatusTag } from '@/components/ui';
 import { DataTable, type Column } from '@/components/table';
 import { FormModal } from '@/components/form';
@@ -42,7 +42,7 @@ export function RoleMembers({ roles, roleId, onRoleId }: { roles: RoleDto[]; rol
     },
     { key: 'emp', header: 'Emp ID', render: (m) => m.empCode ?? <span className="faint">—</span> },
     { key: 'dept', header: 'Department', render: (m) => m.department ?? <span className="faint">—</span> },
-    { key: 'since', header: 'Assigned on', render: (m) => formatDate(m.since) },
+    { key: 'since', header: 'Assigned on', render: (m) => <span className="pf-when">{dayMonthYear(m.since)}</span> },
     { key: 'by', header: 'Assigned by', render: (m) => m.assignedBy ?? <span className="faint">At setup</span> },
     { key: 'status', header: 'Status', render: (m) => <StatusTag status={m.status} /> },
     {

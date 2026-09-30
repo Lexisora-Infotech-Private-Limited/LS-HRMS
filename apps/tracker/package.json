@@ -10,9 +10,10 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "test": "vitest run --passWithNoTests",
-    "dist:win": "electron-vite build && electron-builder --win --x64 --config electron-builder.config.js --publish never",
-    "dist:dir": "electron-vite build && electron-builder --win --x64 --dir --config electron-builder.config.js --publish never"
+    "test": "vitest run",
+    "dist:win": "node scripts/make-icon.mjs && electron-vite build && electron-builder --win --x64 --config electron-builder.config.js --publish never",
+    "dist:dir": "node scripts/make-icon.mjs && electron-vite build && electron-builder --win --x64 --dir --config electron-builder.config.js --publish never",
+    "icon": "node scripts/make-icon.mjs"
   },
   "dependencies": {
     "@lexisora/shared": "workspace:*"

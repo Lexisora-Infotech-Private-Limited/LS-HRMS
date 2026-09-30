@@ -42,10 +42,35 @@ export function resultWhere(result: AuditQuery['result']): Prisma.AuditLogWhereI
   }
 }
 
+/** Rows written by Lexisora staff (support sessions, billing and tenant operations). */
+const PLATFORM_ACTION: Prisma.AuditLogWhereInput = { action: { startsWith: 'platform.' } };
+
+/**
+ * Actor filter: a user id, `system` (jobs and unauthenticated events such as failed sign-ins) or
+ * `platform` (the "Lexisora platform" choice of the actor picker).
+ */
+export function actorWhere(actor: string | undefined): Prisma.AuditLogWhereInput | null {
+  if (!actor) return null;
+  if (actor === 'platform') return PLATFORM_ACTION;
+  if (actor === 'system') return { actorUserId: null, NOT: PLATFORM_ACTION };
+  return { actorUserId: actor };
+}
+
 /** Short human summary: the producer's `meta.summary`, else a readable fallback. */
+const CLIENT_LABEL: Record<string, string> = { web: 'on the web', mobile: 'on the mobile app', tracker: 'on the desktop tracker' };
+
+/** Readable copy for core events that are recorded without a summary. */
+const KNOWN: Record<string, (m: Record<string, unknown>) => string> = {
+  'auth.login': (m) => ['Signed in', CLIENT_LABEL[String(m.client)]].filter(Boolean).join(' '),
+  'auth.logout': () => 'Signed out',
+  'auth.login.failed': (m) => `Failed sign-in attempt${typeof m.email === 'string' ? ` for ${m.email}` : ''}`,
+};
+
 export function summarize(action: string, entity: string, entityId: string | null, meta: unknown): string {
   const m = (meta && typeof meta === 'object' ? meta : {}) as Record<string, unknown>;
   if (typeof m.summary === 'string') return m.summary;
+  const known = KNOWN[action];
+  if (known) return known(m);
   const verb = action.split('.').slice(1).join(' ').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
   const extra = Object.entries(m)
     .filter(([, v]) => ['string', 'number', 'boolean'].includes(typeof v))
@@ -61,8 +86,8 @@ export class AuditLogService {
 
   private where(q: AuditQuery): Prisma.AuditLogWhereInput {
     const and: Prisma.AuditLogWhereInput[] = [tabWhere(q.tab)];
-    if (q.actor === 'system') and.push({ actorUserId: null });
-    else if (q.actor) and.push({ actorUserId: q.actor });
+    const actor = actorWhere(q.actor);
+    if (actor) and.push(actor);
     if (q.action) and.push({ action: { contains: q.action, mode: 'insensitive' } });
     if (q.module) and.push({ OR: [{ action: { startsWith: `${q.module}.` } }, { action: q.module }] });
     if (q.result) and.push(resultWhere(q.result));
@@ -117,7 +142,11 @@ export class AuditLogService {
       this.prisma.auditLog.findMany({ distinct: ['action'], select: { action: true }, take: 500 }),
     ]);
     return {
-      actors: [{ value: 'system', label: 'System' }, ...actors.map((a) => ({ value: a.actorUserId!, label: a.actorName ?? 'Unknown' })).sort((a, b) => a.label.localeCompare(b.label))],
+      actors: [
+        { value: 'system', label: 'System' },
+        { value: 'platform', label: 'Lexisora platform' },
+        ...actors.map((a) => ({ value: a.actorUserId!, label: a.actorName ?? 'Unknown' })).sort((a, b) => a.label.localeCompare(b.label)),
+      ],
       entities: entities.map((e) => e.entity).sort(),
       modules: [...new Set(actions.map((a) => a.action.split('.')[0]!))].sort(),
     };

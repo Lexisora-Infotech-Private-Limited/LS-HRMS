@@ -1,7 +1,7 @@
 import { app, clipboard, dialog, powerMonitor, screen, shell as electronShell, type MenuItemConstructorOptions } from 'electron';
 import { randomUUID } from 'node:crypto';
 import type { PairStatusResponse, ScreenshotMeta, TrackerEvent, TrackerLoginResponse, TrackerMode, TrackerPunchInput, TrackerTask, TrackerToday } from '@lexisora/shared';
-import { clock, compareVersions, hm, istDayKey } from '@tracker-shared/format';
+import { clock, compareVersions, hm, istDayKey, shortDate } from '@tracker-shared/format';
 import {
   CONFIRM_CODES,
   commandSchema,
@@ -14,6 +14,7 @@ import {
   type ViewState,
 } from '@tracker-shared/ipc';
 import { Connectivity } from '../engine/backoff';
+import { TrustedClock, formatDrift, type ClockChange } from '../engine/clock';
 import { TrackerEngine, type EngineSnapshot } from '../engine/engine';
 import { combine, computeTotals, localSpans, timelineFromSpans, type Bar, type DayTotals, type TimelineSpan } from '../engine/summary';
 import { EngineError, type EngineConfig, type EngineEvent, type EngineOutput, type Segment } from '../engine/types';
@@ -27,7 +28,7 @@ import { DiagLog } from './log';
 import { deviceIdentity } from './platform';
 import { emptyCache, LocalStore, type CacheDoc, type Credentials, type StoredPrefs } from './storage';
 import * as vm from './view-model';
-import { eventToWire, isPunchEvent, punchInput, segmentToWire } from './wire';
+import { clockChangeEvent, eventToWire, isPunchEvent, punchInput, segmentToWire } from './wire';
 
 /** The window/tray layer the controller drives (implemented in main/index.ts with real windows). */
 export interface UiShell {
@@ -96,6 +97,13 @@ const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
  * screenshots, notifications and the view model pushed to the renderer windows.
  */
 export class TrackerController {
+  /** Dev "Change PC clock" simulation: added to the wall clock the TrustedClock reads. */
+  private simClockSkewMs = 0;
+  /**
+   * Every timestamp the tracker records comes from here: the PC clock, kept continuous when
+   * someone changes it (CLOCK_CHANGE, spec T5 §5). Declared before anything that reads time.
+   */
+  private readonly clock = new TrustedClock({ wall: () => Date.now() + this.simClockSkewMs, mono: () => performance.now() });
   private readonly local: LocalStore;
   private readonly store: OutboxStore;
   private readonly api: ApiClient;
@@ -152,19 +160,25 @@ export class TrackerController {
     this.sync = new SyncService(this.store, this.api, () => this.isOnline(), {
       onChange: () => this.push(),
       onAcked: (ids, kind) => {
-        const t = Date.now();
+        const t = this.now();
         for (const id of ids) this.cache.acks[id] = [t, kind === 'shot'];
       },
       onPunch: (_input, r, startedAt) => this.applyToday(r.today, startedAt),
       onPunchRejected: (input, err) => this.onPunchRejected(input, err),
-      onBatch: () => {
-        this.cache.lastSyncAt = Date.now();
+      onBatch: (r) => {
+        this.cache.lastSyncAt = this.now();
+        if (r.serverTime) this.verifyClock(r.serverTime);
         this.scheduleTodayRefresh();
       },
       onShot: () => this.scheduleTodayRefresh(),
       onAuthLost: () => this.onRevoked('This device was signed out. Sign in again to pair it.'),
       log: (m) => this.log.add(m, 'warn'),
-    });
+    }, { now: () => this.now() });
+  }
+
+  /** Trusted epoch ms (see `clock`). */
+  private now(): number {
+    return this.clock.now();
   }
 
   // ── lifecycle ────────────────────────────────────────────────────────────
@@ -178,15 +192,19 @@ export class TrackerController {
       this.applyLoginItem();
     }
     const snap = this.local.snapshot.read();
+    // PC clock set back while the tracker was closed → continue from the last recorded moment (spec T5 §5).
+    this.clock.resumeFrom(snap ? Math.max(snap.lastTickAt ?? 0, snap.quitAt ?? 0) : null);
     if (this.creds) {
       this.api.token = this.creds.deviceToken;
       this.mode = this.cache.policy?.mode ?? this.creds.mode;
       this.modeMessage = this.cache.policy?.modeMessage ?? this.creds.modeMessage;
       this.engine = this.makeEngine(snap);
       this.view = 'home';
-      const out = this.engine.recover(Date.now());
+      const out = this.engine.recover(this.now());
       this.handleOutput(out);
-      if (!this.engine.activeTaskId && this.cache.tasks[0]) this.engine.switchTask(Date.now(), this.cache.tasks[0].id);
+      if (!this.engine.activeTaskId && this.cache.tasks[0] && !this.engine.prompting) {
+        this.handleOutput(this.engine.switchTask(this.now(), this.cache.tasks[0].id));
+      }
       this.startOnline();
       if (this.engine.status !== 'OUT' && this.prefs.showTrayWidget) this.opts.shell.widgetOpen();
     } else {
@@ -204,6 +222,16 @@ export class TrackerController {
     return !!this.creds;
   }
 
+  /** Where the user last dragged the tray widget (null = anchor near the tray). */
+  get widgetPosition(): { x: number; y: number } | null {
+    return this.prefs.widgetPos;
+  }
+
+  setWidgetPosition(pos: { x: number; y: number }) {
+    this.prefs.widgetPos = { x: Math.round(pos.x), y: Math.round(pos.y) };
+    this.savePrefs();
+  }
+
   get stopped() {
     return this.shuttingDown;
   }
@@ -213,7 +241,7 @@ export class TrackerController {
     if (this.shuttingDown) return;
     this.shuttingDown = true;
     if (this.tickTimer) clearInterval(this.tickTimer);
-    if (this.view === 'home') this.handleOutput(this.engine.appQuit(Date.now()));
+    if (this.view === 'home') this.handleOutput(this.engine.appQuit(this.now()));
     this.saveSnapshot();
     this.saveCache();
     if (this.creds && this.isOnline() && this.store.queue.size) await Promise.race([this.sync.flush(), sleep(3000)]);
@@ -227,7 +255,7 @@ export class TrackerController {
   onSystemShutdown() {
     if (this.shuttingDown) return;
     this.shuttingDown = true;
-    if (this.view === 'home') this.handleOutput(this.engine.appQuit(Date.now()));
+    if (this.view === 'home') this.handleOutput(this.engine.appQuit(this.now()));
     this.saveSnapshot();
     this.saveCache();
     this.log.add('Windows is shutting down · tracking paused');
@@ -248,7 +276,7 @@ export class TrackerController {
       });
       if (r.response === 2) return;
       if (r.response === 0) {
-        const now = Date.now();
+        const now = this.now();
         if (this.engine.prompting) this.handleOutput(this.engine.resolveIdle(now, 'IDLE'));
         this.handleOutput(this.engine.punchOut(now));
         this.cache.sessionStartedAt = null;
@@ -265,7 +293,7 @@ export class TrackerController {
       dayKey: istDayKey,
       config: this.engineConfig(),
       snapshot: snapshot && snapshot.v === 1 ? snapshot : null,
-      now: Date.now(),
+      now: this.now(),
     });
   }
 
@@ -296,22 +324,19 @@ export class TrackerController {
 
   private onTick() {
     if (this.shuttingDown) return;
-    const now = Date.now();
+    const now = this.now();
+    this.reportClockChanges();
     const idleSec = this.systemIdleSec();
     this.lastIdleSec = idleSec;
     if (this.view === 'home') {
-      // A long gap between ticks without a suspend event (hibernate, frozen VM) is treated as sleep.
-      const prev = this.lastTickWall;
-      if (prev !== null && now - prev > 60_000 && this.engine.status === 'WORKING' && !this.engine.away && !this.engine.prompting) {
-        this.handleOutput(this.engine.lock(prev, 'SUSPEND', prev));
-        this.handleOutput(this.engine.unlock(now, 'RESUME'));
-        this.log.add(`No activity signal from ${clock(prev)} to ${clock(now)} (sleep?)`);
-      }
+      this.catchUpSleep(now);
       if (this.engine.status === 'OUT' && this.engine.rollDay(now)) {
         this.log.add('New day · totals reset');
         void this.refreshToday();
       }
-      this.handleOutput(this.engine.tick(now, idleSec));
+      // While a forward clock jump is unconfirmed (it may be sleep without a suspend signal) the
+      // idle detector waits: skipped ticks cost nothing, worked time comes from segment spans.
+      if (!this.clock.unsettled) this.handleOutput(this.engine.tick(now, idleSec));
       if (now - this.lastSave > 15_000) {
         this.saveSnapshot();
         this.saveCache();
@@ -352,15 +377,18 @@ export class TrackerController {
   }
 
   private onPower(kind: 'LOCK' | 'UNLOCK' | 'SUSPEND' | 'RESUME') {
+    // Sleep is elapsed time, not a clock change (even if Windows skipped the suspend signal).
+    if (kind === 'SUSPEND' || kind === 'RESUME') this.clock.notePower(kind);
     if (this.view !== 'home' || this.shuttingDown) return;
-    const now = Date.now();
+    const now = this.now();
     if (kind === 'LOCK' || kind === 'SUSPEND') {
       const lastInput = now - this.systemIdleSec() * 1000;
       this.handleOutput(this.engine.lock(now, kind, lastInput));
       if (this.engine.status !== 'OUT') this.log.add(kind === 'LOCK' ? 'Screen locked' : 'PC going to sleep');
       this.saveSnapshot();
     } else {
-      this.handleOutput(this.engine.unlock(now, kind));
+      // A resume without the matching suspend: the gap since the last tick is handled as sleep.
+      if (!(kind === 'RESUME' && this.catchUpSleep(now))) this.handleOutput(this.engine.unlock(now, kind));
       if (this.engine.status !== 'OUT') this.log.add(kind === 'UNLOCK' ? 'Screen unlocked' : 'PC resumed');
       this.lastTickWall = now;
       if (kind === 'RESUME' && this.creds) {
@@ -369,6 +397,47 @@ export class TrackerController {
       }
     }
     this.push();
+  }
+
+  /**
+   * A long gap since the last tick without a suspend signal (hibernate, frozen VM, a missed
+   * event) is handled as sleep: the idle dialog asks how to count it. Returns true when it did.
+   */
+  private catchUpSleep(now: number): boolean {
+    const prev = this.lastTickWall;
+    if (prev === null || now - prev <= 60_000 || this.engine.status !== 'WORKING' || this.engine.away || this.engine.prompting) return false;
+    this.handleOutput(this.engine.lock(prev, 'SUSPEND', prev));
+    this.handleOutput(this.engine.unlock(now, 'RESUME'));
+    this.log.add(`No activity signal from ${clock(prev)} to ${clock(now)} (sleep?)`);
+    this.lastTickWall = now;
+    return true;
+  }
+
+  // ── clock changes (spec T5 §5, T8) ───────────────────────────────────────
+  /** Queue CLOCK_CHANGE {driftSec} for the integrity view; the local timeline is already continuous. */
+  private reportClockChanges() {
+    for (const c of this.clock.takeChanges()) {
+      const drift = formatDrift(c.driftSec);
+      this.log.add(
+        c.cause === 'RESTART'
+          ? `PC clock is ${drift.replace(/^[−+]/, '')} behind the last recorded time · tracker time continues from ${clock(c.at)}`
+          : `PC clock changed by ${drift} · tracker time kept continuous`,
+        'warn',
+      );
+      if (this.view === 'home' && this.creds) this.queueClockChange(c);
+    }
+  }
+
+  private queueClockChange(c: ClockChange) {
+    const ev = clockChangeEvent(c, this.engine.activeTaskId, randomUUID());
+    if (this.store.append('event', ev.clientId, ev)) this.sync.trigger();
+  }
+
+  /** A server-verified time (heartbeat / sync): once the PC clock agrees again, follow it. */
+  private verifyClock(serverIso: string) {
+    if (this.clock.verify(Date.parse(serverIso), this.engine.status === 'OUT')) {
+      this.log.add('PC clock matches the server again · tracker time follows it');
+    }
   }
 
   // ── connectivity ─────────────────────────────────────────────────────────
@@ -435,7 +504,10 @@ export class TrackerController {
     if (!this.creds || !RealtimeClient.supported()) return;
     const rt = new RealtimeClient(this.api.baseUrl, this.creds.deviceToken);
     rt.on(SOCKET.policyUpdated, () => void this.refreshPolicy(true));
-    rt.on(SOCKET.deviceRevoked, () => this.onRevoked('This device was revoked by HR. Sign in again to pair it.'));
+    rt.on(SOCKET.deviceRevoked, (p: { message?: unknown } | null) => {
+      const who = typeof p?.message === 'string' && p.message.trim() ? p.message.trim().replace(/\.$/, '') : 'This device was revoked by HR';
+      this.onRevoked(`${who}. Sign in again to pair it.`);
+    });
     rt.on(SOCKET.attendancePunched, () => void this.refreshToday());
     rt.on(SOCKET.tasksUpdated, () => void this.refreshTasks());
     rt.on(SOCKET.syncNow, () => void this.sync.flush());
@@ -458,6 +530,7 @@ export class TrackerController {
         displays: Math.min(12, Math.max(1, screen.getAllDisplays().length)),
       });
       if (r.deviceStatus === 'REVOKED') return this.onRevoked('This device was revoked by HR. Sign in again to pair it.');
+      if (r.serverTime) this.verifyClock(r.serverTime);
       if (!this.cache.policy || r.policyUpdatedAt !== this.cache.policy.updatedAt) void this.refreshPolicy(!!this.cache.policy);
     } catch {
       /* connectivity is tracked by onOutcome */
@@ -490,7 +563,7 @@ export class TrackerController {
       const tasks = await this.api.tasks();
       this.cache.tasks = tasks;
       for (const t of tasks) this.cache.known[t.id] = { key: t.key, title: t.title, projectName: t.projectName };
-      if (!this.engine.activeTaskId && tasks[0] && this.engine.status === 'OUT') this.engine.switchTask(Date.now(), tasks[0].id);
+      if (!this.engine.activeTaskId && tasks[0] && this.engine.status === 'OUT') this.engine.switchTask(this.now(), tasks[0].id);
       this.saveCache();
       this.push();
     } catch {
@@ -501,7 +574,7 @@ export class TrackerController {
   private refreshToday(): Promise<void> {
     if (!this.creds) return Promise.resolve();
     if (this.todayInFlight) return this.todayInFlight;
-    const requestedAt = Date.now();
+    const requestedAt = this.now();
     this.todayInFlight = this.api
       .today()
       .then((t) => this.applyToday(t, requestedAt))
@@ -522,7 +595,7 @@ export class TrackerController {
 
   /** New server baseline for today (all devices, everything synced before `requestedAt`). */
   private applyToday(t: TrackerToday, requestedAt: number) {
-    this.cache.today = { ...t, requestedAt, fetchedAt: Date.now() };
+    this.cache.today = { ...t, requestedAt, fetchedAt: this.now() };
     for (const [id, [at]] of Object.entries(this.cache.acks)) if (at < requestedAt) delete this.cache.acks[id];
     for (const b of t.byTask) if (b.taskId) this.cache.known[b.taskId] = { ...this.cache.known[b.taskId], key: b.key, title: b.title };
     if (t.mode && t.mode !== this.mode) {
@@ -542,7 +615,7 @@ export class TrackerController {
    */
   private reconcileSession(t: TrackerToday) {
     if (this.punchBusy || this.store.queue.nextPunch()) return;
-    const now = Date.now();
+    const now = this.now();
     if (t.date && t.date !== istDayKey(now)) return;
     const st = this.engine.status;
     const mode = t.mode ?? this.mode;
@@ -550,11 +623,18 @@ export class TrackerController {
       if (st === 'OUT') return;
       const lastOut = t.lastOutAt ? Date.parse(t.lastOutAt) : null;
       const started = this.cache.sessionStartedAt ?? 0;
-      if (!this.engine.attached && (lastOut === null || lastOut < started - 60_000)) return;
-      this.handleOutput(this.engine.punchOut(now, { detach: true }));
+      // The server keeps a session open across midnight until its auto-close (shift end + 6 h,
+      // spec T3 §5); "OUT" while this device still tracks yesterday's session means it was closed.
+      const staleDay = this.engine.dayKey !== istDayKey(now);
+      if (!this.engine.attached && !staleDay && (lastOut === null || lastOut < started - 60_000)) return;
+      // Close at the last active moment rather than now, so an overnight idle prompt isn't sent as hours of idle.
+      const idle = this.engine.idleState;
+      const at = staleDay && idle.phase === 'PROMPT' ? idle.since : now;
+      this.handleOutput(this.engine.punchOut(at, { detach: true }));
       this.cache.sessionStartedAt = null;
-      const msg =
-        mode === 'MONITOR_ONLY'
+      const msg = staleDay
+        ? `Your session from ${shortDate(started || at)} was closed automatically · regularize it on the web portal if wrong`
+        : mode === 'MONITOR_ONLY'
           ? `Biometric OUT${lastOut ? ` at ${clock(lastOut)}` : ''} · tracking stopped`
           : `Punched out ${t.punchSource === 'BIOMETRIC' ? 'with biometric' : 'on the web portal'} · tracking stopped`;
       this.log.add(msg);
@@ -584,7 +664,7 @@ export class TrackerController {
   }
 
   private pruneAcks() {
-    const cutoff = Date.now() - 2 * 86_400_000;
+    const cutoff = this.now() - 2 * 86_400_000;
     for (const [id, [at]] of Object.entries(this.cache.acks)) if (at < cutoff) delete this.cache.acks[id];
   }
 
@@ -843,7 +923,7 @@ export class TrackerController {
   private async pollPair(manual: boolean): Promise<CommandResult> {
     const p = this.pair;
     if (!p || !p.deviceId) return fail('NO_PAIRING', 'Get a pairing code first');
-    if (p.status === 'EXPIRED' || (p.codeExpiresAt && Date.now() > p.codeExpiresAt)) {
+    if (p.status === 'EXPIRED' || (p.codeExpiresAt && this.now() > p.codeExpiresAt)) {
       p.status = 'EXPIRED';
       return fail('EXPIRED', 'This code has expired. Get a new code.');
     }
@@ -924,7 +1004,7 @@ export class TrackerController {
 
   private async newCode(): Promise<CommandResult> {
     if (!this.pair) return fail('NO_SESSION', 'Sign in again to pair this device');
-    if (Date.now() > this.pair.sessionExpiresAt) {
+    if (this.now() > this.pair.sessionExpiresAt) {
       this.pairSessionExpired();
       return fail('PAIRING_SESSION_EXPIRED', 'Your sign-in expired. Sign in again to pair this device');
     }
@@ -944,7 +1024,7 @@ export class TrackerController {
   /** Device revoked by HR, token rejected, or unpaired from the web: back to sign-in, keep the queue for a re-pair. */
   private onRevoked(notice: string) {
     if (!this.creds) return;
-    const now = Date.now();
+    const now = this.now();
     if (this.engine.status !== 'OUT') this.handleOutput(this.engine.punchOut(now, { detach: true }));
     this.cache.sessionStartedAt = null;
     this.stopOnline();
@@ -973,7 +1053,7 @@ export class TrackerController {
     if (ownSession && !cmd.confirmed && !cmd.discard) return fail(CONFIRM_CODES.unpairPunchOut, 'Punch out and unpair?');
     if (this.engine.prompting) return fail('IDLE_UNRESOLVED', 'Choose how to count your idle time first');
     if (this.engine.status !== 'OUT') {
-      this.handleOutput(this.engine.punchOut(Date.now(), { detach: this.engine.attached }));
+      this.handleOutput(this.engine.punchOut(this.now(), { detach: this.engine.attached }));
       this.cache.sessionStartedAt = null;
       this.log.add(ownSession ? 'Punched out' : 'Tracking stopped');
     }
@@ -1044,7 +1124,7 @@ export class TrackerController {
     if (this.mode === 'MONITOR_ONLY') return fail('PUNCH_NOT_ALLOWED', this.modeMessage ?? vm.MONITOR_ONLY_MESSAGE);
     if (this.engine.status !== 'OUT') return fail('ALREADY_PUNCHED_IN', 'You are already punched in');
     if (this.punchBusy) return fail('BUSY', 'One moment…');
-    const now = Date.now();
+    const now = this.now();
     const blocked = this.punchBlocked(now);
     if (blocked) return fail('PUNCH_BLOCKED', blocked);
     const snap = this.engine.snapshot();
@@ -1072,7 +1152,7 @@ export class TrackerController {
     if (this.engine.status === 'OUT') return fail('NOT_PUNCHED_IN', 'You are not punched in');
     if (this.mode === 'MONITOR_ONLY' && this.engine.attached) return fail('PUNCH_NOT_ALLOWED', 'Office staff punch out with biometric.');
     if (this.engine.prompting) return fail('IDLE_UNRESOLVED', 'Choose how to count your idle time first');
-    const now = Date.now();
+    const now = this.now();
     if (!confirmed) {
       const q = vm.earlyPunchOutPrompt(now, this.cache.policy);
       if (q) return fail(CONFIRM_CODES.earlyPunchOut, q);
@@ -1105,7 +1185,7 @@ export class TrackerController {
     }
     this.punchBusy = true;
     this.push();
-    const t0 = Date.now();
+    const t0 = this.now();
     try {
       const r = await this.api.punch(input);
       this.punchBusy = false;
@@ -1129,7 +1209,7 @@ export class TrackerController {
     this.log.add(msg, 'warn');
     this.opts.shell.notify('Lexisora Tracker', msg);
     if (input.direction === 'IN' && this.engine.status !== 'OUT' && !this.engine.attached) {
-      this.handleOutput(this.engine.punchOut(Date.now(), { detach: true }));
+      this.handleOutput(this.engine.punchOut(this.now(), { detach: true }));
       this.cache.sessionStartedAt = null;
     }
     this.push();
@@ -1139,7 +1219,7 @@ export class TrackerController {
     if (this.engine.status !== 'OUT') return fail('ALREADY_TRACKING', 'Already tracking on this device');
     const t = this.cache.today;
     if (!t || t.status === 'OUT') return fail('NO_SESSION', 'There is no open session to continue. Punch in instead.');
-    const now = Date.now();
+    const now = this.now();
     this.handleOutput(this.engine.punchIn(now, this.engine.activeTaskId ?? this.defaultTaskId(), { attached: true }));
     this.cache.sessionStartedAt = now;
     const src = vm.serverSessionView(t)?.label ?? 'Open session';
@@ -1152,7 +1232,7 @@ export class TrackerController {
   private toggleBreak(): CommandResult {
     if (this.engine.status === 'OUT') return fail('NOT_PUNCHED_IN', 'Punch in first');
     const wasBreak = this.engine.status === 'BREAK';
-    this.handleOutput(this.engine.toggleBreak(Date.now()));
+    this.handleOutput(this.engine.toggleBreak(this.now()));
     this.log.add(wasBreak ? 'Break ended' : 'Break started');
     return ok();
   }
@@ -1161,7 +1241,7 @@ export class TrackerController {
     const t = this.taskList().find((x) => x.id === taskId);
     if (!t) return fail('UNKNOWN_TASK', 'That task is no longer assigned to you');
     if (taskId === this.engine.activeTaskId) return ok();
-    this.handleOutput(this.engine.switchTask(Date.now(), taskId));
+    this.handleOutput(this.engine.switchTask(this.now(), taskId));
     this.log.add(`Switched to ${t.key}`);
     return ok();
   }
@@ -1169,7 +1249,7 @@ export class TrackerController {
   private resolveIdle(resolution: 'WORKING' | 'BREAK' | 'IDLE', note?: string): CommandResult {
     if (!this.engine.prompting) return fail('NO_IDLE', 'There is no idle time to classify');
     if (resolution === 'WORKING' && this.cache.policy && !this.cache.policy.idleClaimsAllowed) return fail('CLAIMS_OFF', 'Idle claims are turned off by HR');
-    const out = this.engine.resolveIdle(Date.now(), resolution, note || undefined);
+    const out = this.engine.resolveIdle(this.now(), resolution, note || undefined);
     const idleSeg = out.segments[0];
     const mins = idleSeg ? Math.max(1, Math.round((idleSeg.endedAt - idleSeg.startedAt) / 60_000)) : 0;
     this.handleOutput(out);
@@ -1196,7 +1276,7 @@ export class TrackerController {
     const today = this.cache.today?.date === this.engine.dayKey ? this.cache.today : null;
     if (today?.weekSubmitted) return fail('WEEK_SUBMITTED', vm.WEEK_SUBMITTED_HINT);
     if (this.confirmBusy) return fail('BUSY', 'Syncing…');
-    const now = Date.now();
+    const now = this.now();
     const date = this.engine.dayKey;
     this.handleOutput(this.engine.checkpoint(now));
     const queueOffline = (): CommandResult => {
@@ -1289,14 +1369,15 @@ export class TrackerController {
 
   // ── screenshots, idle prompt, reminders ─────────────────────────────────
   private async captureScreenshot() {
-    if (this.capturing || this.engine.status === 'OUT') return;
+    // Never while the idle dialog is open or the PC is locked / asleep (spec T4 §5).
+    if (this.capturing || this.engine.status === 'OUT' || this.engine.prompting || this.engine.away) return;
     this.capturing = true;
     const taskId = this.engine.activeTaskId;
     const taskKey = this.taskKey(taskId);
     try {
       const p = this.cache.policy as (typeof this.cache.policy & { screenshotAllMonitors?: boolean }) | null;
       const cap = await captureScreens({ allMonitors: p?.screenshotAllMonitors ?? true, blur: !!p?.blurScreenshots });
-      const capturedAt = Date.now();
+      const capturedAt = this.now();
       const clientId = randomUUID();
       const meta: ScreenshotMeta = { clientId, capturedAt: iso(capturedAt), taskId, monitorCount: Math.min(12, Math.max(1, cap.displays)), blurred: cap.blurred };
       this.store.putBlob(clientId, cap.jpeg);
@@ -1318,7 +1399,7 @@ export class TrackerController {
   }
 
   private onIdleStarted() {
-    const v = this.idleView(Date.now());
+    const v = this.idleView(this.now());
     this.tab = 'track';
     this.log.add(v?.cause === 'NO_INPUT' ? `No input for ${this.cache.policy?.idleThresholdMin ?? 5} min → idle` : (v?.title ?? 'Idle'));
     this.opts.shell.attention();
@@ -1347,7 +1428,7 @@ export class TrackerController {
   // ── dev "prototype controls" ─────────────────────────────────────────────
   private async simulate(kind: Simulation): Promise<CommandResult> {
     if (!this.opts.isDev) return fail('NOT_AVAILABLE', 'Simulation is only available in development builds');
-    const now = Date.now();
+    const now = this.now();
     const working = this.engine.status === 'WORKING' && this.engine.idleState.phase === 'ACTIVE';
     const openStart = this.engine.openSegment?.startedAt ?? now;
     const back = Math.max(1, this.engine.config.idleThresholdSec) * 1000 + 60_000;
@@ -1358,6 +1439,7 @@ export class TrackerController {
         return ok();
       case 'screenshot':
         if (this.engine.status === 'OUT') return fail('NOT_PUNCHED_IN', 'Screenshots only while punched in');
+        if (this.engine.prompting) return fail('IDLE_UNRESOLVED', 'Screenshots pause until the idle time is classified');
         await this.captureScreenshot();
         return ok();
       case 'offline':
@@ -1391,6 +1473,13 @@ export class TrackerController {
       case 'breakReminder':
         this.onBreakReminder();
         return ok();
+      case 'clock': {
+        // Like changing the Windows clock (which needs admin rights): back 2 h, then restore.
+        const back = this.simClockSkewMs === 0;
+        this.simClockSkewMs = back ? -2 * 3600_000 : 0;
+        this.log.add(back ? 'Simulated: PC clock set back 2 h' : 'Simulated: PC clock restored');
+        return ok(back ? 'PC clock set back 2 h (simulated)' : 'PC clock restored (simulated)');
+      }
     }
   }
 
@@ -1430,7 +1519,7 @@ export class TrackerController {
   }
 
   private buildState(): ViewState {
-    const now = Date.now();
+    const now = this.now();
     const p = this.cache.policy;
     const status = this.engine.status;
     const prompting = this.engine.prompting;
@@ -1556,6 +1645,7 @@ export class TrackerController {
       lastSyncAt: this.cache.lastSyncAt ? iso(this.cache.lastSyncAt) : null,
       lastSyncError: this.sync.lastError,
       policyUpdatedAt: this.cache.policy?.updatedAt ?? null,
+      clock: { adjusted: this.clock.adjusted, offsetSec: Math.round(this.clock.offsetMs / 1000), pcClock: iso(Date.now()) },
       engine: {
         status: this.engine.status,
         day: this.engine.dayKey,
@@ -1572,7 +1662,7 @@ export class TrackerController {
   private saveSnapshot() {
     try {
       this.local.snapshot.write(this.engine.snapshot());
-      this.lastSave = Date.now();
+      this.lastSave = this.now();
     } catch (e) {
       this.log.add(`Could not save tracker state: ${String(e)}`, 'error');
     }

@@ -100,7 +100,12 @@ export default function DashboardPage() {
           {data && !data.announcements?.length && <div className="list-row faint">No announcements right now.</div>}
         </div>
         <div className="stack" style={{ gap: 10 }}>
-          <h4 style={{ margin: 0 }}>Birthdays &amp; events</h4>
+          <div className="row-between">
+            <h4 style={{ margin: 0 }}>Birthdays &amp; events</h4>
+            <button className="wp-link" onClick={() => nav('/notices?tab=events')}>
+              See all
+            </button>
+          </div>
           {(data?.events ?? []).map((e) => (
             <div key={e.id} className="list-row">
               <span>{e.what}</span>

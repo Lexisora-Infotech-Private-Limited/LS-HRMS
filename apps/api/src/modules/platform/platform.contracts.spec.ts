@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { alertCategory, alertWhenLabel, auditQuerySchema, createRoleSchema, navMatches, searchTypeLabel, sortSearchGroups } from '@lexisora/shared';
+import {
+  alertCategory,
+  alertWhenLabel,
+  auditChangeRows,
+  auditQuerySchema,
+  createRoleSchema,
+  dayMonthYear,
+  navMatches,
+  searchTypeLabel,
+  sortSearchGroups,
+} from '@lexisora/shared';
 
 const ist = (s: string) => new Date(`${s}+05:30`);
 const NOW = ist('2026-09-29T10:00:00');
@@ -12,6 +22,12 @@ describe('Alerts', () => {
     // Upcoming (e.g. a birthday reminder) shows its date.
     expect(alertWhenLabel(ist('2026-09-30T00:05:00'), NOW)).toBe('30 Sep');
     expect(alertWhenLabel(ist('2025-12-31T12:00:00'), NOW)).toBe('31 Dec 2025');
+  });
+
+  it('dates print "Sep" whatever the runtime ICU says, on the IST business day', () => {
+    expect(dayMonthYear(ist('2026-09-29T10:12:04'))).toBe('29 Sep 2026');
+    // 23:30 UTC on 28 Sep is already 29 Sep in India.
+    expect(dayMonthYear('2026-09-28T23:30:00Z')).toBe('29 Sep 2026');
   });
 
   it('buckets notification types into tabs', () => {
@@ -36,8 +52,9 @@ describe('Global search', () => {
   });
 
   it('orders and labels result groups', () => {
-    const sorted = sortSearchGroups([{ type: 'Payslips' }, { type: 'tasks' }, { type: 'zeta' }, { type: 'people' }, { type: 'goto' }]);
-    expect(sorted.map((g) => g.type)).toEqual(['goto', 'people', 'tasks', 'Payslips', 'zeta']);
+    // Spec M8 order: People, Tasks, Documents, Projects, Notices, … — other domains' types, then "Go to" last.
+    const sorted = sortSearchGroups([{ type: 'goto' }, { type: 'Payslips' }, { type: 'tasks' }, { type: 'zeta' }, { type: 'projects' }, { type: 'people' }, { type: 'Notices' }]);
+    expect(sorted.map((g) => g.type)).toEqual(['people', 'tasks', 'projects', 'Notices', 'Payslips', 'zeta', 'goto']);
     expect(searchTypeLabel('goto')).toBe('Go to');
     expect(searchTypeLabel('people')).toBe('People');
     expect(searchTypeLabel('welcome-kits')).toBe('Welcome kits');
@@ -55,5 +72,20 @@ describe('Contracts', () => {
     expect(q).toMatchObject({ tab: 'all', page: 1, pageSize: 25, module: 'rbac', result: 'denied' });
     expect(auditQuerySchema.safeParse({ module: 'rbac; drop' }).success).toBe(false);
     expect(auditQuerySchema.safeParse({ from: '23-09-2026' }).success).toBe(false);
+  });
+
+  it('audit drawer lists before → after from any producer shape', () => {
+    expect(auditChangeRows(null)).toEqual([]);
+    expect(auditChangeRows({ summary: 'Signed in on the web' })).toEqual([]);
+    expect(auditChangeRows({ from: 'Employee', to: 'Team / Project Lead' })).toEqual([{ field: 'Change', before: 'Employee', after: 'Team / Project Lead' }]);
+    expect(auditChangeRows({ before: { shift: 'General', grace: 10 }, after: { shift: 'Night' } })).toEqual([
+      { field: 'shift', before: 'General', after: 'Night' },
+      { field: 'grace', before: '10', after: '—' },
+    ]);
+    expect(auditChangeRows({ changes: { status: ['PENDING', 'APPROVED'], days: { from: 1, to: 1.5 }, bankAccount: '[redacted]' } })).toEqual([
+      { field: 'status', before: 'PENDING', after: 'APPROVED' },
+      { field: 'days', before: '1', after: '1.5' },
+      { field: 'bankAccount', before: '—', after: '[redacted]' },
+    ]);
   });
 });

@@ -1,12 +1,14 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { searchTypeLabel } from '@lexisora/shared';
-import { useAuth } from '@/lib/auth';
+import { searchTypeLabel, type SearchGroupDto } from '@lexisora/shared';
+import { Avatar } from '@/components/ui';
+import { useAuth, useCan } from '@/lib/auth';
 import { onRealtime } from '@/lib/socket';
-import { useSearchGroups } from './search';
+import { isPeople, useSearchGroups } from './search';
 import './platform.css';
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+type Hit = SearchGroupDto['hits'][number];
 
 /**
  * Header search "Search people, tasks, documents" (spec M8): Ctrl/Cmd+K focuses, 250 ms debounce,
@@ -17,10 +19,13 @@ export function GlobalSearch() {
   const nav = useNavigate();
   const loc = useLocation();
   const { reload } = useAuth();
+  const can = useCan();
   const [text, setText] = useState('');
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
+  // A person whose profile the viewer can't open shows as a mini card instead (spec M8).
+  const [card, setCard] = useState<Hit | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const listId = useId();
@@ -33,6 +38,7 @@ export function GlobalSearch() {
   const { groups, loading } = useSearchGroups(q, 5);
   const flat = useMemo(() => groups.flatMap((g) => g.hits), [groups]);
   useEffect(() => setActive(0), [q]);
+  useEffect(() => setCard(null), [text, open]);
 
   // Ctrl/Cmd+K focuses the search from anywhere.
   useEffect(() => {
@@ -53,7 +59,11 @@ export function GlobalSearch() {
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
   }, []);
-  useEffect(() => setOpen(false), [loc.pathname]);
+  // Navigating closes the panel; the term stays only on the full results page (to refine it there).
+  useEffect(() => {
+    setOpen(false);
+    if (loc.pathname !== '/search') setText('');
+  }, [loc.pathname]);
 
   // Roles & access changes apply live: when an admin changes my role, refresh the session so the
   // sidebar and screen guards follow without signing in again (the API re-reads permissions per request).
@@ -68,6 +78,11 @@ export function GlobalSearch() {
     setText('');
     inputRef.current?.blur();
     nav(link);
+  }
+  /** Open a hit: people the viewer can't open (the provider links them to the guarded directory) get the mini card. */
+  function pick(h: Hit) {
+    if (isPeople(h.type) && h.link === '/employees' && !can('employees.view')) setCard(h);
+    else go(h.link);
   }
   function seeAll() {
     if (term.length < 2) return;
@@ -89,9 +104,10 @@ export function GlobalSearch() {
       // Results still reflect an older term while typing: Enter goes to the full results page instead.
       const fresh = q === term;
       const hit = fresh ? flat[active] : undefined;
-      if (hit) go(hit.link);
+      if (hit) pick(hit);
       else seeAll();
     } else if (e.key === 'Escape') {
+      if (card) return setCard(null);
       setOpen(false);
       inputRef.current?.blur();
     }
@@ -119,7 +135,31 @@ export function GlobalSearch() {
         onKeyDown={onKeyDown}
       />
       {!text && <span className="pf-search-kbd">{isMac ? '⌘K' : 'Ctrl K'}</span>}
-      {showPanel && (
+      {showPanel && card && (
+        <div className="pf-search-panel" id={listId} role="dialog" aria-label={card.title}>
+          <div className="pf-search-card">
+            <Avatar name={card.title} size={44} />
+            <div className="pf-search-text">
+              <span className="serif" style={{ fontSize: 16 }}>{card.title}</span>
+              {card.subtitle && <small>{card.subtitle}</small>}
+            </div>
+          </div>
+          <div className="pf-search-foot">
+            <span className="row" style={{ gap: 6 }}>
+              {can('chat.use') && (
+                <button type="button" className="btn btn-secondary btn-sm" onMouseDown={(e) => e.preventDefault()} onClick={() => go('/chat')}>
+                  Message
+                </button>
+              )}
+              <button type="button" className="btn btn-ghost btn-sm" onMouseDown={(e) => e.preventDefault()} onClick={() => setCard(null)}>
+                Back to results
+              </button>
+            </span>
+            <span>Esc back</span>
+          </div>
+        </div>
+      )}
+      {showPanel && !card && (
         <div className="pf-search-panel" id={listId} role="listbox" aria-label="Search results">
           {groups.map((g) => (
             <div key={g.type} role="group" aria-label={searchTypeLabel(g.type)}>
@@ -136,16 +176,20 @@ export function GlobalSearch() {
                     className="pf-search-item"
                     onMouseEnter={() => setActive(i)}
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => go(h.link)}
+                    onClick={() => pick(h)}
                   >
-                    <span>{h.title}</span>
-                    {h.subtitle && <small>{h.subtitle}</small>}
+                    {isPeople(g.type) && <Avatar name={h.title} size={26} />}
+                    <span className="pf-search-text">
+                      <span>{h.title}</span>
+                      {h.subtitle && <small>{h.subtitle}</small>}
+                    </span>
                   </button>
                 );
               })}
             </div>
           ))}
           {!groups.length && <div className="pf-search-empty">{loading || q !== term ? 'Searching…' : `No results for “${term}”`}</div>}
+          {groups.length > 0 && (loading || q !== term) && <div className="pf-search-empty" aria-live="polite">Searching…</div>}
           <div className="pf-search-foot">
             <button
               type="button"

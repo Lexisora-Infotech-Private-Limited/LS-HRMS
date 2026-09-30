@@ -3,6 +3,9 @@ import { navMatches, sortSearchGroups, type SearchGroupDto } from '@lexisora/sha
 import { useMe } from '@/lib/auth';
 import { useSearch } from './api';
 
+/** People results show an avatar (spec M8: avatar, name, designation · department). */
+export const isPeople = (type: string) => type.toLowerCase() === 'people';
+
 /**
  * Header/global search results: server groups (people, tasks, projects… — each domain registers a
  * permission-aware provider on core /search) plus a client-side "Go to" group of sidebar screens the

@@ -2,36 +2,9 @@ import { Injectable } from '@nestjs/common';
 import { initialsOf, type WpAudienceRule } from '@lexisora/shared';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { SpineReader } from './spine';
+import { projectIdsByEmployee, resolveAudience, ruleMatches, type AudienceSubject } from './audience.rules';
 
-export type AudienceSubject = { id: string; departmentId: string | null; branchId: string | null; employmentType: string; projectIds: string[] };
-
-/** Pure rule matching (unit-tested): an employee matches when ANY rule matches. */
-export function ruleMatches(e: AudienceSubject, rules: WpAudienceRule[]): boolean {
-  if (!rules.length) return true;
-  return rules.some((r) => {
-    switch (r.type) {
-      case 'ALL':
-        return true;
-      case 'DEPARTMENT':
-        return !!r.refId && e.departmentId === r.refId;
-      case 'BRANCH':
-        return !!r.refId && e.branchId === r.refId;
-      case 'EMPLOYEE':
-        return r.refId === e.id;
-      case 'EMPLOYMENT_TYPE':
-        return r.refId === e.employmentType;
-      case 'PROJECT':
-        return !!r.refId && e.projectIds.includes(r.refId);
-      default:
-        return false;
-    }
-  });
-}
-
-/** Resolve a set of rules against a population (pure; used by resolve() and tests). */
-export function resolveAudience(pop: AudienceSubject[], rules: WpAudienceRule[]): string[] {
-  return pop.filter((e) => ruleMatches(e, rules)).map((e) => e.id);
-}
+export { projectIdsByEmployee, resolveAudience, ruleMatches, type AudienceSubject } from './audience.rules';
 
 export const ACTIVE_STATUSES = ['ACTIVE', 'NOTICE_PERIOD'] as const;
 
@@ -53,11 +26,8 @@ export class AudienceService {
       where: { status: { in: [...ACTIVE_STATUSES] } },
       select: { id: true, departmentId: true, branchId: true, employmentType: true },
     });
-    const members = await this.spine.projectMembers({});
-    const leads = await this.spine.projects({});
-    const byEmp = new Map<string, Set<string>>();
-    for (const m of members) (byEmp.get(m.employeeId) ?? byEmp.set(m.employeeId, new Set()).get(m.employeeId)!).add(m.projectId);
-    for (const p of leads) if (p.leadEmployeeId) (byEmp.get(p.leadEmployeeId) ?? byEmp.set(p.leadEmployeeId, new Set()).get(p.leadEmployeeId)!).add(p.id);
+    const [members, projects] = await Promise.all([this.spine.projectMembers({}), this.spine.projects({})]);
+    const byEmp = projectIdsByEmployee(members, projects);
     return emps.map((e) => ({ ...e, projectIds: [...(byEmp.get(e.id) ?? [])] }));
   }
 

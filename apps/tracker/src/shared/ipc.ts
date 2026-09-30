@@ -18,7 +18,7 @@ export type Tone = 'tag-neutral' | 'tag-accent' | 'tag-outline';
 export type Prefs = { launchAtStartup: boolean; showTrayWidget: boolean; breakReminders: boolean };
 export const PREF_KEYS = ['launchAtStartup', 'showTrayWidget', 'breakReminders'] as const;
 
-export const SIMULATIONS = ['idle', 'screenshot', 'offline', 'lock', 'appGap', 'breakReminder'] as const;
+export const SIMULATIONS = ['idle', 'screenshot', 'offline', 'lock', 'appGap', 'breakReminder', 'clock'] as const;
 export type Simulation = (typeof SIMULATIONS)[number];
 
 export const commandSchema = z.discriminatedUnion('type', [
@@ -65,12 +65,7 @@ export type CommandResult<T = unknown> =
   | { ok: true; data?: T; message?: string }
   | { ok: false; code: string; error: string; meta?: Record<string, unknown> };
 
-/** Result codes that ask the renderer for a confirmation step. */
-export const CONFIRM_CODES = {
-  earlyPunchOut: 'CONFIRM_EARLY_PUNCH_OUT',
-  unpairPunchOut: 'CONFIRM_UNPAIR_PUNCH_OUT',
-  unpairOffline: 'UNPAIR_QUEUE_OFFLINE',
-} as const;
+export { CONFIRM_CODES } from './channels';
 
 export type TaskRow = {
   id: string;

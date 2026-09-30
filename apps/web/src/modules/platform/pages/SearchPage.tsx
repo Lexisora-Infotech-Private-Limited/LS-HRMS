@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { searchTypeLabel } from '@lexisora/shared';
-import { Empty, ErrorBlock, Loading, PageHeader, Tabs } from '@/components/ui';
-import { useSearchGroups } from '../search';
+import { Avatar, Empty, ErrorBlock, Loading, PageHeader, Tabs } from '@/components/ui';
+import { useCan } from '@/lib/auth';
+import { isPeople, useSearchGroups } from '../search';
 import '../platform.css';
 
 /** "See all results" page for the header search: every group, filter tabs by type. */
 export default function SearchPage() {
   const nav = useNavigate();
+  const can = useCan();
   const [params, setParams] = useSearchParams();
   const q = params.get('q') ?? '';
   const [text, setText] = useState(q);
@@ -55,18 +57,31 @@ export default function SearchPage() {
               <div className="card" key={g.type}>
                 <div className="card-kicker">{searchTypeLabel(g.type)}</div>
                 <div>
-                  {g.hits.map((h) => (
-                    <button
-                      key={`${g.type}:${h.id}`}
-                      type="button"
-                      className="list-row"
-                      style={{ width: '100%', background: 'transparent', border: 0, borderTop: '1px solid var(--color-divider)', font: 'inherit', textAlign: 'left', cursor: 'pointer', color: 'inherit' }}
-                      onClick={() => nav(h.link)}
-                    >
-                      <span>{h.title}</span>
-                      {h.subtitle && <span className="faint">{h.subtitle}</span>}
-                    </button>
-                  ))}
+                  {g.hits.map((h) =>
+                    // People whose profile the viewer can't open: a mini card row (name, designation, Message).
+                    isPeople(g.type) && h.link === '/employees' && !can('employees.view') ? (
+                      <div key={`${g.type}:${h.id}`} className="pf-results-row pf-results-static">
+                        <Avatar name={h.title} size={30} />
+                        <span className="pf-search-text">
+                          <span>{h.title}</span>
+                          {h.subtitle && <small className="faint">{h.subtitle}</small>}
+                        </span>
+                        {can('chat.use') && (
+                          <button type="button" className="btn btn-ghost btn-sm" style={{ marginLeft: 'auto' }} onClick={() => nav('/chat')}>
+                            Message
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <button key={`${g.type}:${h.id}`} type="button" className="pf-results-row" onClick={() => nav(h.link)}>
+                        {isPeople(g.type) && <Avatar name={h.title} size={30} />}
+                        <span className="pf-search-text">
+                          <span>{h.title}</span>
+                          {h.subtitle && <small className="faint">{h.subtitle}</small>}
+                        </span>
+                      </button>
+                    ),
+                  )}
                 </div>
               </div>
             ))

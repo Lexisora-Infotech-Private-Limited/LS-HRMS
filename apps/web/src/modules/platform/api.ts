@@ -40,7 +40,9 @@ export const rolesApi = {
   setPermission: (id: string, key: string, enabled: boolean, cascade?: boolean) =>
     put<RoleChangeResult>(`/roles/${id}/permissions/${encodeURIComponent(key)}`, { enabled, cascade }),
   setMatrixRow: (id: string, row: string, enabled: boolean) => put<RoleChangeResult>(`/roles/${id}/matrix`, { row, enabled }),
-  setAll: (id: string, permissions: string[]) => put<RoleChangeResult>(`/roles/${id}/permissions`, { permissions }),
+  /** Replace the whole set: Undo, or a group "Turn all on / off" in the per-role editor. */
+  setAll: (id: string, permissions: string[], group?: string) =>
+    put<RoleChangeResult>(`/roles/${id}/permissions`, group ? { permissions, reason: 'group', group } : { permissions, reason: 'undo' }),
   addMembers: (id: string, userIds: string[]) => post<RoleMemberDto[]>(`/roles/${id}/members`, { userIds }),
   removeMember: (id: string, userId: string) => del<RoleMemberDto[]>(`/roles/${id}/members/${userId}`),
 };

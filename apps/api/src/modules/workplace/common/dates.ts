@@ -35,6 +35,12 @@ export function istMinuteOfDay(d: Date): number {
 
 const fmt = (opts: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', ...opts });
 
+/**
+ * Fixed three-letter month names: recent CLDR data renders en-GB/en-IN September as
+ * "Sept", while the product copy (wireframe) uses "Sep" everywhere.
+ */
+export const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;
+
 /** "Tuesday, 29 September 2026" */
 export function longDate(d: Date): string {
   const p = fmt({ weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).formatToParts(d);
@@ -42,9 +48,10 @@ export function longDate(d: Date): string {
   return `${g('weekday')}, ${g('day')} ${g('month')} ${g('year')}`;
 }
 
-/** "29 Sep" */
+/** "29 Sep" (IST calendar day of the instant; date-only values keep their date). */
 export function dayMonth(d: Date): string {
-  return fmt({ day: 'numeric', month: 'short' }).format(d);
+  const s = new Date(d.getTime() + IST_OFFSET_MIN * 60_000);
+  return `${s.getUTCDate()} ${MONTHS_SHORT[s.getUTCMonth()]}`;
 }
 
 /** "Wed" */
@@ -76,7 +83,7 @@ export function dueLabel(dueKey: string | null, today: string): string {
   const diff = Math.round((dateOnly(dueKey).getTime() - dateOnly(today).getTime()) / DAY_MS);
   const d = dateOnly(dueKey);
   if (diff < 7) return new Intl.DateTimeFormat('en-GB', { weekday: 'short', timeZone: 'UTC' }).format(d);
-  return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' }).format(d);
+  return `${d.getUTCDate()} ${MONTHS_SHORT[d.getUTCMonth()]}`;
 }
 
 /** Monday of the IST week containing `key`. */

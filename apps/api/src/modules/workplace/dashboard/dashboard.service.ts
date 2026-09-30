@@ -25,67 +25,11 @@ import { AudienceService } from '../common/audience';
 import { SpineReader } from '../common/spine';
 import { addDaysKey, dateOnly, dayMonth, DAY_MS, dueLabel, istInstant, keyOf, longDate, shortTime, todayKey, weekStartKey } from '../common/dates';
 import { NoticesService } from '../notices/notices.service';
+import { approvalsFor, celebrationsWithin, DEFAULT_QUOTES, sortTodos, taskLink, titleLine, weekRangeLabel } from './dashboard.rules';
 
-export const DEFAULT_QUOTES = [
-  'Small steps every day add up to big results.',
-  'Do the hard thing first; the rest of the day gets lighter.',
-  'Quality is never an accident.',
-  'You are one focused hour away from a good day.',
-];
+export { approvalsFor, celebrationsWithin, DEFAULT_QUOTES, reviewLink, sortTodos, taskLink, titleLine, weekRangeLabel } from './dashboard.rules';
 
 type RawTodo = DashboardTodo & { sortDate: string; prio: number; createdAt: number };
-
-const isLeap = (y: number) => (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
-
-/** Upcoming birthdays/anniversaries within `days` from `today` (pure; unit-tested). */
-export function celebrationsWithin(
-  people: { id: string; name: string; dob: Date | null; joined: Date | null }[],
-  today: string,
-  days: number,
-  excludeId?: string | null,
-): DashboardEvent[] {
-  const out: DashboardEvent[] = [];
-  const inWindow = (md: string) => {
-    for (let add = 0; add <= days; add++) {
-      const k = addDaysKey(today, add);
-      if (k.slice(5) === md) return k;
-      // 29 Feb birthdays show on 28 Feb in non-leap years
-      if (md === '02-29' && k.slice(5) === '02-28' && !isLeap(+k.slice(0, 4))) return k;
-    }
-    return null;
-  };
-  for (const p of people) {
-    if (p.id === excludeId) continue;
-    if (p.dob) {
-      const k = inWindow(keyOf(p.dob).slice(5));
-      if (k) out.push({ id: `bday:${p.id}`, kind: 'BIRTHDAY', what: `${p.name} · birthday`, when: dayMonth(dateOnly(k)), date: k });
-    }
-    if (p.joined) {
-      const k = inWindow(keyOf(p.joined).slice(5));
-      const years = k ? +k.slice(0, 4) - p.joined.getUTCFullYear() : 0;
-      if (k && years >= 1) out.push({ id: `anniv:${p.id}`, kind: 'ANNIVERSARY', what: `${p.name} · ${years} year${years > 1 ? 's' : ''}`, when: dayMonth(dateOnly(k)), date: k });
-    }
-  }
-  return out.sort((a, b) => a.date.localeCompare(b.date) || a.what.localeCompare(b.what));
-}
-
-/** Merge + sort to-dos: overdue first, then due date, then system → board → personal, then age. */
-export function sortTodos<T extends { overdue: boolean; sortDate: string; prio: number; createdAt: number }>(items: T[]): T[] {
-  return items.slice().sort((a, b) => Number(b.overdue) - Number(a.overdue) || a.sortDate.localeCompare(b.sortDate) || a.prio - b.prio || a.createdAt - b.createdAt);
-}
-
-/** "21–27 Sep" for the week starting `weekStart` (Mon). */
-export function weekRangeLabel(weekStart: string): string {
-  const end = addDaysKey(weekStart, 6);
-  const mon = (k: string) => dayMonth(dateOnly(k)).split(' ')[1];
-  return mon(weekStart) === mon(end) ? `${+weekStart.slice(8)}–${+end.slice(8)} ${mon(end)}` : `${+weekStart.slice(8)} ${mon(weekStart)} – ${+end.slice(8)} ${mon(end)}`;
-}
-
-/** Choose where "Review now" goes: the first queue with work waiting, else the first queue. */
-export function reviewLink(rows: { count: number; link: string }[] | null): string | null {
-  if (!rows?.length) return null;
-  return (rows.find((r) => r.count > 0) ?? rows[0])!.link;
-}
 
 @Injectable()
 export class DashboardService {
@@ -114,7 +58,7 @@ export class DashboardService {
             ? await this.prisma.employee.findUnique({ where: { id: ctx.employeeId }, include: { designation: true, department: true } })
             : null;
           const first = me?.firstName ?? (ctx.userName ?? '').split(' ')[0] ?? '';
-          const title = me ? [me.designation?.name, me.department?.name].filter(Boolean).join(' · ') : '';
+          const title = me ? titleLine(me.designation?.name, me.department?.name) : '';
           out.greeting = { kicker: longDate(now), dayPart: dayPartFor(now), firstName: first, title, localDate: todayKey(now) };
         })(),
       );
@@ -130,7 +74,7 @@ export class DashboardService {
     if (want('approvals'))
       tasks.push(
         guard(this.approvals.counts(), []).then((c) => {
-          out.approvals = ctx.roleKey === 'employee' && !c.some((x) => x.count > 0) ? null : c.length ? c : null;
+          out.approvals = approvalsFor(ctx.roleKey, c);
         }),
       );
     if (want('announcements')) tasks.push(guard(this.notices.latestForMe(5), []).then((a) => void (out.announcements = a)));
@@ -209,14 +153,14 @@ export class DashboardService {
     return { items: all.slice(0, limit), more: Math.max(0, all.length - limit) };
   }
 
-  /** GET /todos — every merged item plus my personal list (done items stay 7 days). */
+  /** GET /todos — every merged item plus my personal list (done items stay visible for 24 hours, spec §1.3). */
   async listTodos(): Promise<TodosResponse> {
     const ctx = requireContext();
     const me = ctx.employeeId;
     if (!me) return { items: [], personal: [] };
     const [items, rows] = await Promise.all([
       this.allTodos(ctx),
-      this.prisma.personalTodo.findMany({ where: { employeeId: me, OR: [{ completedAt: null }, { completedAt: { gt: new Date(Date.now() - 7 * DAY_MS) } }] }, orderBy: [{ completedAt: 'asc' }, { dueDate: 'asc' }, { createdAt: 'asc' }] }),
+      this.prisma.personalTodo.findMany({ where: { employeeId: me, OR: [{ completedAt: null }, { completedAt: { gt: new Date(Date.now() - DAY_MS) } }] }, orderBy: [{ completedAt: { sort: 'asc', nulls: 'first' } }, { dueDate: { sort: 'asc', nulls: 'last' } }, { createdAt: 'asc' }] }),
     ]);
     return { items, personal: rows.map((r) => this.personalRow(r)) };
   }
@@ -268,13 +212,13 @@ export class DashboardService {
         if (projectIds.length) or.push({ projectId: { in: projectIds } });
         const tasks = await this.spine.tasks({ status: 'DEV_COMPLETED', AND: [{ OR: or }, { OR: [{ assigneeEmployeeId: null }, { assigneeEmployeeId: { not: me } }] }] }, 10);
         for (const t of tasks)
-          push({ id: `sys:review:${t.id}`, source: 'SYSTEM', text: `Code review: ${t.key} ${t.title}`, dueDate: t.dueDate ? keyOf(t.dueDate) : null, link: `/kanban?task=${t.key}`, checkable: false, prio: 0, createdAt: 2 });
+          push({ id: `sys:review:${t.id}`, source: 'SYSTEM', text: `Code review: ${t.key} ${t.title}`, dueDate: t.dueDate ? keyOf(t.dueDate) : null, link: taskLink(t), checkable: false, prio: 0, createdAt: 2 });
       })(),
       // 4. Board tasks assigned to me (ALLOTTED/WIP), due within 7 days or overdue
       (async () => {
         const tasks = await this.spine.tasks({ assigneeEmployeeId: me, status: { in: ['ALLOTTED', 'WIP'] }, dueDate: { lte: dateOnly(addDaysKey(today, 7)) } }, 10);
         for (const t of tasks)
-          push({ id: `board:${t.id}`, source: 'BOARD', text: `${t.key} ${t.title}`, dueDate: t.dueDate ? keyOf(t.dueDate) : null, link: `/kanban?task=${t.key}`, checkable: false, prio: 1, createdAt: 0 });
+          push({ id: `board:${t.id}`, source: 'BOARD', text: `${t.key} ${t.title}`, dueDate: t.dueDate ? keyOf(t.dueDate) : null, link: taskLink(t), checkable: false, prio: 1, createdAt: 0 });
       })(),
       // 5. Required courses due within 7 days / overdue
       (async () => {

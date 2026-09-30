@@ -117,6 +117,20 @@ export function replacePermissions(current: readonly string[], wanted: readonly 
   return { next: ordered.concat(legacy), added, removed };
 }
 
+/**
+ * The plan whose features a workspace is entitled to, from its Subscription row.
+ *  - no row: the workspace was not provisioned through billing (the operator's own workspace,
+ *    tenants created before billing existed) → nothing is plan-gated ("INTERNAL")
+ *  - CANCELLED: a cancelled paid plan falls back to the Free features
+ *  - otherwise the subscribed plan (past-due / read-only / suspended keep their entitlements;
+ *    what those statuses allow is enforced separately)
+ */
+export function effectivePlan(sub: { planCode: string; status: string } | null | undefined): PlanCode {
+  if (!sub) return 'INTERNAL';
+  if (sub.status === 'CANCELLED') return 'FREE';
+  return sub.planCode in PLAN_RANK ? (sub.planCode as PlanCode) : 'FREE';
+}
+
 /** Does the tenant's plan include the feature behind this permission? */
 export function planAllows(plan: PlanCode, key: string): boolean {
   const min = PERMISSION_MIN_PLAN[key as PermissionKey];

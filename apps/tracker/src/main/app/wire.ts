@@ -28,6 +28,15 @@ export function punchInput(e: EngineEvent): TrackerPunchInput {
   };
 }
 
+/** CLOCK_CHANGE {driftSec, cause} → the server raises a CLOCK_CHANGED integrity flag (spec T5 §5 / T8). */
+export function clockChangeEvent(
+  c: { at: number; driftSec: number; cause: 'JUMP' | 'RESTART' },
+  taskId: string | null,
+  clientId: string,
+): TrackerEvent {
+  return { clientId, type: 'CLOCK_CHANGE', at: iso(c.at), taskId, payload: { driftSec: c.driftSec, cause: c.cause } };
+}
+
 export function eventToWire(e: EngineEvent): TrackerEvent {
   const out: TrackerEvent = { clientId: e.clientId, type: e.type, at: iso(e.at), taskId: e.taskId ?? null };
   if (e.resolution) out.resolution = e.resolution;

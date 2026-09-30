@@ -304,6 +304,21 @@ describe('punch-out closes segments', () => {
     expect(e.status).toBe('OUT');
   });
 
+  it('a session auto-closed overnight detaches at the idle start without inventing overnight idle', () => {
+    const e = make();
+    e.punchIn(ist('09:30'), 'AT-101');
+    e.tick(ist('18:15'), 300); // no input since 18:10 → prompt, WORK closed at 18:10
+    expect(e.prompting).toBe(true);
+    const since = (e.idleState as { since: number }).since;
+    const out = e.punchOut(since, { detach: true });
+    expect(out.segments).toHaveLength(0);
+    expect(e.status).toBe('OUT');
+    expect(e.lastOutAt).toBe(ist('18:10'));
+    const t = e.totals(Date.parse('2026-09-30T08:00:00+05:30'));
+    expect(mins(t.workedSec)).toBe(8 * 60 + 40);
+    expect(t.idleSec).toBe(0);
+  });
+
   it('attached sessions emit no PUNCH_IN', () => {
     const e = make();
     expect(e.punchIn(ist('09:30'), 'AT-101', { attached: true }).events).toHaveLength(0);

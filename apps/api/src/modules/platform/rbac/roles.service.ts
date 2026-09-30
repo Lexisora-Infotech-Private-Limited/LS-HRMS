@@ -29,6 +29,7 @@ import {
   DependencyError,
   accessChangeSummary,
   applyToggle,
+  effectivePlan,
   isPermissionKey,
   label,
   lockedKeys,
@@ -50,8 +51,8 @@ export class RolesService {
   ) {}
 
   async tenantPlan(): Promise<PlanCode> {
-    const sub = await this.prisma.subscription.findFirst({ select: { planCode: true } });
-    return (sub?.planCode as PlanCode) ?? 'FREE';
+    const sub = await this.prisma.subscription.findFirst({ select: { planCode: true, status: true } });
+    return effectivePlan(sub);
   }
 
   private async myRoleId(): Promise<string | null> {
@@ -59,6 +60,14 @@ export class RolesService {
     if (!ctx.userId) return null;
     const u = await this.prisma.user.findUnique({ where: { id: ctx.userId }, select: { roleId: true } });
     return u?.roleId ?? null;
+  }
+
+  /**
+   * Every open Roles & access screen in the tenant refetches (two admins editing at once: last write
+   * wins and both re-render). Members of the role additionally get `rbac.changed` to reload their session.
+   */
+  private broadcast(roleId: string) {
+    this.realtime.toTenant(requireContext().tenantId, 'rbac.roles.changed', { roleId });
   }
 
   private sortRoles<T extends { key: string; isSystem: boolean; createdAt: Date }>(roles: T[]): T[] {
@@ -145,20 +154,27 @@ export class RolesService {
       include: { _count: { select: { users: true } } },
     });
     await this.audit.record({ action: 'rbac.role.created', entity: 'Role', entityId: role.id, meta: { summary: `Created role ${role.name}${copiedFrom ? ` (copied from ${copiedFrom})` : ''}`, copiedFrom, permissions: permissions.length } });
+    this.broadcast(role.id);
     return this.dto(role, await this.myRoleId());
   }
 
   async update(id: string, input: UpdateRoleInput): Promise<RoleDto> {
     const role = await this.load(id);
     if (input.name && input.name !== role.name) await this.assertNameFree(input.name, id);
+    // An emptied description is stored as null (the screen then shows "System role" / "Custom role").
+    const description = input.description === undefined ? undefined : input.description || null;
     const updated = await this.prisma.role.update({
       where: { id },
-      data: { name: input.name ?? undefined, description: input.description === undefined ? undefined : input.description },
+      data: { name: input.name ?? undefined, description },
       include: { _count: { select: { users: true } } },
     });
     if (input.name && input.name !== role.name) {
       await this.audit.record({ action: 'rbac.role.renamed', entity: 'Role', entityId: id, meta: { summary: `Renamed ${role.name} → ${updated.name}`, from: role.name, to: updated.name } });
     }
+    if (description !== undefined && description !== role.description) {
+      await this.audit.record({ action: 'rbac.role.described', entity: 'Role', entityId: id, meta: { summary: `Updated the description of ${updated.name}`, from: role.description, to: updated.description } });
+    }
+    this.broadcast(id);
     return this.dto(updated, await this.myRoleId());
   }
 
@@ -168,6 +184,7 @@ export class RolesService {
     if (role._count.users > 0) throw conflict(`Reassign the ${role._count.users} member(s) of ${role.name} to another role first`, 'ROLE_HAS_MEMBERS');
     await this.prisma.role.delete({ where: { id } });
     await this.audit.record({ action: 'rbac.role.deleted', entity: 'Role', entityId: id, meta: { summary: `Deleted role ${role.name}` } });
+    this.broadcast(id);
   }
 
   /** Users (other than those in `exceptRoleId`) who would still hold roles.manage. */
@@ -206,6 +223,7 @@ export class RolesService {
       });
     }
     await this.announce(role.id, added, removed);
+    this.broadcast(role.id);
     return { role: this.dto(updated, await this.myRoleId()), added, removed };
   }
 
@@ -262,12 +280,13 @@ export class RolesService {
    * Replace the whole permission set (the screen's "Undo", bulk edits). Unknown keys are refused;
    * everything a key requires is added; legacy keys already on the role are kept.
    */
-  async setAll(id: string, permissions: string[]): Promise<RoleChangeResult> {
-    const unknown = permissions.filter((k) => !isPermissionKey(k));
-    if (unknown.length) throw badRequest(`Unknown permission ${unknown[0]}`, 'UNKNOWN_PERMISSION');
+  async setAll(id: string, permissions: string[], context = 'undo'): Promise<RoleChangeResult> {
     const role = await this.load(id);
+    // Legacy keys already on the role may come back from the screen (they're kept as they are).
+    const unknown = permissions.filter((k) => !isPermissionKey(k) && !role.permissions.includes(k));
+    if (unknown.length) throw badRequest(`Unknown permission ${unknown[0]}`, 'UNKNOWN_PERMISSION');
     const r = replacePermissions(role.permissions, permissions);
-    return this.commit(role, r.next, r.added, r.removed, 'restored');
+    return this.commit(role, r.next, r.added, r.removed, context);
   }
 
   async members(id: string): Promise<RoleMemberDto[]> {
@@ -331,6 +350,7 @@ export class RolesService {
       }
       this.realtime.toUsers(moving.map((u) => u.id), 'rbac.changed', { roleId: id });
       await this.notifications.notify({ userIds: moving.map((u) => u.id).filter((x) => x !== ctx.userId), type: 'rbac.role_changed', title: `Your role is now ${role.name}`, link: '/dashboard', from: 'Admin' });
+      this.broadcast(id);
     }
     return this.members(id);
   }
@@ -354,6 +374,7 @@ export class RolesService {
     if (role.permissions.includes('mobile.access') && !fallback.permissions.includes('mobile.access')) await this.endMobileSessions([u.id], `moved to ${fallback.name}`);
     this.realtime.toUser(u.id, 'rbac.changed', { roleId: fallback.id });
     await this.notifications.notify({ userIds: [u.id], type: 'rbac.role_changed', title: `Your role is now ${fallback.name}`, link: '/dashboard', from: 'Admin' });
+    this.broadcast(id);
     return this.members(id);
   }
 }

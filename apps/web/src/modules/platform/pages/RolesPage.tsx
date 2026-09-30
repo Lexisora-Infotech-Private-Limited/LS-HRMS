@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   HIGH_RISK_KEYS,
@@ -15,15 +15,18 @@ import { FormModal, type FieldDef } from '@/components/form';
 import { HttpError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useAction } from '@/lib/query';
+import { onRealtime } from '@/lib/socket';
 import { useToast } from '@/lib/toast';
 import { qk, rolesApi, useRoles } from '../api';
 import { RoleMembers } from './RoleMembers';
+import { RoleEditor, type RoleEditorAction } from './RoleEditor';
 import '../platform.css';
 
 type Row = { label: string; keys: string[] };
 type Change =
   | { kind: 'row'; role: RoleDto; row: Row; enabled: boolean }
-  | { kind: 'key'; role: RoleDto; key: string; enabled: boolean; cascade?: boolean };
+  | { kind: 'key'; role: RoleDto; key: string; enabled: boolean; cascade?: boolean }
+  | { kind: 'bulk'; role: RoleDto; group: string; keys: string[]; enabled: boolean };
 type KeyChange = Extract<Change, { kind: 'key' }>;
 type PermItem = RolesResponse['groups'][number]['items'][number];
 
@@ -74,6 +77,8 @@ export default function RolesPage() {
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [undo, setUndo] = useState<Undo | null>(null);
   const [filter, setFilter] = useState('');
+  // "All permissions" shows every role side by side, or one role's full editor.
+  const [focus, setFocus] = useState<string | null>(null);
   const close = () => setModal(null);
 
   // Role header menu closes on any outside click.
@@ -92,6 +97,17 @@ export default function RolesPage() {
     const t = setTimeout(() => setUndo(null), Math.max(0, undo.until - Date.now()));
     return () => clearTimeout(t);
   }, [undo]);
+
+  // Another admin changed a role: refetch (last write wins). While our own toggles are in flight
+  // their responses update the cache, so a refetch then would only flicker the optimistic cells.
+  const inFlight = useRef(0);
+  useEffect(
+    () =>
+      onRealtime('rbac.roles.changed', () => {
+        if (inFlight.current === 0) void qc.invalidateQueries({ queryKey: qk.roles });
+      }),
+    [qc],
+  );
 
   const data = roles.data;
   const items = useMemo(() => {
@@ -121,16 +137,19 @@ export default function RolesPage() {
   const list = data.roles;
   const employeeRole = list.find((r) => r.key === 'employee' && r.isSystem) ?? list[0];
 
-  const pendingKey = (c: Change) => `${c.role.id}|${c.kind === 'row' ? `row:${c.row.label}` : `key:${c.key}`}`;
-  const whatOf = (c: Change) => (c.kind === 'row' ? c.row.label : labelOf(c.key));
+  const pendingKey = (c: Change) => `${c.role.id}|${c.kind === 'row' ? `row:${c.row.label}` : c.kind === 'bulk' ? `bulk:${c.group}` : `key:${c.key}`}`;
+  const whatOf = (c: Change) => (c.kind === 'row' ? c.row.label : c.kind === 'bulk' ? `all ${c.group} permissions` : labelOf(c.key));
+  const keysOf = (c: Change) => (c.kind === 'row' ? c.row.keys : c.kind === 'bulk' ? c.keys : [c.key]);
 
   /** High-risk rows/keys and Mobile for non-top-level roles ask first. */
   function request(c: Change) {
-    const keys = c.kind === 'row' ? c.row.keys : [c.key];
-    if (!keys.some(isHighRisk)) return void run(c);
+    const keys = keysOf(c);
+    // Only keys whose state actually changes count (a group "Turn all on" skips what is already on).
+    const changing = keys.filter((k) => c.role.permissions.includes(k) !== c.enabled);
+    if (!changing.some(isHighRisk)) return void run(c);
     const what = whatOf(c);
     if (c.enabled) {
-      const mobileWarn = keys.includes('mobile.access') && !(TOP_LEVEL_ROLE_KEYS as readonly string[]).includes(c.role.key);
+      const mobileWarn = changing.includes('mobile.access') && !(TOP_LEVEL_ROLE_KEYS as readonly string[]).includes(c.role.key);
       setModal({
         kind: 'confirm',
         change: c,
@@ -148,14 +167,26 @@ export default function RolesPage() {
 
   async function run(c: Change) {
     const id = pendingKey(c);
-    const keys = c.kind === 'row' ? c.row.keys : [c.key];
+    const keys = keysOf(c);
     const previous = c.role.permissions;
+    const flip = (p: string[]) => (c.enabled ? [...new Set([...p, ...keys])] : p.filter((k) => !keys.includes(k)));
+    inFlight.current += 1;
     setPending((s) => new Set(s).add(id));
     // Optimistic: flip the cell right away; the server response (with any dependencies) replaces it.
-    patchPerms(c.role.id, (p) => (c.enabled ? [...new Set([...p, ...keys])] : p.filter((k) => !keys.includes(k))));
+    patchPerms(c.role.id, flip);
     try {
-      const r = c.kind === 'row' ? await rolesApi.setMatrixRow(c.role.id, c.row.label, c.enabled) : await rolesApi.setPermission(c.role.id, c.key, c.enabled, c.cascade);
+      const r =
+        c.kind === 'row'
+          ? await rolesApi.setMatrixRow(c.role.id, c.row.label, c.enabled)
+          : c.kind === 'bulk'
+            ? await rolesApi.setAll(c.role.id, flip(previous), c.group)
+            : await rolesApi.setPermission(c.role.id, c.key, c.enabled, c.cascade);
       setRoleInCache(r.role);
+      if (c.kind === 'bulk' && !c.enabled) {
+        // A group "Turn all off" keeps keys that permissions in other groups still need.
+        const kept = keys.filter((k) => r.role.permissions.includes(k));
+        if (kept.length) toast(`Kept ${kept.map(labelOf).join(', ')} — other permissions of ${c.role.shortName} need them`);
+      }
       if (r.added.length || r.removed.length) {
         const also = alsoEnabledCopy(r.added, keys);
         const cascaded = r.removed.filter((k) => !keys.includes(k));
@@ -169,6 +200,7 @@ export default function RolesPage() {
       if (e instanceof HttpError && e.code === 'PERMISSION_REQUIRED_BY' && c.kind === 'key') setModal({ kind: 'cascade', change: c, message: e.message });
       else toastError(e);
     } finally {
+      inFlight.current -= 1;
       setPending((s) => {
         const n = new Set(s);
         n.delete(id);
@@ -192,12 +224,13 @@ export default function RolesPage() {
     }
   }
 
-  function onMenu(role: RoleDto, action: 'rename' | 'describe' | 'duplicate' | 'delete' | 'members' | 'permissions') {
+  function onMenu(role: RoleDto, action: RoleEditorAction | 'permissions') {
     setMenuFor(null);
     if (action === 'members') {
       setMembersRole(role.id);
       setTab('members');
     } else if (action === 'permissions') {
+      setFocus(role.id);
       setTab('all');
     } else setModal({ kind: action, role });
   }
@@ -214,7 +247,7 @@ export default function RolesPage() {
           <button onClick={() => onMenu(r, 'describe')}>Description</button>
           <button onClick={() => onMenu(r, 'duplicate')}>Duplicate</button>
           <button onClick={() => onMenu(r, 'members')}>Members · {r.memberCount}</button>
-          {tab !== 'all' && <button onClick={() => onMenu(r, 'permissions')}>All permissions</button>}
+          <button onClick={() => onMenu(r, 'permissions')}>Edit all permissions</button>
           {r.isSystem ? (
             <button disabled title="System roles can’t be deleted. You can rename them or change their permissions.">Delete</button>
           ) : r.memberCount > 0 ? (
@@ -228,6 +261,7 @@ export default function RolesPage() {
   );
 
   const detailRole = modal?.kind === 'detail' ? list.find((r) => r.id === modal.roleId) : undefined;
+  const focusRole = focus ? list.find((r) => r.id === focus) : undefined;
   const f = filter.trim().toLowerCase();
 
   return (
@@ -309,11 +343,33 @@ export default function RolesPage() {
       {tab === 'all' && (
         <div className="stack">
           <div className="row-between">
-            <input className="input" placeholder="Filter permissions" value={filter} onChange={(e) => setFilter(e.target.value)} style={{ maxWidth: 280 }} aria-label="Filter permissions" />
+            <div className="row" style={{ gap: 8, flex: '1 1 320px' }}>
+              <input className="input" placeholder="Filter permissions" value={filter} onChange={(e) => setFilter(e.target.value)} style={{ maxWidth: 260, flex: '1 1 160px' }} aria-label="Filter permissions" />
+              <select className="input" style={{ maxWidth: 220, flex: '1 1 140px' }} value={focusRole?.id ?? ''} onChange={(e) => setFocus(e.target.value || null)} aria-label="Show roles">
+                <option value="">All roles side by side</option>
+                {list.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name}
+                  </option>
+                ))}
+              </select>
+            </div>
             <span className="faint" style={{ fontSize: 12 }}>
               Turning a permission on also turns on what it needs.{data.plan !== 'INTERNAL' && data.plan !== 'ENTERPRISE' ? ` Your plan: ${PLAN_LABELS[data.plan]}.` : ''}
             </span>
           </div>
+          {focusRole ? (
+            <RoleEditor
+              role={focusRole}
+              groups={data.groups}
+              filter={filter}
+              pending={pending}
+              labelOf={labelOf}
+              onKey={(key, enabled) => request({ kind: 'key', role: focusRole, key, enabled })}
+              onGroup={(group, keys, enabled) => request({ kind: 'bulk', role: focusRole, group, keys, enabled })}
+              onAction={(a) => onMenu(focusRole, a)}
+            />
+          ) : (
           <div style={{ overflowX: 'auto' }}>
             <table className="table pf-matrix">
               <thead>
@@ -372,6 +428,7 @@ export default function RolesPage() {
               </tbody>
             </table>
           </div>
+          )}
         </div>
       )}
 

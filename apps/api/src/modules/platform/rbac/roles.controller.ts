@@ -3,6 +3,7 @@ import {
   createRoleSchema,
   roleMembersSchema,
   setMatrixRowSchema,
+  setAllContext,
   setPermissionSchema,
   setRolePermissionsSchema,
   updateRoleSchema,
@@ -60,7 +61,7 @@ export class RolesController {
 
   @Put(':id/permissions')
   setAll(@Param('id') id: string, @Body(new ZodPipe(setRolePermissionsSchema)) dto: SetRolePermissionsInput) {
-    return this.roles.setAll(id, dto.permissions);
+    return this.roles.setAll(id, dto.permissions, setAllContext(dto));
   }
 
   @Get(':id/members')

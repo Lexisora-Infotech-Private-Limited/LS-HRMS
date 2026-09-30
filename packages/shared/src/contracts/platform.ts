@@ -150,9 +150,22 @@ export type SetMatrixRowInput = z.infer<typeof setMatrixRowSchema>;
 export const roleMembersSchema = z.object({ userIds: z.array(z.string().min(1)).min(1, 'Pick at least one person') });
 export type RoleMembersInput = z.infer<typeof roleMembersSchema>;
 
-/** Replace a role's whole permission set (used by "Undo" and bulk edits). Requires are auto-added. */
-export const setRolePermissionsSchema = z.object({ permissions: z.array(z.string().min(1)).max(500) });
+/**
+ * Replace a role's whole permission set (used by "Undo" and the per-role editor's group "Turn all
+ * on / off"). Requires are auto-added. `group` names the permission group of a bulk edit (audit copy).
+ */
+export const setRolePermissionsSchema = z.object({
+  permissions: z.array(z.string().min(1)).max(500),
+  reason: z.enum(['undo', 'group']).optional(),
+  group: z.string().trim().max(60).optional(),
+});
 export type SetRolePermissionsInput = z.infer<typeof setRolePermissionsSchema>;
+
+/** Audit context for a whole-set replace: "undo" / "group “People”". */
+export function setAllContext(input: Pick<SetRolePermissionsInput, 'reason' | 'group'>): string {
+  if (input.reason === 'group' && input.group) return `group “${input.group}”`;
+  return input.reason === 'group' ? 'group edit' : 'undo';
+}
 
 export type MatrixCellState = 'all' | 'some' | 'none';
 
@@ -192,6 +205,24 @@ export type RolesResponse = {
 };
 
 export type RoleChangeResult = { role: RoleDto; added: string[]; removed: string[] };
+
+/**
+ * Per-role editor group toggle: whether every togglable key of the group is on (→ "Turn all off")
+ * and which keys the click changes. Plan-locked keys the role doesn't hold can't be turned on, and
+ * an admin's own Roles & access is never part of a "Turn all off".
+ */
+export function groupBulkKeys(
+  role: Pick<RoleDto, 'permissions' | 'isMine'>,
+  items: readonly { key: string; locked: boolean }[],
+): { allOn: boolean; keys: string[] } {
+  const held = new Set(role.permissions);
+  const togglable = items.filter((i) => !i.locked || held.has(i.key));
+  const allOn = togglable.length > 0 && togglable.every((i) => held.has(i.key));
+  const keys = allOn
+    ? togglable.filter((i) => !(i.key === 'roles.manage' && role.isMine)).map((i) => i.key)
+    : items.filter((i) => !i.locked && !held.has(i.key)).map((i) => i.key);
+  return { allOn, keys };
+}
 
 export type RoleMemberDto = {
   userId: string;
@@ -246,6 +277,12 @@ export function alertWhenLabel(at: Date | string, now: Date = new Date()): strin
 }
 const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+/** "29 Sep 2026" (IST business day) — independent of the runtime's ICU month names ("Sept"). */
+export function dayMonthYear(at: Date | string): string {
+  const [y, m, d] = istDateKey(new Date(at)).split('-');
+  return `${Number(d)} ${MONTH_SHORT[Number(m) - 1]} ${y}`;
+}
+
 export type AlertDto = {
   id: string;
   type: string;
@@ -273,8 +310,11 @@ const SEARCH_TYPE_LABELS: Record<string, string> = {
   payslips: 'Payslips',
   goto: 'Go to',
 };
-/** Display order of result groups in the header dropdown (unknown types go last, alphabetically). */
-export const SEARCH_TYPE_ORDER = ['goto', 'people', 'tasks', 'projects', 'documents', 'notices', 'tickets', 'candidates', 'payslips'];
+/**
+ * Display order of result groups in the header dropdown (spec M8): People, Tasks, Documents, Projects,
+ * Notices & posts, Tickets, Candidates; other domains' types follow alphabetically; "Go to" is last.
+ */
+export const SEARCH_TYPE_ORDER = ['people', 'tasks', 'documents', 'projects', 'notices', 'tickets', 'candidates', 'payslips'];
 
 export function searchTypeLabel(type: string): string {
   const k = type.toLowerCase();
@@ -283,7 +323,9 @@ export function searchTypeLabel(type: string): string {
 
 export function sortSearchGroups<T extends { type: string }>(groups: T[]): T[] {
   const rank = (t: string) => {
-    const i = SEARCH_TYPE_ORDER.indexOf(t.toLowerCase());
+    const k = t.toLowerCase();
+    if (k === 'goto') return SEARCH_TYPE_ORDER.length + 1;
+    const i = SEARCH_TYPE_ORDER.indexOf(k);
     return i === -1 ? SEARCH_TYPE_ORDER.length : i;
   };
   return [...groups].sort((a, b) => rank(a.type) - rank(b.type) || a.type.localeCompare(b.type));
@@ -349,6 +391,35 @@ export type AuditRowDto = {
 };
 
 export type AuditFacets = { actors: { value: string; label: string }[]; entities: string[]; modules: string[] };
+
+export type AuditChangeRow = { field: string; before: string; after: string };
+
+/**
+ * Before/after pairs for the audit drawer, from whichever shape the producer used:
+ * `{from, to}`, `{before: {…}, after: {…}}` or `{changes: {field: {from, to} | [before, after] | "[redacted]"}}`.
+ * A bare value under `changes` (e.g. a redacted field) shows as changed with no before value.
+ */
+export function auditChangeRows(meta: unknown): AuditChangeRow[] {
+  const obj = (v: unknown) => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null);
+  const fmt = (v: unknown) => (v === null || v === undefined || v === '' ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v));
+  const m = obj(meta);
+  if (!m) return [];
+  const rows: AuditChangeRow[] = [];
+  if ('from' in m || 'to' in m) rows.push({ field: 'Change', before: fmt(m.from), after: fmt(m.to) });
+  const b = obj(m.before);
+  const a = obj(m.after);
+  if (b || a) for (const k of new Set([...Object.keys(b ?? {}), ...Object.keys(a ?? {})])) rows.push({ field: k, before: fmt(b?.[k]), after: fmt(a?.[k]) });
+  const ch = obj(m.changes);
+  if (ch) {
+    for (const [k, v] of Object.entries(ch)) {
+      const pair = obj(v);
+      if (Array.isArray(v) && v.length === 2) rows.push({ field: k, before: fmt(v[0]), after: fmt(v[1]) });
+      else if (pair && ('from' in pair || 'to' in pair)) rows.push({ field: k, before: fmt(pair.from), after: fmt(pair.to) });
+      else rows.push({ field: k, before: '—', after: fmt(v) });
+    }
+  }
+  return rows;
+}
 
 // ── Subscription & billing ─────────────────────────────────────────────────
 

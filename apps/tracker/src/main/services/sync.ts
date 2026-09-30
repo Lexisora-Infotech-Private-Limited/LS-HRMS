@@ -7,7 +7,7 @@ import type {
   TrackerPunchResult,
 } from '@lexisora/shared';
 import { backoffDelay } from '../engine/backoff';
-import type { OutboxQueue, QueueEntry } from '../engine/queue';
+import type { OutboxQueue, QueueEntry, QueueKind } from '../engine/queue';
 import { ApiError, type ApiClient } from './api-client';
 
 /** The slice of OutboxStore the sync loop needs (lets tests use an in-memory store). */
@@ -23,8 +23,9 @@ export type SyncApi = Pick<ApiClient, 'punch' | 'sync' | 'uploadScreenshot'>;
 export interface SyncHooks {
   onChange(): void;
   /** Entries the server has stored (accepted, duplicate or rejected-with-reason). */
-  onAcked(ids: readonly string[]): void;
-  onPunch?(input: TrackerPunchInput, result: TrackerPunchResult): void;
+  onAcked(ids: readonly string[], kind: QueueKind): void;
+  /** `startedAt` = when the request was sent (the returned `today` includes everything synced before it). */
+  onPunch?(input: TrackerPunchInput, result: TrackerPunchResult, startedAt: number): void;
   onPunchRejected?(input: TrackerPunchInput, err: ApiError): void;
   onBatch?(result: TrackerBatchResult, sent: number): void;
   onShot?(meta: ScreenshotMeta, result: ScreenshotUploadResult | null): void;
@@ -59,8 +60,18 @@ export class SyncService {
     private readonly api: SyncApi,
     private readonly isOnline: () => boolean,
     private readonly hooks: SyncHooks,
-    private readonly opts: { maxEvents?: number; maxSegments?: number; rand?: () => number } = {},
+    private readonly opts: {
+      maxEvents?: number;
+      maxSegments?: number;
+      rand?: () => number;
+      /** The tracker's trusted clock; batch `deviceTime` must share the time base of the entries (server skew check). */
+      now?: () => number;
+    } = {},
   ) {}
+
+  private now(): number {
+    return (this.opts.now ?? Date.now)();
+  }
 
   get busy() {
     return this.running !== null;
@@ -112,10 +123,10 @@ export class SyncService {
     return this.running;
   }
 
-  private ack(ids: readonly string[]) {
+  private ack(ids: readonly string[], kind: QueueKind) {
     if (!ids.length) return;
     this.store.ack(ids);
-    this.hooks.onAcked(ids);
+    this.hooks.onAcked(ids, kind);
   }
 
   private async doFlush(): Promise<FlushResult> {
@@ -126,10 +137,11 @@ export class SyncService {
       for (let p = q.nextPunch(); p; p = q.nextPunch()) {
         const input = p.payload as TrackerPunchInput;
         try {
+          const t0 = this.now();
           const r = await this.api.punch(input);
-          this.ack([p.clientId]);
+          this.ack([p.clientId], 'punch');
           synced++;
-          this.hooks.onPunch?.(input, r);
+          this.hooks.onPunch?.(input, r, t0);
         } catch (e) {
           if (!isPermanent(e)) throw e;
           this.store.drop([p.clientId], (e as ApiError).code);
@@ -156,12 +168,12 @@ export class SyncService {
         }
         try {
           const r = await this.api.uploadScreenshot(meta, blob);
-          this.ack([next.clientId]);
+          this.ack([next.clientId], 'shot');
           synced++;
           this.hooks.onShot?.(meta, r);
         } catch (e) {
           if (e instanceof ApiError && e.status === 409) {
-            this.ack([next.clientId]); // already uploaded
+            this.ack([next.clientId], 'shot'); // already uploaded
             this.hooks.onShot?.(meta, null);
             continue;
           }
@@ -172,7 +184,7 @@ export class SyncService {
       }
 
       this.attempt = 0;
-      this.lastSyncAt = Date.now();
+      this.lastSyncAt = this.now();
       this.lastError = null;
       return { ok: true, synced, remaining: q.size };
     } catch (e) {
@@ -191,7 +203,7 @@ export class SyncService {
   /** Sends one batch; on a validation error bisects it until the bad entry is isolated. Returns entries delivered. */
   private async sendEntries(entries: QueueEntry[]): Promise<number> {
     const body: TrackerBatch = {
-      deviceTime: new Date().toISOString(),
+      deviceTime: new Date(this.now()).toISOString(),
       events: entries.filter((e) => e.kind === 'event').map((e) => e.payload as TrackerBatch['events'][number]),
       segments: entries.filter((e) => e.kind === 'segment').map((e) => e.payload as TrackerBatch['segments'][number]),
       queueDepth: Math.max(0, this.store.queue.size - entries.length),
@@ -199,7 +211,7 @@ export class SyncService {
     const ids = entries.map((e) => e.clientId);
     try {
       const r = await this.api.sync(body);
-      this.ack(ids);
+      this.ack(ids, 'segment');
       this.hooks.onBatch?.(r, ids.length);
       if (r.rejected?.length) {
         const reasons = [...new Set(r.rejected.map((x) => x.reason))].join(', ');

@@ -12,7 +12,6 @@ export function hm(sec: number): string {
 
 const clockFmt = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false });
 const dayFmt = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
-const shortDateFmt = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, day: 'numeric', month: 'short' });
 
 /** HH:mm in IST. */
 export function clock(ms: number | Date): string {
@@ -24,9 +23,14 @@ export function istDayKey(ms: number | Date): string {
   return dayFmt.format(typeof ms === 'number' ? new Date(ms) : ms);
 }
 
-/** "29 Sep" */
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** "29 Sep" (IST). Fixed month names: newer ICU renders en-GB September as "Sept". */
 export function shortDate(ms: number | Date | string): string {
-  return shortDateFmt.format(new Date(ms));
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return '';
+  const [, m, day] = istDayKey(d).split('-').map(Number);
+  return `${day} ${MONTHS[m - 1]}`;
 }
 
 /** Minutes of the IST day for a timestamp (0..1439). */

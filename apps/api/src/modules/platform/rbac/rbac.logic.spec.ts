@@ -1,10 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { ROLE_KEYS, ROLE_MATRIX_ROWS, alsoEnabledCopy, defaultPermissionsFor, matrixCell, type RoleKey } from '@lexisora/shared';
+import {
+  ROLE_KEYS,
+  ROLE_MATRIX_ROWS,
+  alsoEnabledCopy,
+  defaultPermissionsFor,
+  groupBulkKeys,
+  matrixCell,
+  setAllContext,
+  setRolePermissionsSchema,
+  type RoleKey,
+} from '@lexisora/shared';
 import {
   DependencyError,
   accessChangeSummary,
   applyToggle,
   dependentsOf,
+  effectivePlan,
   lockedKeys,
   planAllows,
   replacePermissions,
@@ -118,6 +129,61 @@ describe('plan gating (M3 acceptance 6)', () => {
     expect(planAllows('ENTERPRISE', 'cctv.view')).toBe(true);
     expect(planAllows('INTERNAL', 'branding.manage')).toBe(true);
     expect(lockedKeys('FREE', ['payroll.manage', 'dashboard.view', 'lms.manage'])).toEqual(['payroll.manage', 'lms.manage']);
+  });
+
+  it('entitlements come from the Subscription row', () => {
+    // A workspace never provisioned through billing (no row) is not plan-gated.
+    expect(effectivePlan(null)).toBe('INTERNAL');
+    expect(effectivePlan({ planCode: 'GROWTH', status: 'ACTIVE' })).toBe('GROWTH');
+    expect(effectivePlan({ planCode: 'FREE', status: 'FREE' })).toBe('FREE');
+    // Past-due / suspended keep their plan's features; a cancelled plan falls back to Free.
+    expect(effectivePlan({ planCode: 'GROWTH', status: 'PAST_DUE' })).toBe('GROWTH');
+    expect(effectivePlan({ planCode: 'ENTERPRISE', status: 'CANCELLED' })).toBe('FREE');
+    expect(effectivePlan({ planCode: 'LEGACY_GOLD', status: 'ACTIVE' })).toBe('FREE');
+  });
+});
+
+describe('per-role editor', () => {
+  const items = [
+    { key: 'employees.view', locked: false },
+    { key: 'employees.compensation', locked: false },
+    { key: 'payroll.manage', locked: true },
+  ];
+
+  it('"Turn all on" adds every unlocked key the role lacks; locked keys stay off', () => {
+    expect(groupBulkKeys({ permissions: ['employees.view'], isMine: false }, items)).toEqual({ allOn: false, keys: ['employees.compensation'] });
+  });
+
+  it('"Turn all off" once every togglable key is on — a held locked key counts and can be removed', () => {
+    expect(groupBulkKeys({ permissions: ['employees.view', 'employees.compensation'], isMine: false }, items)).toEqual({
+      allOn: true,
+      keys: ['employees.view', 'employees.compensation'],
+    });
+    expect(groupBulkKeys({ permissions: ['employees.view', 'employees.compensation', 'payroll.manage'], isMine: false }, items).keys).toEqual([
+      'employees.view',
+      'employees.compensation',
+      'payroll.manage',
+    ]);
+  });
+
+  it('never turns off an admin’s own Roles & access', () => {
+    const admin = [{ key: 'roles.manage', locked: false }, { key: 'audit.view', locked: false }];
+    expect(groupBulkKeys({ permissions: ['roles.manage', 'audit.view'], isMine: true }, admin)).toEqual({ allOn: true, keys: ['audit.view'] });
+    expect(groupBulkKeys({ permissions: ['roles.manage', 'audit.view'], isMine: false }, admin).keys).toEqual(['roles.manage', 'audit.view']);
+  });
+
+  it('a group-off keeps keys other permissions need (replace adds the requires closure)', () => {
+    const r = replacePermissions(['employees.view', 'employees.compensation', 'payroll.manage'], ['payroll.manage']);
+    expect(r.next).toEqual(expect.arrayContaining(['employees.view', 'employees.compensation', 'payroll.manage']));
+    expect(r.removed).toEqual([]);
+  });
+
+  it('labels whole-set replaces in the audit trail', () => {
+    expect(setAllContext({ reason: 'group', group: 'People' })).toBe('group “People”');
+    expect(setAllContext({ reason: 'undo' })).toBe('undo');
+    expect(setAllContext({})).toBe('undo');
+    expect(setRolePermissionsSchema.parse({ permissions: ['cctv.view'] })).toEqual({ permissions: ['cctv.view'] });
+    expect(() => setRolePermissionsSchema.parse({ permissions: ['cctv.view'], reason: 'bulk' })).toThrow();
   });
 });
 
