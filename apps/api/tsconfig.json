@@ -3,7 +3,9 @@
     "target": "ES2022",
     "module": "CommonJS",
     "moduleResolution": "Node",
-    "lib": ["ES2023"],
+    "lib": [
+      "ES2023"
+    ],
     "outDir": "dist",
     "rootDir": ".",
     "strict": true,
@@ -15,7 +17,14 @@
     "resolveJsonModule": true,
     "sourceMap": true,
     "baseUrl": ".",
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   },
-  "include": ["src", "prisma/seed", "test"]
+  "include": [
+    "src",
+    "prisma/seed",
+    "test",
+    "prisma/bootstrap.ts"
+  ]
 }

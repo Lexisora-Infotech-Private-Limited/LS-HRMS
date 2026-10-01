@@ -16,8 +16,9 @@ WORKDIR /repo
 RUN apt-get update && apt-get install -y --no-install-recommends openssl tini && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production
 COPY --from=build /repo /repo
+RUN sed -i 's/\r$//' /repo/apps/api/docker-entrypoint.sh && chmod +x /repo/apps/api/docker-entrypoint.sh
 WORKDIR /repo/apps/api
 EXPOSE 4000
-ENTRYPOINT ["/usr/bin/tini", "--"]
-# Apply schema then start. For managed migrations switch to `prisma migrate deploy`.
-CMD ["sh", "-c", "npx prisma db push --skip-generate && node dist/src/main.js"]
+HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=5 \
+  CMD node -e "fetch('http://localhost:4000/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+ENTRYPOINT ["/usr/bin/tini", "--", "/repo/apps/api/docker-entrypoint.sh"]

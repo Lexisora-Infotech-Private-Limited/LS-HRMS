@@ -1,6 +1,14 @@
-# Production-style stack: docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
-# Required in .env.prod: POSTGRES_PASSWORD, JWT_ACCESS_SECRET, JWT_REFRESH_SECRET, DATA_ENCRYPTION_KEY,
-# WEB_ORIGIN (e.g. https://lexisora.hrms.app), SMTP_* for real mail.
+# Lexisora HRMS — full stack in Docker on this machine (or any Docker host).
+#
+#   powershell -ExecutionPolicy Bypass -File deploy\new-env.ps1        # once: creates .env.prod with secrets
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+#
+#   Web portal   http://localhost:8080
+#   API          http://localhost:4000/api/v1   (the desktop tracker's default server address)
+#   Mail outbox  http://localhost:8026          (Mailpit catches invite/reset emails unless SMTP_* is set)
+#
+# Data lives in Docker volumes (pgdata, storage) and survives restarts and rebuilds.
+# See docs/DEPLOYMENT.md.
 name: lexisora-hrms-prod
 
 services:
@@ -9,7 +17,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: hrms
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.prod}
       POSTGRES_DB: hrms
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -22,21 +30,30 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
 
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "8026:8025"
+
   api:
     build: { context: ., dockerfile: apps/api/Dockerfile }
     restart: unless-stopped
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_started }
+    ports:
+      - "4000:4000"
     environment:
       NODE_ENV: production
       PORT: 4000
       DATABASE_URL: postgresql://hrms:${POSTGRES_PASSWORD}@postgres:5432/hrms?schema=public
       REDIS_URL: redis://redis:6379
-      WEB_ORIGIN: ${WEB_ORIGIN}
-      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
-      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
-      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY}
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:8080}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?run deploy/new-env.ps1}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?run deploy/new-env.ps1}
+      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:?run deploy/new-env.ps1}
       STORAGE_DRIVER: local
       STORAGE_DIR: /data/storage
       SMTP_HOST: ${SMTP_HOST:-mailpit}
@@ -44,26 +61,34 @@ services:
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASS: ${SMTP_PASS:-}
       MAIL_FROM: ${MAIL_FROM:-Lexisora HRMS <no-reply@lexisora.hrms.app>}
+      # First run only (see apps/api/prisma/bootstrap.ts)
+      SEED_DEMO: ${SEED_DEMO:-false}
+      SETUP_COMPANY: ${SETUP_COMPANY:-}
+      SETUP_DOMAIN: ${SETUP_DOMAIN:-}
+      SETUP_ADMIN_NAME: ${SETUP_ADMIN_NAME:-}
+      SETUP_ADMIN_EMAIL: ${SETUP_ADMIN_EMAIL:-}
+      SETUP_ADMIN_PASSWORD: ${SETUP_ADMIN_PASSWORD:-}
+      SETUP_STATE_CODE: ${SETUP_STATE_CODE:-24}
+      # Optional integrations (empty = built-in stub)
       GITLAB_URL: ${GITLAB_URL:-}
       GITLAB_TOKEN: ${GITLAB_TOKEN:-}
       LIVEKIT_URL: ${LIVEKIT_URL:-}
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+      CCTV_GATEWAY_URL: ${CCTV_GATEWAY_URL:-}
     volumes:
       - storage:/data/storage
 
   web:
-    build: { context: ., dockerfile: apps/web/Dockerfile }
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        VITE_DEMO_LOGINS: ${VITE_DEMO_LOGINS:-false}
     restart: unless-stopped
     depends_on: [api]
     ports:
       - "8080:80"
-
-  mailpit:
-    image: axllent/mailpit:latest
-    profiles: ["mail"]
-    ports:
-      - "8025:8025"
 
 volumes:
   pgdata:

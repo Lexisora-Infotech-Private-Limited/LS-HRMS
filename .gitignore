@@ -16,3 +16,5 @@ apps/api/prisma/*.db
 .turbo/
 .db-sync.lock/
 e2e/.storage/
+.env.prod
+backups/

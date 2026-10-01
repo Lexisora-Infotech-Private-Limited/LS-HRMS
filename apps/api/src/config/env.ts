@@ -37,6 +37,11 @@ const envSchema = z.object({
   ESIGN_PROVIDER: z.string().optional(),
   /** Disable BullMQ workers (tests). */
   JOBS_DISABLED: z.coerce.boolean().default(false),
+  /**
+   * Mark the refresh cookie `Secure`. Defaults to true in production. Set false only when the app is
+   * served over plain HTTP on a LAN address (browsers drop Secure cookies there; localhost is fine).
+   */
+  COOKIE_SECURE: z.enum(['true', 'false']).optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
