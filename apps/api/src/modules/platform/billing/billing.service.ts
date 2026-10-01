@@ -31,6 +31,7 @@ import { PdfService, PDF_COLORS } from '../../../core/pdf/pdf.service';
 import { SequenceService, financialYear } from '../../../core/registry/sequence.service';
 import { AppError, badRequest, conflict, notFound } from '../../../core/http/errors';
 import { SEAT_STATUSES, platformAdminUserIds, platformTenantId } from '../platform.util';
+import { invalidateEntitlements } from './entitlements.guard';
 import { createGateway, type GatewayEvent, type PaymentGateway } from './adapters/payment-gateway';
 import {
   SAC_CODE,
@@ -529,6 +530,7 @@ export class BillingService {
       data.quantity = intent.quantity;
     }
     await this.prisma.subscription.update({ where: { id: sub.id }, data });
+    invalidateEntitlements(sub.tenantId);
     const newQty = (data.quantity as number | undefined) ?? sub.quantity;
     await this.prisma.subscriptionChange.create({
       data: { subscriptionId: sub.id, type, from: before as Prisma.InputJsonValue, to: { planCode: data.planCode ?? sub.planCode, cycle: data.cycle ?? sub.cycle, quantity: newQty } as Prisma.InputJsonValue, seatDelta: before.planCode === 'FREE' ? newQty : newQty - sub.quantity, actorName: requireContext().userName ?? 'Payment gateway' } as any,
@@ -573,6 +575,7 @@ export class BillingService {
       await this.prisma.subscription.update({ where: { id: sub.id }, data: { planCode: 'FREE', status: 'FREE', cycle: null, quantity: FREE_SEATS, unitPaise: null, currentPeriodStart: null, currentPeriodEnd: null, cancelAtPeriodEnd: false, pendingChange: Prisma.DbNull } });
       await this.prisma.subscriptionChange.create({ data: { subscriptionId: sub.id, type: 'DOWNGRADE_APPLIED', from: { planCode: 'GROWTH', quantity: sub.quantity }, to: { planCode: 'FREE' }, seatDelta: -sub.quantity, actorName: 'System' } as any });
       await this.prisma.raw.tenant.update({ where: { id: sub.tenantId }, data: { status: 'FREE_TIER' } });
+      invalidateEntitlements(sub.tenantId);
       await this.notifications.notify({ userIds: admins, type: 'billing.plan_changed', title: 'You are now on the Free plan', link: '/billing', from: 'Billing' });
       return;
     }
@@ -593,6 +596,7 @@ export class BillingService {
       data: { status: 'PAST_DUE', cycle, quantity, currentPeriodStart: start, currentPeriodEnd: end, pendingChange: Prisma.DbNull, pastDueSince: now, graceEndsAt: new Date(start.getTime() + 7 * 86400_000) },
     });
     await this.prisma.raw.tenant.update({ where: { id: sub.tenantId }, data: { status: 'PAYMENT_DUE' } });
+    invalidateEntitlements(sub.tenantId);
     await this.notifications.notify({ userIds: admins, type: 'billing.renewal_due', title: `Renewal invoice ${number} · ${formatINR(inv.totalPaise)} due`, body: 'Pay now to keep your workspace active. It becomes read-only 7 days after the renewal date.', link: '/billing', from: 'Billing', email: true });
   }
 
@@ -601,10 +605,12 @@ export class BillingService {
     const now = new Date();
     if (sub.status === 'PAST_DUE' && sub.graceEndsAt && now > sub.graceEndsAt) {
       await this.prisma.subscription.update({ where: { id: sub.id }, data: { status: 'READ_ONLY' } });
+      invalidateEntitlements(sub.tenantId);
       await this.prisma.saasInvoice.updateMany({ where: { status: 'ISSUED' }, data: { status: 'OVERDUE' } });
       await this.notifications.notify({ userIds: await this.billingAdmins(), type: 'billing.read_only', title: 'Workspace is read-only until the overdue invoice is paid', link: '/billing', from: 'Billing', email: true });
     } else if (sub.status === 'READ_ONLY' && sub.pastDueSince && now.getTime() > sub.pastDueSince.getTime() + 30 * 86400_000) {
       await this.prisma.subscription.update({ where: { id: sub.id }, data: { status: 'SUSPENDED' } });
+      invalidateEntitlements(sub.tenantId);
       await this.prisma.raw.tenant.update({ where: { id: sub.tenantId }, data: { status: 'SUSPENDED' } });
       await this.notifications.notify({ userIds: await this.billingAdmins(), type: 'billing.suspended', title: 'Workspace suspended for non-payment', link: '/billing', from: 'Billing', email: true });
     }

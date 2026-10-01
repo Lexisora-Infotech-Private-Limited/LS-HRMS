@@ -123,9 +123,10 @@ export class FilingService {
     const [docs, count, tagRows] = await Promise.all([
       this.prisma.filingDocument.findMany({ where, include: { folder: true }, orderBy: [{ uploadedAt: 'desc' }], ...pageArgs(q) }),
       this.prisma.filingDocument.count({ where }),
-      this.prisma.filingDocument.findMany({ where: { folderId: id, deletedAt: null }, select: { tags: true }, take: 2000 }),
+      this.prisma.filingDocument.findMany({ where: { folderId: id, deletedAt: null }, select: { tags: true, fy: true }, take: 5000 }),
     ]);
     const tags = [...new Set(tagRows.flatMap((t) => t.tags))].sort().slice(0, 40);
+    const fys = [...new Set(tagRows.map((t) => t.fy).filter((x): x is string => !!x))].sort().reverse();
     return {
       folder: this.tile(f, total),
       breadcrumb,
@@ -135,6 +136,7 @@ export class FilingService {
       page: q.page,
       pageSize: q.pageSize,
       tags,
+      fys,
     };
   }
 

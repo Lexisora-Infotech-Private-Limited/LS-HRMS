@@ -819,3 +819,60 @@ export const exitStatusSchema = z.object({ status: z.enum(['PENDING', 'DONE', 'N
 export const verifyBankSchema = z.object({ decision: z.enum(['VERIFIED', 'REJECTED']), reason: optStr });
 export const reopenStepSchema = z.object({ key: z.enum(ONBOARDING_STEP_KEYS), reason: z.string().trim().min(2, 'Give a reason').max(500) });
 export const kitSizeSchema = z.object({ tshirtSize: z.enum(TSHIRT_SIZES) });
+
+// ── UI labels shared by web screens (phase 2) ──────────────────────────────
+export const APPLICATION_STAGE_LABELS: Record<ApplicationStage, string> = {
+  SCREENING: 'Screening',
+  INTERVIEW: 'Interview',
+  OFFERED: 'Offered',
+  HIRED: 'Hired',
+  REJECTED: 'Rejected',
+  OFFER_DECLINED: 'Offer declined',
+  WITHDRAWN: 'Withdrawn',
+};
+/** Allowed manual stage moves (HIRED only through "Convert to employee"). Mirrors people.rules STAGE_TRANSITIONS. */
+export const APPLICATION_STAGE_TRANSITIONS: Record<ApplicationStage, ApplicationStage[]> = {
+  SCREENING: ['INTERVIEW', 'OFFERED', 'REJECTED', 'WITHDRAWN'],
+  INTERVIEW: ['SCREENING', 'OFFERED', 'REJECTED', 'WITHDRAWN'],
+  OFFERED: ['HIRED', 'OFFER_DECLINED', 'REJECTED', 'WITHDRAWN', 'INTERVIEW'],
+  HIRED: [],
+  REJECTED: ['SCREENING'],
+  OFFER_DECLINED: ['SCREENING'],
+  WITHDRAWN: ['SCREENING'],
+};
+export const CANDIDATE_REJECT_REASONS = ['Skills mismatch', 'Experience mismatch', 'Salary expectations', 'Culture fit', 'Position filled', 'Not reachable', 'Other'] as const;
+export const INTERVIEW_RECOMMENDATION_LABELS: Record<(typeof RECOMMENDATIONS)[number], string> = {
+  STRONG_HIRE: 'Strong hire',
+  HIRE: 'Hire',
+  NO_HIRE: 'No hire',
+  STRONG_NO_HIRE: 'Strong no hire',
+};
+export const INTERVIEW_RESULT_LABELS: Record<string, string> = { PENDING: 'Pending', SELECTED: 'Selected', REJECTED: 'Rejected', ON_HOLD: 'On hold', CANCELLED: 'Cancelled', NO_SHOW: 'No-show' };
+export const KRA_RATING_LABELS = ['Unsatisfactory', 'Needs improvement', 'Meets expectations', 'Exceeds expectations', 'Outstanding'] as const;
+export const ASSET_CONDITION_LABELS: Record<(typeof ASSET_CONDITIONS)[number], string> = { NEW: 'New', GOOD: 'Good', FAIR: 'Fair', DAMAGED: 'Damaged' };
+export const IDCARD_BINDING_LABELS: Record<IdCardBinding, string> = {
+  'employee.full_name': 'Full name',
+  'employee.emp_code': 'Employee ID',
+  'employee.designation': 'Designation',
+  'employee.department': 'Department',
+  'employee.blood_group': 'Blood group',
+  'employee.photo': 'Photo',
+  'employee.emergency_contact': 'Emergency contact (personal)',
+  'employee.joining_date': 'Joining date',
+  'employee.code_blood': 'Employee ID · Blood group',
+  'card.serial': 'Card serial',
+  'qr.verify_url': 'QR verify link',
+  'tenant.name': 'Company name',
+  'tenant.logo': 'Company logo',
+  'tenant.address': 'Company address',
+  'settings.return_address': 'Return address',
+  'settings.emergency_line': 'Emergency line',
+};
+/** Indian FY half-year for a date: H1 = Apr–Sep, H2 = Oct–Mar ("H1 FY26-27"). */
+export function suggestAppraisalCycle(d: string): { name: string; from: string; to: string } {
+  const [y, m] = d.split('-').map(Number) as [number, number];
+  const fyStart = m >= 4 ? y : y - 1;
+  const fy = `FY${String(fyStart % 100).padStart(2, '0')}-${String((fyStart + 1) % 100).padStart(2, '0')}`;
+  if (m >= 4 && m <= 9) return { name: `H1 ${fy}`, from: `${fyStart}-04-01`, to: `${fyStart}-09-30` };
+  return { name: `H2 ${fy}`, from: `${fyStart}-10-01`, to: `${fyStart + 1}-03-31` };
+}

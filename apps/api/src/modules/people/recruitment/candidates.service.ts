@@ -371,7 +371,22 @@ export class CandidatesService {
     return { ok: true };
   }
 
+  /**
+   * DPDP retention (daily job): candidates whose retentionUntil has passed are anonymised.
+   * Hired candidates are kept (their data lives on the employee record). Runs without a user.
+   */
+  async retentionSweep(today = todayKey()): Promise<number> {
+    const due = await this.prisma.candidate.findMany({ where: { anonymisedAt: null, retentionUntil: { lt: toDbDate(today) }, applications: { none: { stage: 'HIRED' } } }, select: { id: true }, take: 500 });
+    for (const c of due) {
+      await this.prisma.candidate.update({ where: { id: c.id }, data: { fullName: 'Anonymised candidate', email: `anon-${c.id}@invalid.local`, phone: '0000000000', location: null, currentCompany: null, resumeFileId: null, notes: null, tags: [], anonymisedAt: new Date() } });
+      await this.audit.record({ action: 'candidate.anonymised', entity: 'Candidate', entityId: c.id, meta: { reason: 'RETENTION_EXPIRED' } });
+    }
+    return due.length;
+  }
+
   async lookupOptions() {
+    const ctx = requireContext();
+    if (!hasPerm(ctx, 'candidates.view') && !hasPerm(ctx, 'candidates.manage') && !hasPerm(ctx, 'jobs.manage')) return [];
     const scope = await this.jobScope();
     const apps = await this.prisma.jobApplication.findMany({ where: { stage: { in: ['SCREENING', 'INTERVIEW', 'OFFERED'] }, candidate: { anonymisedAt: null }, ...(scope ? { job: scope } : {}) }, include: { candidate: { select: { fullName: true } }, job: { select: { title: true } } }, orderBy: { stageChangedAt: 'desc' }, take: 300 });
     return apps.map((a) => ({ value: a.id, label: `${a.candidate.fullName} · ${a.job.title}` }));

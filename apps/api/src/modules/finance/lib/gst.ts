@@ -18,6 +18,27 @@ export function stateFromGstin(gstin: string | null | undefined): string | null 
   return gstin && /^\d{2}/.test(gstin) ? gstin.slice(0, 2) : null;
 }
 
+const GSTIN_RE = /^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
+const GST_CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+/** Mod-36 check character of the first 14 GSTIN characters (GSTN algorithm). */
+export function gstinCheckChar(first14: string): string {
+  let sum = 0;
+  for (let i = 0; i < 14; i++) {
+    const v = GST_CHARS.indexOf(first14[i]!.toUpperCase());
+    const p = v * (i % 2 === 0 ? 1 : 2);
+    sum += Math.floor(p / 36) + (p % 36);
+  }
+  return GST_CHARS[(36 - (sum % 36)) % 36]!;
+}
+
+/** 15-character GSTIN: format (state + PAN + entity + Z + check) and the check character. */
+export function isValidGstin(gstin: string | null | undefined): boolean {
+  if (!gstin) return false;
+  const g = gstin.trim().toUpperCase();
+  return GSTIN_RE.test(g) && gstinCheckChar(g.slice(0, 14)) === g[14];
+}
+
 export type PurchaseGstInput = {
   amountPaise: number;
   gstRateBp: number;

@@ -372,6 +372,7 @@ model ChatCall {
   startedAt       DateTime  @default(now())
   endedAt         DateTime?
   recording       Boolean   @default(false)
+  recordingByUserId String?
   participantIds  String[]
   maxParticipants Int       @default(1)
 
@@ -578,6 +579,9 @@ model Enrollment {
   progressPct   Int              @default(0)
   lessonsDone   Int              @default(0)
   certificateId String?
+  assignmentId  String?
+  certificateDownloadedAt DateTime?
+  lastLessonId  String?
   progress      LessonProgress[]
 
   @@unique([courseId, employeeId])
@@ -800,6 +804,7 @@ model CameraViewSession {
   cameraId  String
   userId    String
   startedAt DateTime  @default(now())
+  lastBeatAt DateTime @default(now())
   endedAt   DateTime?
 
   @@index([tenantId, cameraId, startedAt])

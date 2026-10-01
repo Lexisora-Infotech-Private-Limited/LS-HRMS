@@ -373,6 +373,7 @@ export class LedgerService {
     const where: Prisma.VoucherWhereInput = {
       ...dateWhere,
       ...(tab === 'hr' ? { type: 'HR' } : q.type ? { type: q.type } : {}),
+      ...(q.source ? { sourceType: q.source } : {}),
       ...(q.accountId ? { lines: { some: { accountId: q.accountId } } } : {}),
       ...(q.q
         ? { OR: [{ number: { contains: q.q, mode: 'insensitive' } }, { narration: { contains: q.q, mode: 'insensitive' } }, { sourceRef: { contains: q.q, mode: 'insensitive' } }] }

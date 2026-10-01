@@ -330,7 +330,11 @@ export const channelCreateSchema = z.object({
   topic: optStr(200),
   kind: z.enum(['PUBLIC', 'PRIVATE']).default('PUBLIC'),
   memberUserIds: z.array(z.string()).max(500).default([]),
+  /** Audience link: members follow the department / project automatically. */
+  linkedType: z.enum(['DEPARTMENT', 'PROJECT']).optional().nullable(),
+  linkedId: z.string().optional().nullable(),
 });
+export type ChannelCreateInput = z.infer<typeof channelCreateSchema>;
 export const dmCreateSchema = z.object({ userIds: z.array(z.string()).min(1).max(8) });
 export const chatAttachmentSchema = z.object({ fileId: z.string(), name: z.string().max(200), mime: z.string().max(100), size: z.number().int().nonnegative() });
 export const messageSendSchema = z
@@ -350,9 +354,62 @@ export const messagesQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
 });
 export const callStartSchema = z.object({ kind: z.enum(['AUDIO', 'VIDEO', 'SCREEN']) });
-export type ChatChannelRow = { id: string; kind: string; name: string; label: string; topic: string | null; unread: number; muted: boolean; canPost: boolean; postingNote: string | null; memberCount: number; lastMessageAt: string | null; dmUserId: string | null };
-export type ChatMessageRow = { id: string; channelId: string; seq: number; kind: string; senderUserId: string | null; who: string; init: string; t: string; body: string | null; attachments: { fileId: string; name: string; mime: string; size: number }[]; mentions: string[]; createdAt: string; editedAt: string | null; deleted: boolean; mine: boolean };
-export type CallJoin = { callId: string; roomName: string; kind: string; provider: 'livekit' | 'local'; url: string | null; token: string | null; recording: boolean; notice: string | null };
+export type ChatChannelRow = {
+  id: string;
+  kind: string;
+  name: string;
+  label: string;
+  topic: string | null;
+  unread: number;
+  muted: boolean;
+  canPost: boolean;
+  postingNote: string | null;
+  memberCount: number;
+  lastMessageAt: string | null;
+  dmUserId: string | null;
+  /** Audience-managed membership (department / project / company): mute only, cannot leave. */
+  managed: boolean;
+  canManage: boolean;
+  online: boolean | null;
+  lastSeq: number;
+  lastReadSeq: number;
+  liveCall: { callId: string; kind: string } | null;
+};
+export type ChatAttachment = { fileId: string; name: string; mime: string; size: number };
+export type ChatMessageRow = {
+  id: string;
+  channelId: string;
+  seq: number;
+  kind: string;
+  senderUserId: string | null;
+  who: string;
+  init: string;
+  t: string;
+  body: string | null;
+  attachments: ChatAttachment[];
+  mentions: string[];
+  createdAt: string;
+  editedAt: string | null;
+  deleted: boolean;
+  mine: boolean;
+  canEdit: boolean;
+  canDelete: boolean;
+  replyTo: { id: string; who: string; body: string | null } | null;
+};
+export type CallJoin = { callId: string; roomName: string; kind: string; provider: 'livekit' | 'local'; url: string | null; token: string | null; recording: boolean; notice: string | null; channelId: string; channelLabel: string; startedAt: string; participants: { userId: string; name: string; initials: string }[]; canRecord: boolean };
+export type ChatPerson = { userId: string; employeeId: string | null; name: string; initials: string; title: string | null; online: boolean };
+export type ChatChannelsResponse = { channels: ChatChannelRow[]; dms: ChatChannelRow[]; canCreate: boolean; userId: string };
+export type ChatBrowseRow = { id: string; name: string; label: string; topic: string | null; memberCount: number; joined: boolean; kind: string };
+export type ChatMessagesPage = { items: ChatMessageRow[]; hasMore: boolean; lastReadSeq: number; lastSeq: number };
+export type ChatMemberRow = { userId: string; name: string; initials: string; title: string | null; role: string; managed: boolean; online: boolean };
+export type ChatSearchHit = { messageId: string; channelId: string; channelLabel: string; seq: number; who: string; t: string; date: string; body: string };
+export const channelReadSchema = z.object({ seq: z.number().int().min(0) });
+export const channelMeSchema = z.object({ muted: z.boolean() });
+export const channelMembersSchema = z.object({ userIds: z.array(z.string()).min(1).max(200) });
+export const chatSearchQuery = z.object({ q: z.string().trim().min(2, 'Type at least 2 characters').max(100), channelId: z.string().optional() });
+export const callRecordingSchema = z.object({ on: z.boolean() });
+export const CHAT_EDIT_WINDOW_MIN = 15;
+export const CALLS_NEED_LIVEKIT = 'Calls need LiveKit configured';
 
 // ── Helpdesk ───────────────────────────────────────────────────────────────
 export const HELPDESK_PRIORITIES = ['HIGH', 'MEDIUM', 'LOW'] as const;
@@ -515,6 +572,15 @@ export const courseAssignmentSchema = z.object({
   dueInDays: z.number().int().min(1).max(365).optional().nullable(),
 });
 export const lessonProgressSchema = z.object({ positionSec: z.number().min(0), playbackRate: z.number().min(0.5).max(2).default(1) });
+export const courseUpdateSchema = z.object({
+  title: z.string().trim().min(3).max(150).optional(),
+  description: optStr(2000),
+  category: z.enum(['REQUIRED', 'OPTIONAL', 'ONBOARDING']).optional(),
+  certificateOnCompletion: z.boolean().optional(),
+});
+export const lessonUpdateSchema = z.object({ title: z.string().trim().min(2).max(150).optional(), content: optStr(5000), durationMin: z.number().int().min(1).max(600).optional() });
+export const lessonReorderSchema = z.object({ lessonIds: z.array(z.string()).min(1).max(200) });
+export const lmsListQuery = z.object({ tab: z.enum(['my', 'catalogue', 'certificates']).default('my') });
 export type CourseTile = {
   courseId: string;
   enrollmentId: string | null;
@@ -529,7 +595,42 @@ export type CourseTile = {
   dueLabel: string | null;
   overdue: boolean;
   certificateId: string | null;
+  category: string;
+  required: boolean;
+  media: string;
+  description: string | null;
 };
+export type LmsTilesResponse = { items: CourseTile[]; counts: { my: number; catalogue: number; certificates: number }; canManage: boolean };
+export type LessonRow = { id: string; order: number; title: string; type: 'VIDEO' | 'DOCUMENT'; fileId: string | null; durationSec: number; durationLabel: string; content: string | null; done: boolean; positionSec: number; watchedPct: number };
+export type CourseAssignmentRow = { id: string; audienceType: string; label: string; required: boolean; dueInDays: number | null; enrolled: number };
+export type CourseDetail = {
+  id: string;
+  title: string;
+  description: string | null;
+  category: string;
+  kicker: string;
+  status: string;
+  certificateOnCompletion: boolean;
+  durationLabel: string;
+  lessons: LessonRow[];
+  enrollment: { id: string; status: string; progressPct: number; lessonsDone: number; dueLabel: string | null; overdue: boolean; certificateId: string | null; completedAt: string | null; required: boolean } | null;
+  nextLessonId: string | null;
+  canManage: boolean;
+  canEnroll: boolean;
+  assignments: CourseAssignmentRow[];
+};
+export type LessonProgressResult = { lessonId: string; done: boolean; watchedPct: number; progressPct: number; lessonsDone: number; courseCompleted: boolean; certificateId: string | null };
+export type ManageCourseRow = { id: string; title: string; category: string; categoryLabel: string; lessons: number; durationLabel: string; assignedTo: string; enrolled: number; completedPct: number; overdue: number; status: string };
+export type CourseReportRow = { enrollmentId: string; employeeId: string; name: string; initials: string; department: string | null; status: string; progressPct: number; lessonsDone: number; lessonsTotal: number; dueLabel: string | null; overdue: boolean; completedAt: string | null; required: boolean; source: string };
+export const WP_COURSE_CATEGORY_LABEL: Record<'REQUIRED' | 'OPTIONAL' | 'ONBOARDING', string> = { REQUIRED: 'Required', OPTIONAL: 'Optional', ONBOARDING: 'Onboarding' };
+/** "40 min" / "1h 10m" / "2h" */
+export function courseDurationLabel(totalSec: number): string {
+  const mins = Math.max(1, Math.round(totalSec / 60));
+  if (mins < 60) return `${mins} min`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
 
 // ── Rooms & visitors ───────────────────────────────────────────────────────
 export const bookingCreateSchema = z.object({
@@ -566,10 +667,55 @@ export const visitorCreateSchema = z.object({
   email: z.string().trim().email().optional().nullable().or(z.literal('').transform(() => null)),
   purpose: z.string().trim().min(2).max(160).default('Visit'),
   sendVia: z.enum(['WHATSAPP', 'EMAIL', 'BOTH']).default('WHATSAPP'),
+  /** Front desk walk-in: register and check in at once. */
+  walkIn: z.boolean().default(false),
 });
 export type VisitorCreateInput = z.infer<typeof visitorCreateSchema>;
-export const visitorLookupSchema = z.object({ code: z.string().trim().min(4).max(80) });
-export type FacilityRow = { id: string; kind: 'booking' | 'visitor'; name: string; date: string; time: string; host: string; hostEmployeeId: string; purpose: string; status: string; canCancel: boolean; canCheckIn: boolean; canCheckOut: boolean; passLink?: string | null; shortCode?: string | null };
+export const visitorLookupSchema = z.object({ code: z.string().trim().min(4).max(400) });
+export type FacilityRow = {
+  id: string;
+  kind: 'booking' | 'visitor';
+  name: string;
+  date: string;
+  dateKey: string;
+  time: string;
+  host: string;
+  hostEmployeeId: string;
+  purpose: string;
+  status: string;
+  statusLabel: string;
+  tone: 'accent' | 'outline' | 'neutral';
+  canCancel: boolean;
+  canEdit: boolean;
+  canCheckIn: boolean;
+  canCheckOut: boolean;
+  canResend: boolean;
+  passLink?: string | null;
+  waLink?: string | null;
+  shortCode?: string | null;
+  roomId?: string | null;
+  from?: string | null;
+  to?: string | null;
+  company?: string | null;
+};
+export const facilityListQuery = z.object({
+  tab: z.enum(['bookings', 'visitors']).default('bookings'),
+  scope: z.enum(['mine', 'all']).default('all'),
+  date: dateStr.optional(),
+  roomId: z.string().optional(),
+  upcoming: z.coerce.boolean().default(false),
+});
+export type FacilityListResponse = { items: FacilityRow[]; counts: { bookings: number; visitors: number }; canManage: boolean };
+export type RoomRow = { id: string; name: string; capacity: number; amenities: string[]; branchId: string | null; branch: string | null; active: boolean; openFrom: string; openTo: string; maxBookingMins: number; upcoming: number };
+export type RoomBusy = { bookingId: string; from: string; to: string; host: string; purpose: string; mine: boolean };
+export type RoomAvailability = { date: string; rooms: { id: string; name: string; capacity: number; openFrom: string; openTo: string; busy: RoomBusy[] }[] };
+export const availabilityQuery = z.object({ date: dateStr });
+export const bookingCheckQuery = z.object({ roomId: z.string().min(1), date: dateStr, from: timeStr, to: timeStr, excludeId: z.string().optional() });
+export type BookingCheck = { ok: boolean; message: string | null };
+export type VisitorPassResult = { row: FacilityRow; passUrl: string; waLink: string | null; delivered: string[]; toast: string };
+export type FrontDeskCard = { id: string; name: string; company: string | null; host: string; date: string; expectedTime: string; status: string; statusLabel: string; checkedInAt: string | null; checkedOutAt: string | null; shortCode: string; validNow: boolean; reason: string | null };
+export const VISITOR_STATUS_LABEL: Record<string, string> = { REGISTERED: 'Registered', PASS_SENT: 'E-pass sent', CHECKED_IN: 'Checked in', CHECKED_OUT: 'Checked out', NO_SHOW: 'No show', CANCELLED: 'Cancelled' };
+export const BOOKING_STATUS_LABEL: Record<string, string> = { BOOKED: 'Booked', CANCELLED: 'Cancelled', COMPLETED: 'Completed' };
 
 // ── Policies ───────────────────────────────────────────────────────────────
 export const WP_POLICY_CATEGORIES = ['HANDBOOK', 'HR', 'LEAVE_ATTENDANCE', 'IT_SECURITY', 'POSH', 'HOLIDAY_LIST', 'COMPLIANCE', 'OTHER'] as const;
@@ -626,6 +772,37 @@ export const gameCompleteSchema = z.object({
   moves: z.number().int().min(0).max(10_000).optional(),
   revealed: z.boolean().default(false),
 });
+export const GAME_INFO: Record<GameKey, { title: string; kicker: string; sub: string }> = {
+  queens: { title: 'Queens', kicker: 'Daily · 3 min', sub: 'Place one queen per row, column and colour region.' },
+  sudoku6: { title: 'Mini Sudoku', kicker: 'Daily · 5 min', sub: 'A 6×6 grid.' },
+  wordladder: { title: 'Word ladder', kicker: 'Daily · 2 min', sub: 'Change one letter at a time.' },
+};
+export type WellnessTile = { key: GameKey | 'leaderboard'; kicker: string; title: string; sub: string; cta: string; state: 'NEW' | 'STARTED' | 'SOLVED' | 'REVEALED' | 'BOARD'; points: number | null; elapsedSec: number | null };
+export type WellnessToday = { date: string; dateLabel: string; nextUnlockLabel: string; tiles: WellnessTile[]; streak: number; weekPoints: number };
+export type GameResult = { points: number; elapsedSec: number; hintsUsed: number; revealed: boolean; moves: number | null; rank: number; players: number };
+export type GameStart = {
+  game: GameKey;
+  puzzleDate: string;
+  startToken: string;
+  startedAt: string;
+  serverNow: string;
+  queens?: QueensPuzzle;
+  sudoku?: SudokuPuzzle;
+  ladder?: LadderPuzzle;
+  result: GameResult | null;
+};
+export const leaderboardQuery = z.object({ week: z.enum(['current', 'last']).default('current') });
+export type LeaderboardTeamRow = { departmentId: string; department: string; players: number; headcount: number; points: number; scorePerMember: number; rank: number | null; mine: boolean };
+export type LeaderboardPersonRow = { rank: number; employeeId: string; name: string; initials: string; department: string | null; points: number; games: number; mine: boolean };
+export type LeaderboardResponse = { week: 'current' | 'last'; weekStart: string; weekEnd: string; label: string; teams: LeaderboardTeamRow[]; people: LeaderboardPersonRow[]; leader: string | null };
+/** "2:14" */
+export function formatGameClock(sec: number): string {
+  const s = Math.max(0, Math.floor(sec));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+/** Reveal unlocks after 10 minutes of play. */
+export const GAME_REVEAL_AFTER_SEC = 600;
+export const GAME_MAX_HINTS = 2;
 
 // ── CCTV ───────────────────────────────────────────────────────────────────
 export const cameraUpsertSchema = z.object({
@@ -636,7 +813,11 @@ export const cameraUpsertSchema = z.object({
   enabled: z.boolean().default(true),
   sortOrder: z.number().int().min(0).max(999).default(0),
 });
-export type CameraRow = { id: string; name: string; location: string; status: string; lastSeen: string | null; enabled: boolean; rtspMasked: string | null; hlsUrl: string | null; sortOrder: number };
+export const cameraUpdateSchema = cameraUpsertSchema.partial();
+export type CameraRow = { id: string; name: string; location: string; status: string; lastSeen: string | null; enabled: boolean; rtspMasked: string | null; hlsUrl: string | null; sortOrder: number; kicker: string; meta: string; live: boolean };
+export type CctvListResponse = { items: CameraRow[]; locations: string[]; mode: 'gateway' | 'stub'; canManage: boolean; gatewayDown: boolean };
+export type CctvView = { sessionId: string; hlsUrl: string | null; mode: 'gateway' | 'stub'; expiresAt: string };
+export type CctvSessionRow = { id: string; camera: string; user: string; startedAt: string; endedAt: string | null; minutes: number };
 
 // ═════════════════════════════════════════════════════════════════════════
 // Wellness puzzle generators (pure, deterministic; identical on web and API)

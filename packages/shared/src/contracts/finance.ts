@@ -130,8 +130,18 @@ export const voucherListQuery = paginationQuery.extend({
   to: finDateKey.optional(),
   accountId: z.string().optional(),
   type: z.enum(FIN_VOUCHER_TYPES).optional(),
+  source: z.enum(['MANUAL', 'INVOICE', 'INVOICE_PAYMENT', 'PURCHASE', 'CREDIT_NOTE', 'PAYROLL_RUN', 'REVERSAL']).optional(),
 });
 export type VoucherListQuery = z.infer<typeof voucherListQuery>;
+export const FIN_VOUCHER_SOURCE_LABEL: Record<string, string> = {
+  MANUAL: 'Manual',
+  INVOICE: 'Sales invoice',
+  INVOICE_PAYMENT: 'Invoice receipt',
+  PURCHASE: 'Purchase',
+  CREDIT_NOTE: 'Credit note',
+  PAYROLL_RUN: 'Payroll',
+  REVERSAL: 'Reversal',
+};
 
 export const voucherLineInput = z.object({
   accountId: z.string().min(1, 'Pick an account'),
@@ -410,6 +420,7 @@ export const purchaseListQuery = paginationQuery.extend({
   month: finMonthKey.optional(),
   categoryId: z.string().optional(),
   vendorId: z.string().optional(),
+  itc: z.enum(['all', 'eligible', 'ineligible']).optional(),
 });
 export const purchaseKpiQuery = z.object({ month: finMonthKey.optional() });
 export const extractBillSchema = z.object({ fileId: z.string().min(1), categoryId: z.string().optional().nullable() });
@@ -556,4 +567,42 @@ export type FilingFolderDetail = {
   page: number;
   pageSize: number;
   tags: string[];
+  fys: string[];
+};
+
+// ── Compliance calendar & GST returns ──────────────────────────────────────
+export const FIN_COMPLIANCE_FORMS = ['GSTR1', 'GSTR3B', 'TDS_DEPOSIT', 'PF_ECR', 'PT', 'TDS_RETURN', 'ADVANCE_TAX', 'TAX_AUDIT', 'ITR', 'GSTR9'] as const;
+export type FinComplianceForm = (typeof FIN_COMPLIANCE_FORMS)[number];
+export type FinComplianceItem = {
+  key: string;
+  form: FinComplianceForm;
+  label: string;
+  period: string;
+  periodLabel: string;
+  dueDate: string;
+  status: 'FILED' | 'OVERDUE' | 'DUE_SOON' | 'UPCOMING';
+  daysLeft: number;
+  filedOn: string | null;
+  ref: string | null;
+};
+export const finMarkFiledSchema = z.object({
+  form: z.enum(FIN_COMPLIANCE_FORMS),
+  period: z.string().trim().min(4).max(20),
+  ref: z.string().trim().max(40).optional().nullable(),
+  filedOn: finDateKey,
+});
+export type FinMarkFiledInput = z.infer<typeof finMarkFiledSchema>;
+export type FinGstReturnStatus = { status: 'FILED' | 'OVERDUE' | 'DUE' | 'OPEN'; dueDate: string; filedOn: string | null; ref: string | null };
+export type FinGstReturnRow = {
+  period: string;
+  periodLabel: string;
+  taxablePaise: number;
+  outputTaxPaise: number;
+  itcPaise: number;
+  netPayablePaise: number;
+  invoices: number;
+  bills: number;
+  gstr1: FinGstReturnStatus;
+  gstr3b: FinGstReturnStatus;
+  workingDocumentId: string | null;
 };

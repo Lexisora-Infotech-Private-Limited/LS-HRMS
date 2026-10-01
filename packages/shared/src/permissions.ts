@@ -97,6 +97,7 @@ export const PERMISSIONS = {
   'facility.use': { label: 'Book rooms & register visitors', group: 'Workplace', roles: ALL },
   'facility.manage': { label: 'Manage rooms', group: 'Workplace', roles: HRA },
   'cctv.view': { label: 'CCTV feeds', group: 'Workplace', roles: ADM },
+  'cctv.manage': { label: 'Manage CCTV cameras', group: 'Workplace', roles: ADM },
   'wellness.play': { label: 'Wellness games', group: 'Workplace', roles: ALL },
 
   // Admin

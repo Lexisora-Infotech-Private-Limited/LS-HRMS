@@ -42,6 +42,7 @@ import { platformReader } from '../privacy/privacy.guard';
 import { auditSummary } from '../privacy/privacy.service';
 import { BillingService } from '../billing/billing.service';
 import { addCycle, mrrPaise, pctChange, planLabel, seatsBilled, type SubForMetrics } from '../billing/billing.logic';
+import { invalidateEntitlements } from '../billing/entitlements.guard';
 import { initialQuantity, isPaidPlan, nameFromEmail, seatsFigure, slugProblem, tenantInTab, tenantPlanCode, tenantStatusOf } from './tenants.logic';
 
 const DAY = 86_400_000;
@@ -313,6 +314,7 @@ export class TenantsService {
       // End every session: refresh tokens stop working, access tokens lapse within 15 minutes.
       await tx.refreshToken.updateMany({ where: { tenantId: id, revokedAt: null }, data: { revokedAt: now } });
     });
+    invalidateEntitlements(id);
     const why = input.reason ? ` · ${input.reason}` : '';
     await this.audit.record({ action: 'platform.tenant.suspended', entity: 'Tenant', entityId: id, meta: { summary: `Suspended ${t.name}${why}`, from: t.status, to: 'SUSPENDED' } });
     await recordPlatformAccess(this.prisma.raw, id, { action: 'platform.tenant.suspended', entity: 'Tenant', entityId: id, actorName: actor, ip: requireContext().ip, meta: { summary: `Workspace suspended by Lexisora${why}`, from: t.status, to: 'SUSPENDED' } });
@@ -339,6 +341,7 @@ export class TenantsService {
         await tx.subscriptionChange.create({ data: { tenantId: id, subscriptionId: sub.id, type: 'STATUS', from: { status: sub.status }, to: { status: subStatus }, actorName: actor } });
       }
     });
+    invalidateEntitlements(id);
     const note = overdue ? ` · payment still due, grace until ${formatDate(new Date(now.getTime() + 7 * DAY))}` : '';
     await this.audit.record({ action: 'platform.tenant.reactivated', entity: 'Tenant', entityId: id, meta: { summary: `Reactivated ${t.name}${note}`, from: t.status, to: tenantStatus } });
     await recordPlatformAccess(this.prisma.raw, id, { action: 'platform.tenant.reactivated', entity: 'Tenant', entityId: id, actorName: actor, ip: requireContext().ip, meta: { summary: `Workspace reactivated by Lexisora${note}`, from: t.status, to: tenantStatus } });
@@ -355,6 +358,7 @@ export class TenantsService {
     const actor = this.actor();
     await this.db.subscription.update({ where: { id: sub.id }, data: { status: 'PAST_DUE', graceEndsAt: until, pastDueSince: sub.pastDueSince ?? now } });
     if (t.status !== 'SUSPENDED') await this.db.tenant.update({ where: { id }, data: { status: 'PAYMENT_DUE' } });
+    invalidateEntitlements(id);
     await this.db.subscriptionChange.create({ data: { tenantId: id, subscriptionId: sub.id, type: 'STATUS', from: { status: sub.status, graceEndsAt: sub.graceEndsAt?.toISOString() ?? null }, to: { status: 'PAST_DUE', graceEndsAt: until.toISOString() }, actorName: actor } });
     const summary = `Grace period extended by ${input.days} days to ${formatDate(until)}`;
     await this.audit.record({ action: 'platform.tenant.grace_extended', entity: 'Tenant', entityId: id, meta: { summary: `${t.name}: ${summary}` } });

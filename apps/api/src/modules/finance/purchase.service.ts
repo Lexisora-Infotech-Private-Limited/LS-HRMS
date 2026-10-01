@@ -198,6 +198,7 @@ export class PurchaseService {
       ...(range ? { billDate: { gte: range.start, lte: range.end } } : {}),
       ...(q.categoryId ? { categoryId: q.categoryId } : {}),
       ...(q.vendorId ? { vendorId: q.vendorId } : {}),
+      ...(q.itc === 'eligible' ? { itcEligible: true } : q.itc === 'ineligible' ? { itcEligible: false } : {}),
       ...(q.q ? { OR: [{ vendorInvoiceNo: { contains: q.q, mode: 'insensitive' } }, { vendor: { name: { contains: q.q, mode: 'insensitive' } } }, { notes: { contains: q.q, mode: 'insensitive' } }] } : {}),
     };
     const [rows, total] = await Promise.all([
@@ -231,7 +232,7 @@ export class PurchaseService {
       itcPeriod: p.itcPeriod,
       notes: p.notes,
       createdAt: p.createdAt.toISOString(),
-      supplyType: p.igstPaise > 0 || !finDeriveSupplyType(tenant.stateCode, p.vendor.stateCode || stateFromGstin(p.vendor.gstin)).startsWith('INTRA') ? (p.cgstPaise > 0 ? 'INTRA' : 'INTER') : 'INTRA',
+      supplyType: p.igstPaise > 0 ? 'INTER' : p.cgstPaise > 0 ? 'INTRA' : finDeriveSupplyType(tenant.stateCode, p.vendor.stateCode || stateFromGstin(p.vendor.gstin)),
       filingDocumentId: doc?.id ?? null,
     };
   }

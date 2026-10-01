@@ -135,4 +135,10 @@ export class PeopleJobs implements OnModuleInit {
   async warranty() {
     await this.forEachTenant('asset-warranty', () => this.assets.warrantyScan());
   }
+
+  /** 02:15 IST: anonymise candidates past their DPDP retention date (M6 acceptance 6). */
+  @Cron('15 2 * * *', { timeZone: 'Asia/Kolkata' })
+  async candidateRetention() {
+    await this.forEachTenant('candidate-retention', () => this.candidates.retentionSweep());
+  }
 }
