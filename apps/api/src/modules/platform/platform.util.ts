@@ -1,5 +1,5 @@
-import type { PrismaClient } from '@prisma/client';
-import { formatDayMonth, formatTime, istDateKey } from '@lexisora/shared';
+import type { Prisma, PrismaClient } from '@prisma/client';
+import { formatDayMonth, formatMonthYear, formatTime, istDateKey } from '@lexisora/shared';
 
 /** Start of an IST calendar day ("2026-09-29") as a UTC instant. */
 export function istStart(key: string): Date {
@@ -17,12 +17,12 @@ export function openedLabel(d: Date, now = new Date()): string {
   return formatDayMonth(d);
 }
 
-/** "12 Oct" within 60 days, otherwise "Mar 2027". */
+/** "12 Oct" within 60 days, otherwise "Mar 2027" (IST, runtime-ICU independent). */
 export function renewalLabel(end: Date | null | undefined, now = new Date()): string {
   if (!end) return '—';
   const days = (end.getTime() - now.getTime()) / 86400_000;
   if (days <= 60) return formatDayMonth(end);
-  return new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', month: 'short', year: 'numeric' }).format(end);
+  return formatMonthYear(end);
 }
 
 let cachedPlatformTenant: string | null = null;
@@ -48,3 +48,31 @@ export async function platformAdminUserIds(raw: PrismaClient): Promise<string[]>
 
 /** Seat usage = users that can sign in or are invited (DISABLED excluded; interns count). */
 export const SEAT_STATUSES = ['ACTIVE', 'INVITED'] as const;
+
+/** Actor label for platform staff in a customer's audit log ("Lexisora platform · Rohit Verma"). */
+export function platformActorName(userName: string | null | undefined, team = 'Lexisora platform'): string {
+  return userName ? `${team} · ${userName}` : team;
+}
+
+/**
+ * Write a `platform.*` row into a customer tenant's audit log, so the tenant sees every action
+ * Lexisora staff took on its workspace (Audit log → Platform tab, Data privacy → Platform access).
+ */
+export async function recordPlatformAccess(
+  raw: PrismaClient,
+  tenantId: string,
+  a: { action: string; entity: string; entityId?: string | null; actorName: string; ip?: string | null; meta: Record<string, unknown> },
+): Promise<void> {
+  await raw.auditLog.create({
+    data: {
+      tenantId,
+      actorUserId: null,
+      actorName: a.actorName,
+      ip: a.ip ?? null,
+      action: a.action.startsWith('platform.') ? a.action : `platform.${a.action}`,
+      entity: a.entity,
+      entityId: a.entityId ?? null,
+      meta: a.meta as Prisma.InputJsonValue,
+    },
+  });
+}

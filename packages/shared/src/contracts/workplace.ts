@@ -223,6 +223,43 @@ export type FeedPost = {
 };
 export type FeedComment = { id: string; parentId: string | null; body: string; authorName: string; initials: string; createdAt: string; canDelete: boolean; deleted: boolean };
 export type FeedSidebar = { eotm: { month: string; name: string; citation: string; certificateId: string | null } | null; kudosThisWeek: { id: string; text: string }[] };
+export const FEED_KINDS = ['BLOG', 'MILESTONE', 'UPDATE', 'EOTM', 'KUDOS'] as const;
+export const FEED_KIND_LABEL: Record<(typeof FEED_KINDS)[number], string> = { BLOG: 'Blog', MILESTONE: 'Milestone', UPDATE: 'Update', EOTM: 'EOTM', KUDOS: 'Kudos' };
+export const feedListQuery = z.object({
+  kind: z.enum(FEED_KINDS).optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(50).default(10),
+});
+export type FeedListResponse = { items: FeedPostView[]; total: number; page: number; pageSize: number; canPublish: boolean; drafts: number };
+/** A feed post as rendered on the card (FeedPost + presentation fields). */
+export type FeedPostView = FeedPost & {
+  kindLabel: string;
+  coverFileId: string | null;
+  editedAt: string | null;
+  canEdit: boolean;
+  canComment: boolean;
+  /** KUDOS posts: badge + recipient for the compact card. */
+  kudos: { badge: string; recipient: string; recipientEmployeeId: string } | null;
+};
+export type FeedDraftRow = { id: string; title: string; kind: string; updatedAt: string; excerpt: string };
+export const feedPinSchema = z.object({ pinned: z.boolean() });
+
+/** "Chief Executive Officer" → "CEO", "HR Manager" → "HR"; other designations unchanged. */
+export function designationShort(name: string | null | undefined): string {
+  const n = (name ?? '').trim();
+  if (!n) return 'Employee';
+  const chief = /^chief\s+(\w+)\s+officer$/i.exec(n);
+  if (chief) return `C${chief[1]![0]!.toUpperCase()}O`;
+  if (/^(hr|human resources)\b/i.test(n)) return 'HR';
+  return n;
+}
+
+/** "@Priya" / "@Priya Sharma" tokens → candidate names (resolved to employees server-side). */
+export function mentionTokens(body: string): string[] {
+  const out = new Set<string>();
+  for (const m of (body ?? '').matchAll(/(^|[\s(])@([A-Za-z][A-Za-z.'-]*(?:\s[A-Z][A-Za-z.'-]*)?)/g)) out.add(m[2]!.trim());
+  return [...out];
+}
 
 // ── Kudos & EOTM ───────────────────────────────────────────────────────────
 export const kudosCreateSchema = z.object({
@@ -238,9 +275,54 @@ export const eotmCreateSchema = z.object({
 });
 export type EotmCreateInput = z.infer<typeof eotmCreateSchema>;
 export type KudosRow = { id: string; employee: string; employeeId: string; badge: string; from: string; message: string; date: string; isEotm: boolean; certificateId: string | null; canRevoke: boolean };
+export const KUDOS_TABS = ['all', 'given', 'received'] as const;
+export type KudosTab = (typeof KUDOS_TABS)[number];
+export const kudosListQuery = z.object({
+  tab: z.enum(KUDOS_TABS).default('all'),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(25),
+});
+export type KudosListResponse = {
+  items: KudosRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+  counts: Record<KudosTab, number>;
+  kpis: { thisMonth: number; topBadge: string | null; topBadgeCount: number; eotm: { name: string; month: string } | null };
+};
+export const kudosRevokeSchema = z.object({ reason: optStr(300) });
+export const badgeUpsertSchema = z.object({
+  name: z.string().trim().min(2, 'Name needs at least 2 characters').max(40),
+  icon: z.string().trim().max(30).default('star'),
+  description: optStr(200),
+  active: z.boolean().default(true),
+});
+export type BadgeUpsertInput = z.infer<typeof badgeUpsertSchema>;
+export type BadgeRow = { id: string; name: string; icon: string; description: string | null; system: boolean; active: boolean; uses: number };
+export type EmployeeBadge = { badgeId: string; name: string; icon: string; count: number; lastAt: string };
+export type EotmRow = {
+  id: string;
+  month: string;
+  monthLabel: string;
+  employeeId: string;
+  name: string;
+  citation: string;
+  announcedBy: string;
+  announcedAt: string;
+  postId: string | null;
+  certificateId: string | null;
+  certificateStatus: string | null;
+  revoked: boolean;
+};
+export type EotmOptions = { months: { value: string; label: string; taken: boolean }[]; current: EotmRow | null };
+export const eotmRevokeSchema = z.object({ reason: z.string().trim().min(3, 'Give a reason').max(300) });
+/** Kudos anti-spam: same badge to the same person once per 7 days; 10 kudos per giver per 7 days. */
+export const KUDOS_LIMITS = { sameBadgeDays: 7, windowDays: 7, maxPerWindow: 10 } as const;
 
 // ── Certificates ───────────────────────────────────────────────────────────
 export type CertificateVerify = { valid: boolean; status: string; holderName: string; title: string; subtitle: string | null; issuedAt: string; issuer: string; code: string; revokedAt: string | null };
+export type CertificateRow = { id: string; type: string; title: string; subtitle: string | null; holderName: string; issuedAt: string; status: string; code: string };
+export const certificateRevokeSchema = z.object({ reason: z.string().trim().min(3, 'Give a reason').max(300) });
 
 // ── Chat ───────────────────────────────────────────────────────────────────
 export const channelCreateSchema = z.object({
@@ -307,7 +389,102 @@ export const ticketListQuery = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
 });
-export type TicketRow = { id: string; code: string; subject: string; category: string; priority: string; assignee: string; status: string; slaState: string; slaLabel: string; updatedAt: string; restricted: boolean };
+export type TicketRow = { id: string; code: string; subject: string; category: string; priority: string; assignee: string; status: string; slaState: string; slaLabel: string; updatedAt: string; restricted: boolean; requester: string; escalationLevel: number; unassigned: boolean };
+export type TicketTab = z.infer<typeof ticketListQuery>['tab'];
+export type TicketListResponse = { items: TicketRow[]; total: number; page: number; pageSize: number; counts: Record<TicketTab, number> };
+export const HELPDESK_STATUS_LABEL: Record<HelpdeskTicketStatus, string> = { OPEN: 'Open', IN_PROGRESS: 'In progress', WAITING: 'Waiting', RESOLVED: 'Resolved', CLOSED: 'Closed', CANCELLED: 'Cancelled' };
+export const HELPDESK_PRIORITY_LABEL: Record<(typeof HELPDESK_PRIORITIES)[number], string> = { HIGH: 'High', MEDIUM: 'Medium', LOW: 'Low' };
+export const SLA_STATE_LABEL: Record<string, string> = { ON_TRACK: 'On track', AT_RISK: 'At risk', BREACHED: 'Breached', MET: 'Met' };
+export type TicketFile = { fileId: string; name: string; size: number; mime: string };
+export type TicketCommentRow = { id: string; kind: string; visibility: 'PUBLIC' | 'INTERNAL'; body: string; authorName: string; initials: string; createdAt: string; mine: boolean; files: TicketFile[] };
+export type TicketDetail = {
+  id: string;
+  code: string;
+  subject: string;
+  description: string;
+  status: HelpdeskTicketStatus;
+  priority: (typeof HELPDESK_PRIORITIES)[number];
+  categoryId: string;
+  category: string;
+  groupId: string;
+  group: string;
+  restricted: boolean;
+  requester: { employeeId: string; name: string; initials: string };
+  assigneeEmployeeId: string | null;
+  assignee: string;
+  createdAt: string;
+  updatedAt: string;
+  firstResponseDueAt: string;
+  resolutionDueAt: string;
+  firstRespondedAt: string | null;
+  resolvedAt: string | null;
+  closedAt: string | null;
+  pausedMins: number;
+  paused: boolean;
+  slaState: string;
+  slaLabel: string;
+  elapsedMins: number;
+  resolutionMins: number;
+  escalationLevel: number;
+  escalatedTo: string[];
+  resolutionNote: string | null;
+  csat: number | null;
+  reopenCount: number;
+  attachments: TicketFile[];
+  /** null when the viewer only sees the header (restricted ticket, escalation target). */
+  comments: TicketCommentRow[] | null;
+  headerOnly: boolean;
+  can: { work: boolean; comment: boolean; internal: boolean; resolve: boolean; reopen: boolean; cancel: boolean; close: boolean; escalate: boolean; csat: boolean };
+  assignees: { value: string; label: string }[];
+};
+export type HelpdeskMeta = {
+  categories: { value: string; label: string; group: string; restricted: boolean }[];
+  canWork: boolean;
+  canAdmin: boolean;
+  sla: { priority: string; firstResponseMins: number; resolutionMins: number }[];
+};
+export type HelpdeskSettings = {
+  groups: { id: string; name: string; leadEmployeeId: string | null; lead: string | null; memberEmployeeIds: string[]; members: string[]; active: boolean; roundRobin: boolean; openTickets: number }[];
+  categories: { id: string; name: string; groupId: string; group: string; restricted: boolean; active: boolean; sortOrder: number; openTickets: number }[];
+  sla: { priority: string; firstResponseMins: number; resolutionMins: number }[];
+  autoCloseDays: number;
+};
+export const supportGroupSchema = z.object({
+  name: z.string().trim().min(2, 'Name needs at least 2 characters').max(60),
+  leadEmployeeId: z.string().nullable().optional(),
+  memberEmployeeIds: z.array(z.string()).max(50).default([]),
+  active: z.boolean().default(true),
+  /** Auto-assign new tickets to the member with the fewest open tickets. */
+  roundRobin: z.boolean().default(false),
+});
+export type SupportGroupInput = z.infer<typeof supportGroupSchema>;
+export const ticketCategorySchema = z.object({
+  name: z.string().trim().min(2, 'Name needs at least 2 characters').max(60),
+  groupId: z.string().min(1, 'Pick a support group'),
+  restricted: z.boolean().default(false),
+  active: z.boolean().default(true),
+});
+export type TicketCategoryInput = z.infer<typeof ticketCategorySchema>;
+export const slaPolicySchema = z.object({
+  firstResponseMins: z.number().int().min(15).max(10_080),
+  resolutionMins: z.number().int().min(30).max(43_200),
+});
+export const ticketEscalateSchema = z.object({ note: optStr(500) });
+/** Default SLA (business minutes; Mon–Fri 09:30–18:30 IST): High 8 h, Medium 24 h, Low 72 h to resolve. */
+export const DEFAULT_SLA: Record<(typeof HELPDESK_PRIORITIES)[number], { firstResponseMins: number; resolutionMins: number }> = {
+  HIGH: { firstResponseMins: 60, resolutionMins: 480 },
+  MEDIUM: { firstResponseMins: 240, resolutionMins: 1440 },
+  LOW: { firstResponseMins: 480, resolutionMins: 4320 },
+};
+/** "1 h 20 m" / "45 m" / "2 d 3 h" (business-hour durations: 1 d = 9 h). */
+export function formatBizMinutes(mins: number): string {
+  const m = Math.max(0, Math.round(mins));
+  if (m < 60) return `${m} m`;
+  if (m < 540) return `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} m` : ''}`;
+  const d = Math.floor(m / 540);
+  const h = Math.floor((m % 540) / 60);
+  return `${d} d${h ? ` ${h} h` : ''}`;
+}
 
 // ── Learning ───────────────────────────────────────────────────────────────
 export const courseCreateSchema = z.object({
@@ -413,7 +590,31 @@ export const policyVersionSchema = z.object({
   requiresReack: z.boolean().default(true),
 });
 export const policyAckSchema = z.object({ versionId: z.string().min(1), readSeconds: z.number().int().min(0).max(86_400).default(0) });
-export type PolicyRow = { id: string; title: string; category: string; updated: string; requiresAck: boolean; myState: 'ACKNOWLEDGED' | 'PENDING' | 'NA'; acknowledgedAt: string | null; versionId: string | null; version: number; fileId: string | null; compliance: string | null; isHolidayList: boolean };
+export type PolicyRow = { id: string; title: string; category: string; updated: string; requiresAck: boolean; myState: 'ACKNOWLEDGED' | 'PENDING' | 'NA'; acknowledgedAt: string | null; versionId: string | null; version: number; fileId: string | null; compliance: string | null; isHolidayList: boolean; dueAt: string | null; overdue: boolean; status: string };
+export const WP_POLICY_CATEGORY_LABEL: Record<(typeof WP_POLICY_CATEGORIES)[number], string> = {
+  HANDBOOK: 'Handbook',
+  HR: 'HR policy',
+  LEAVE_ATTENDANCE: 'Leave & attendance',
+  IT_SECURITY: 'IT & security',
+  POSH: 'POSH',
+  HOLIDAY_LIST: 'Holiday list',
+  COMPLIANCE: 'Compliance',
+  OTHER: 'Other',
+};
+export const policyListQuery = z.object({ tab: z.enum(['all', 'pending', 'archived']).default('all') });
+export type PolicyListResponse = { items: PolicyRow[]; counts: { all: number; pending: number; archived: number }; canManage: boolean };
+export type PolicyVersionRow = { id: string; version: number; effectiveFrom: string; changeSummary: string | null; fileId: string | null; publishedAt: string | null; publishedBy: string | null; isCurrent: boolean; requiresReack: boolean };
+export type PolicyDetail = PolicyRow & { versions: PolicyVersionRow[]; minReadSeconds: number; ackDueDays: number; changeSummary: string | null; effectiveFrom: string | null };
+export type PolicyComplianceRow = { id: string; title: string; category: string; version: number; required: number; acknowledged: number; pending: number; overdue: number; pct: number };
+export type PolicyCompliancePerson = { employeeId: string; name: string; initials: string; department: string | null; dueAt: string; acknowledgedAt: string | null; overdue: boolean; lastRemindedAt: string | null };
+export const policyComplianceQuery = z.object({ state: z.enum(['pending', 'done', 'overdue', 'all']).default('pending') });
+export const wpHolidaysQuery = z.object({ year: z.coerce.number().int().min(2000).max(2100).optional() });
+export type WpHolidayRow = { id: string; date: string; day: string; name: string; type: string; typeLabel: string; location: string; past: boolean };
+export type WpHolidayList = { year: number; items: WpHolidayRow[]; years: number[] };
+/** Reader gating: the Acknowledge checkbox unlocks after max(10 s, pages × 3 s). */
+export function minReadSecondsFor(pages: number | null | undefined): number {
+  return Math.max(10, Math.round((pages ?? 0) * 3));
+}
 
 // ── Wellness ───────────────────────────────────────────────────────────────
 export const GAME_KEYS = ['queens', 'sudoku6', 'wordladder'] as const;

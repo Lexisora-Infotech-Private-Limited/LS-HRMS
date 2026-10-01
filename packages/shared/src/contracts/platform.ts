@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { paginationQuery } from '../api';
+import { paginationQuery, type Paginated } from '../api';
 import { istDateKey } from '../format';
 import { NAV, canSee } from '../nav';
 import { PERMISSIONS, type PermissionKey } from '../permissions';
@@ -433,7 +433,9 @@ export const checkoutSchema = quoteSchema;
 export type CheckoutInput = QuoteInput;
 
 export const seatsSchema = z.object({ quantity: z.coerce.number().int().min(1).max(100000) });
+export type SeatsInput = z.infer<typeof seatsSchema>;
 export const promoSchema = z.object({ code: z.string().trim().min(2, 'Enter a promo code').max(40).transform((s) => s.toUpperCase()) });
+export type PromoInput = z.infer<typeof promoSchema>;
 export const contactSalesSchema = z.object({
   name: z.string().trim().min(2, 'Name is required'),
   email: z.string().trim().email('Enter a valid email'),
@@ -443,6 +445,37 @@ export const contactSalesSchema = z.object({
 });
 export type ContactSalesInput = z.infer<typeof contactSalesSchema>;
 export const confirmPaymentSchema = z.object({ outcome: z.enum(['success', 'fail']) });
+export type ConfirmPaymentInput = z.infer<typeof confirmPaymentSchema>;
+
+/** GST state codes → names (place of supply on Lexisora's SaaS invoices). */
+export const GST_STATE_NAMES: Record<string, string> = {
+  '01': 'Jammu and Kashmir', '02': 'Himachal Pradesh', '03': 'Punjab', '04': 'Chandigarh', '05': 'Uttarakhand', '06': 'Haryana',
+  '07': 'Delhi', '08': 'Rajasthan', '09': 'Uttar Pradesh', '10': 'Bihar', '11': 'Sikkim', '12': 'Arunachal Pradesh', '13': 'Nagaland',
+  '14': 'Manipur', '15': 'Mizoram', '16': 'Tripura', '17': 'Meghalaya', '18': 'Assam', '19': 'West Bengal', '20': 'Jharkhand',
+  '21': 'Odisha', '22': 'Chhattisgarh', '23': 'Madhya Pradesh', '24': 'Gujarat', '26': 'Dadra and Nagar Haveli and Daman and Diu',
+  '27': 'Maharashtra', '29': 'Karnataka', '30': 'Goa', '31': 'Lakshadweep', '32': 'Kerala', '33': 'Tamil Nadu', '34': 'Puducherry',
+  '35': 'Andaman and Nicobar Islands', '36': 'Telangana', '37': 'Andhra Pradesh', '38': 'Ladakh',
+};
+export const GSTIN_RE = /^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
+
+const blankToNull = (v: string | null | undefined) => (v ? v : null);
+
+/** Billing details printed on SaaS invoices (legal name, GSTIN, place of supply). */
+export const billingProfileSchema = z
+  .object({
+    legalName: z.string().trim().min(2, 'Legal name is required').max(160),
+    gstin: z
+      .string()
+      .trim()
+      .toUpperCase()
+      .nullish()
+      .transform(blankToNull)
+      .refine((v) => v === null || GSTIN_RE.test(v), 'Enter a valid 15-character GSTIN'),
+    stateCode: z.string().refine((c) => c in GST_STATE_NAMES, 'Pick a state'),
+    address: z.string().trim().max(300).nullish().transform(blankToNull),
+  })
+  .refine((v) => !v.gstin || v.gstin.slice(0, 2) === v.stateCode, { path: ['gstin'], message: 'The GSTIN’s state code doesn’t match the state' });
+export type BillingProfileInput = z.infer<typeof billingProfileSchema>;
 
 export type QuoteLine = { kind: 'SEATS' | 'PRORATION' | 'DISCOUNT'; description: string; quantity: number; unitPaise: number; amountPaise: number };
 export type QuoteDto = {
@@ -462,6 +495,7 @@ export type QuoteDto = {
 };
 
 export type BillingOverview = {
+  tenantName: string;
   planCode: PlanCode;
   planName: string;
   cycle: BillingCycleKey | null;
@@ -480,7 +514,12 @@ export type BillingOverview = {
   promo: { code: string; description: string } | null;
   gateway: 'MOCK' | 'RAZORPAY';
   billingState: string | null;
+  /** The issued / overdue invoice the "Pay now" banner settles. */
+  dueInvoice: { id: string; number: string | null; totalPaise: number } | null;
+  profile: { legalName: string | null; gstin: string | null; stateCode: string | null; stateName: string | null; address: string | null };
 };
+
+export type SeatQuoteDto = { quantity: number; addedSeats: number; amountPaise: number; totalPaise: number; remainingDays: number; totalDays: number };
 
 export type SaasInvoiceDto = {
   id: string;
@@ -503,6 +542,8 @@ export type CheckoutDto = {
   keyId?: string;
 };
 
+export type SeatChangeResult = { checkout?: CheckoutDto; scheduled?: { quantity: number; effective: string | null }; message: string };
+
 export type CheckoutDetailDto = {
   orderId: string;
   status: string;
@@ -513,7 +554,61 @@ export type CheckoutDetailDto = {
   quote: QuoteDto;
 };
 
+export type PlanCardCode = 'FREE' | 'GROWTH' | 'ENTERPRISE';
+export type PlanCta = { label: string; action: 'none' | 'checkout' | 'downgrade' | 'cancel-downgrade' | 'contact'; disabled: boolean; current: boolean };
+
+/** Plan-card buttons by current plan (spec M10 table). */
+export function planCtas(current: PlanCode, cancelAtPeriodEnd = false): Record<PlanCardCode, PlanCta> {
+  const contact: PlanCta = { label: 'Contact sales', action: 'contact', disabled: false, current: false };
+  if (current === 'ENTERPRISE' || current === 'INTERNAL') {
+    return {
+      FREE: { label: 'Downgrade', action: 'none', disabled: true, current: false },
+      GROWTH: { label: 'Billed by contract', action: 'none', disabled: true, current: false },
+      ENTERPRISE: { label: 'Current plan', action: 'none', disabled: true, current: true },
+    };
+  }
+  if (current === 'GROWTH') {
+    return {
+      FREE: cancelAtPeriodEnd
+        ? { label: 'Cancel downgrade', action: 'cancel-downgrade', disabled: false, current: false }
+        : { label: 'Downgrade', action: 'downgrade', disabled: false, current: false },
+      GROWTH: { label: 'Current plan · renew', action: 'checkout', disabled: false, current: true },
+      ENTERPRISE: contact,
+    };
+  }
+  return {
+    FREE: { label: 'Current plan', action: 'none', disabled: true, current: true },
+    GROWTH: { label: 'Upgrade', action: 'checkout', disabled: false, current: false },
+    ENTERPRISE: contact,
+  };
+}
+
+/** "13 of 50 seats used · first 10 users are free on every plan." */
+export function seatUsageCopy(used: number, quantity: number): string {
+  return `${used} of ${quantity} seats used · first ${FREE_SEATS} users are free on every plan.`;
+}
+
 // ── Branding ────────────────────────────────────────────────────────────────
+
+/** Login domains live under this root ("acme" → "acme.hrms.app"). */
+export const ROOT_DOMAIN = 'hrms.app';
+
+/** "Acme" → "acme.hrms.app"; full host names pass through lower-cased (scheme/path stripped). */
+export function normalizeLoginDomain(v: string): string {
+  const s = v.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/[/?#].*$/, '');
+  return s.includes('.') ? s : `${s}.${ROOT_DOMAIN}`;
+}
+
+/** The workspace slug of a login domain under the root ("acme.hrms.app" → "acme"), else null (custom domain). */
+export function slugOfDomain(domain: string): string | null {
+  const suffix = `.${ROOT_DOMAIN}`;
+  if (!domain.endsWith(suffix)) return null;
+  const label = domain.slice(0, -suffix.length);
+  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label) ? label : null;
+}
+
+/** Workspace names nobody may claim. */
+export const RESERVED_SLUGS = ['www', 'api', 'app', 'admin', 'console', 'mail', 'smtp', 'support', 'status', 'help', 'docs', 'billing', 'edge', 'static', 'cdn'];
 
 export const publishBrandingSchema = z.object({
   presetKey: z.string().nullish(),
@@ -524,10 +619,29 @@ export const publishBrandingSchema = z.object({
   domain: z
     .string()
     .trim()
-    .toLowerCase()
-    .regex(HOST_RE, 'Enter a domain like acme.hrms.app'),
+    .min(2, 'Enter a login domain')
+    .transform(normalizeLoginDomain)
+    .pipe(z.string().regex(HOST_RE, 'Enter a domain like acme.hrms.app')),
 });
 export type PublishBrandingInput = z.infer<typeof publishBrandingSchema>;
+
+/** Sidebar text colour on the secondary brand colour: white when it reads at 4.5:1, else ink. */
+export function sidebarForeground(secondaryHex: string): string {
+  return contrastRatio('#ffffff', secondaryHex) >= 4.5 ? '#ffffff' : '#2d2b2b';
+}
+
+/** Inline contrast warnings for the Branding form (WCAG 2.1; publishing is still allowed). */
+export function brandContrastWarnings(primaryHex: string, secondaryHex: string, background = '#fbfafa'): string[] {
+  if (!HEX_RE.test(primaryHex) || !HEX_RE.test(secondaryHex)) return [];
+  const out: string[] = [];
+  const onBg = contrastRatio(primaryHex, background);
+  if (onBg < 3) out.push(`Primary on background is ${onBg.toFixed(1)}:1; text links will use a darker shade automatically.`);
+  const white = contrastRatio('#ffffff', primaryHex);
+  if (white < 4.5) out.push(`White text on the primary colour is ${white.toFixed(1)}:1 — filled buttons may be hard to read.`);
+  const side = contrastRatio(sidebarForeground(secondaryHex), secondaryHex);
+  if (side < 4.5) out.push(`Sidebar text on the secondary colour is ${side.toFixed(1)}:1; pick a darker or lighter secondary.`);
+  return out;
+}
 
 export type BrandingDto = {
   presetKey: string | null;
@@ -543,31 +657,58 @@ export type BrandingDto = {
   publishedByName: string | null;
   locked: boolean;
   planCode: PlanCode;
-  versions: { id: string; version: number; status: string; presetKey: string | null; primaryHex: string; secondaryHex: string; publishedAt: string; publishedByName: string | null }[];
+  versions: { id: string; version: number; status: string; presetKey: string | null; primaryHex: string; secondaryHex: string; productName: string | null; domain: string; publishedAt: string; publishedByName: string | null }[];
 };
+
+export type DomainCheckDto = { domain: string; available: boolean; message: string };
 
 // ── Tenants (platform operators only) ──────────────────────────────────────
 
-export const createTenantSchema = z.object({
-  company: z.string().trim().min(2, 'Company name is required').max(120),
-  domain: z
-    .string()
-    .trim()
-    .toLowerCase()
-    .min(2, 'Login domain is required')
-    .max(100)
-    .regex(/^[a-z0-9-]+(\.[a-z0-9-]+)*$/, 'Use letters, numbers and hyphens'),
-  planCode: z.enum(['FREE', 'GROWTH', 'ENTERPRISE']),
-  cycle: z.enum(BILLING_CYCLES).nullish(),
-  seats: z.coerce.number().int().min(1).max(100000).nullish(),
-  adminEmail: z.string().trim().toLowerCase().email('Enter the admin’s email'),
-  adminName: z.string().trim().max(80).nullish(),
-  stateCode: z.string().regex(/^\d{2}$/).nullish(),
-});
+export const createTenantSchema = z
+  .object({
+    company: z.string().trim().min(2, 'Company name is required').max(120),
+    domain: z
+      .string()
+      .trim()
+      .toLowerCase()
+      .min(2, 'Login domain is required')
+      .max(100)
+      .transform((v) => v.replace(/^https?:\/\//, '').replace(new RegExp(`\\.${ROOT_DOMAIN.replace('.', '\\.')}$`), ''))
+      .pipe(z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/, 'Use letters, numbers and hyphens, e.g. nova')),
+    planCode: z.enum(['FREE', 'GROWTH', 'ENTERPRISE']),
+    cycle: z.enum(BILLING_CYCLES).nullish(),
+    seats: z.coerce.number().int().min(1).max(100000).nullish(),
+    adminEmail: z.string().trim().toLowerCase().email('Enter the admin’s email'),
+    adminName: z.string().trim().max(80).nullish(),
+    stateCode: z
+      .string()
+      .nullish()
+      .transform(blankToNull)
+      .refine((c) => c === null || c in GST_STATE_NAMES, 'Pick a state'),
+    gstin: z
+      .string()
+      .trim()
+      .toUpperCase()
+      .nullish()
+      .transform(blankToNull)
+      .refine((v) => v === null || GSTIN_RE.test(v), 'Enter a valid 15-character GSTIN'),
+  })
+  .superRefine((v, ctx) => {
+    if (v.planCode !== 'FREE' && (!v.seats || v.seats <= FREE_SEATS)) {
+      ctx.addIssue({ code: 'custom', path: ['seats'], message: `Paid plans need at least ${FREE_SEATS + 1} seats` });
+    }
+  });
 export type CreateTenantInput = z.infer<typeof createTenantSchema>;
 
+export const extendGraceSchema = z.object({ days: z.coerce.number().int().min(1).max(30).default(7) });
+export type ExtendGraceInput = z.infer<typeof extendGraceSchema>;
+export const tenantNoteSchema = z.object({ reason: z.string().trim().max(200).nullish() });
+export type TenantNoteInput = z.infer<typeof tenantNoteSchema>;
+
 export const TENANT_TABS = ['all', 'paid', 'free', 'attention'] as const;
+export type TenantTab = (typeof TENANT_TABS)[number];
 export const tenantsQuerySchema = paginationQuery.extend({ tab: z.enum(TENANT_TABS).default('all') });
+export type TenantsQuery = z.infer<typeof tenantsQuerySchema>;
 
 export type TenantRowDto = {
   id: string;
@@ -575,6 +716,7 @@ export type TenantRowDto = {
   domain: string;
   planCode: PlanCode;
   planLabel: string;
+  /** Wireframe figure: purchased seats on paid plans, users in use on Free / Internal. */
   seats: string;
   seatsUsed: number;
   quantity: number;
@@ -586,20 +728,24 @@ export type TenantRowDto = {
   createdAt: string;
 };
 
-export type TenantsResponse = {
+export type TenantsResponse = Paginated<TenantRowDto> & {
   kpis: { tenants: number; freeTier: number; seatsBilled: number; seatsDelta: number; mrrPaise: number; mrrDeltaPct: number | null };
-  items: TenantRowDto[];
-  counts: Record<(typeof TENANT_TABS)[number], number>;
+  counts: Record<TenantTab, number>;
 };
 
 export type TenantDetailDto = TenantRowDto & {
+  slug: string;
+  stateName: string | null;
+  customerSince: string | null;
   adminContacts: { name: string; email: string; status: string }[];
   activeUsers: number;
-  subscription: { status: string; cycle: string | null; currentPeriodEnd: string | null; pastDueSince: string | null; graceEndsAt: string | null } | null;
+  subscription: { status: string; cycle: string | null; currentPeriodEnd: string | null; pastDueSince: string | null; graceEndsAt: string | null; collection: string } | null;
   invoices: SaasInvoiceDto[];
   tickets: { id: string; code: string; subject: string; status: string; severity: string }[];
   platformAudit: { id: string; action: string; actorName: string; createdAt: string; summary: string }[];
 };
+
+export type ProvisionResultDto = { tenant: TenantRowDto; adminEmail: string; inviteSent: boolean; loginUrl: string };
 
 // ── Data privacy ────────────────────────────────────────────────────────────
 
@@ -609,12 +755,18 @@ export type PrivacyOverview = {
   blockedModels: string[];
   key: { algorithm: string; provider: string; version: string };
   platformAccess: { id: string; action: string; actorName: string; createdAt: string; summary: string }[];
+  /** Enterprise-only controls shown disabled with a note. */
+  upcoming: { title: string; detail: string }[];
 };
 
 // ── Lexisora support ────────────────────────────────────────────────────────
 
 export const SUPPORT_SEVERITIES = ['HIGH', 'MEDIUM', 'LOW'] as const;
+export type SupportSeverityKey = (typeof SUPPORT_SEVERITIES)[number];
+export const SUPPORT_SEVERITY_LABELS: Record<SupportSeverityKey, string> = { HIGH: 'High', MEDIUM: 'Medium', LOW: 'Low' };
 export const SUPPORT_CATEGORIES = ['TECHNICAL', 'BILLING', 'ACCOUNT', 'FEATURE_REQUEST'] as const;
+export type SupportCategoryKey = (typeof SUPPORT_CATEGORIES)[number];
+export const SUPPORT_CATEGORY_LABELS: Record<SupportCategoryKey, string> = { TECHNICAL: 'Technical', BILLING: 'Billing', ACCOUNT: 'Account', FEATURE_REQUEST: 'Feature request' };
 export const SUPPORT_STATUSES = ['OPEN', 'ENGINEER_ASSIGNED', 'IN_PROGRESS', 'WAITING_ON_CUSTOMER', 'RESOLVED', 'CLOSED'] as const;
 export type SupportStatusKey = (typeof SUPPORT_STATUSES)[number];
 export const SUPPORT_STATUS_LABELS: Record<SupportStatusKey, string> = {
@@ -625,6 +777,14 @@ export const SUPPORT_STATUS_LABELS: Record<SupportStatusKey, string> = {
   RESOLVED: 'Resolved',
   CLOSED: 'Closed',
 };
+/** Status copy in the Lexisora queue (the customer sees "Waiting on you"). */
+export const SUPPORT_STATUS_LABELS_PLATFORM: Record<SupportStatusKey, string> = { ...SUPPORT_STATUS_LABELS, WAITING_ON_CUSTOMER: 'Waiting on customer' };
+/** Wireframe tones: !Engineer assigned / !In progress / !Waiting on you, ~Resolved, -Closed. */
+export function supportStatusTone(s: string): 'accent' | 'outline' | 'neutral' {
+  if (s === 'RESOLVED') return 'accent';
+  if (s === 'CLOSED') return 'neutral';
+  return 'outline';
+}
 
 export const createSupportTicketSchema = z.object({
   subject: z.string().trim().min(4, 'Add a short subject').max(160),
@@ -636,43 +796,62 @@ export type CreateSupportTicketInput = z.infer<typeof createSupportTicketSchema>
 
 export const supportMessageSchema = z.object({
   body: z.string().trim().min(1, 'Write a reply').max(8000),
+  /** Lexisora staff only: a note the customer never sees. */
   internal: z.boolean().optional(),
+  /** A platform administrator replying from the Lexisora queue (as support staff). */
+  asPlatform: z.boolean().optional(),
 });
+export type SupportMessageInput = z.infer<typeof supportMessageSchema>;
 export const supportUpdateSchema = z.object({
   status: z.enum(SUPPORT_STATUSES).optional(),
   assignToMe: z.boolean().optional(),
 });
+export type SupportUpdateInput = z.infer<typeof supportUpdateSchema>;
 export const supportCsatSchema = z.object({ score: z.coerce.number().int().min(1).max(5) });
+export type SupportCsatInput = z.infer<typeof supportCsatSchema>;
 export const SUPPORT_TABS = ['open', 'resolved', 'all'] as const;
+export type SupportTab = (typeof SUPPORT_TABS)[number];
 export const supportQuerySchema = paginationQuery.extend({
-  tab: z.enum(SUPPORT_TABS).default('open'),
+  tab: z.enum(SUPPORT_TABS).default('all'),
   scope: z.enum(['tenant', 'all']).default('tenant'),
 });
+export type SupportQuery = z.infer<typeof supportQuerySchema>;
+export const supportViewSchema = z.object({ view: z.enum(['tenant', 'platform']).default('tenant') });
 
 export type SupportTicketRowDto = {
   id: string;
   code: string;
   subject: string;
-  severity: string;
+  severity: SupportSeverityKey;
   category: string;
   status: SupportStatusKey;
   statusLabel: string;
   opened: string;
   createdAt: string;
+  tenantId: string;
   tenantName: string | null;
+  planAtOpen: string;
   assigneeName: string | null;
   slaDueAt: string;
   slaBreached: boolean;
+};
+
+export type SupportListResponse = Paginated<SupportTicketRowDto> & {
+  counts: Record<SupportTab, number>;
+  isPlatformAdmin: boolean;
+  /** "High-severity requests get a first response within 4 business hours on Growth." */
+  slaHint: string;
 };
 
 export type SupportTicketDetailDto = SupportTicketRowDto & {
   description: string;
   openedByName: string;
   openedByEmail: string;
-  planAtOpen: string;
   resolvedAt: string | null;
   csat: number | null;
   canReopen: boolean;
+  canResolve: boolean;
+  canRate: boolean;
   isPlatformView: boolean;
   messages: { id: string; authorType: string; authorName: string; body: string; internal: boolean; createdAt: string }[];
 };

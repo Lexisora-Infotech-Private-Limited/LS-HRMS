@@ -75,3 +75,76 @@
   .wp-quote-text { font-size: 19px; min-width: 0; }
   .wp-drawer { padding: 16px; }
 }
+
+/* — company feed — */
+.wp-feed { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 28px; align-items: start; }
+.wp-feed-side { position: sticky; top: 12px; }
+.wp-side-row { display: block; font-size: 13.5px; border-top: 1px solid var(--color-divider); padding: 6px 0; color: inherit; text-decoration: none; }
+a.wp-side-row:hover { color: var(--color-accent-700); }
+.wp-composer { gap: 10px; }
+.wp-composer-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.wp-composer-head > .input:first-child { flex: 1; min-width: 180px; font-family: var(--font-heading); font-size: 17px; }
+.wp-rte-plain { border: 0; background: transparent; }
+.wp-rte-plain .wp-rte-bar { gap: 4px; padding: 0 0 8px; }
+.wp-rte-plain .wp-rte-bar button { font-size: 12px; border: 1px solid var(--color-divider); border-radius: 3px; padding: 2px 8px; min-width: 0; }
+.wp-rte-plain .wp-rte-body { padding: 8px 0; max-height: 420px; }
+.wp-rte-body img { max-width: 100%; height: auto; }
+.wp-post { border-top: 1px solid var(--color-divider); padding-top: 14px; display: flex; flex-direction: column; gap: 8px; scroll-margin-top: 16px; }
+.wp-post-focus { box-shadow: -3px 0 0 var(--color-accent); padding-left: 10px; }
+.wp-post-avatar { width: 32px; height: 32px; border: 1px solid var(--color-accent); border-radius: 50%; display: grid; place-items: center; font-size: 12px; flex: none; }
+.wp-post-title { font-family: var(--font-heading); font-size: 22px; line-height: 1.25; }
+.wp-post-kudos .wp-post-title { font-size: 18px; }
+.wp-post-body { font-size: 14px; text-align: justify; }
+.wp-post-body .wp-prose { font-size: 14px; }
+.wp-post-body.clamped { max-height: 11.5em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
+.wp-link-plain { color: inherit; }
+.wp-comments { border-left: 2px solid var(--color-divider); padding: 4px 0 4px 14px; display: flex; flex-direction: column; gap: 10px; }
+.wp-comment-avatar { width: 26px; height: 26px; border: 1px solid var(--color-divider); border-radius: 50%; display: grid; place-items: center; font-size: 10.5px; flex: none; }
+
+/* — kudos / tables — */
+.wp-cell-wrap { display: inline-block; max-width: 360px; white-space: normal; }
+.wp-tag-btn { border: 0; background: transparent; padding: 0; cursor: pointer; font: inherit; }
+.wp-tag-btn:hover .tag { filter: brightness(0.95); text-decoration: underline; }
+
+/* — policies — */
+.wp-drawer-wide { width: min(820px, 100%); }
+.wp-pdf { border: 1px solid var(--color-divider); border-radius: 4px; overflow: hidden; background: var(--color-neutral-100, #f4f2ef); }
+.wp-pdf iframe { display: block; width: 100%; height: min(62vh, 640px); border: 0; }
+.wp-ack-box { border: 1px solid var(--color-accent); border-radius: 4px; padding: 12px; display: flex; flex-direction: column; gap: 10px; font-size: 14px; }
+
+/* — helpdesk — */
+.wp-filters { display: grid; grid-template-columns: repeat(4, minmax(0, 160px)) minmax(160px, 1fr); gap: 8px; }
+.wp-sla { font-size: 12.5px; white-space: nowrap; }
+.wp-sla-ok { color: var(--color-neutral-700); }
+.wp-sla-risk { color: var(--color-accent-800); }
+.wp-sla-bad { color: var(--color-danger, #b3261e); }
+.wp-ticket-meta { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.wp-ticket-meta label, .wp-ticket-meta > div { display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; min-width: 0; }
+.wp-ticket-meta-ro { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.wp-sla-panel { border: 1px solid var(--color-divider); border-radius: 4px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.wp-sla-bar { height: 4px; background: var(--color-divider); border-radius: 2px; overflow: hidden; }
+.wp-sla-bar span { display: block; height: 100%; background: var(--color-accent); }
+.wp-sla-bar span.risk { background: var(--color-accent-800); }
+.wp-sla-bar span.bad { background: var(--color-danger, #b3261e); }
+.wp-kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; font-size: 13px; }
+.wp-kv > span:nth-child(odd) { color: var(--color-neutral-600); }
+.wp-pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
+.wp-timeline { display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--color-divider); padding-top: 10px; }
+.wp-tl-item { display: flex; gap: 10px; align-items: flex-start; padding: 6px 8px; border-radius: 4px; }
+.wp-tl-item.internal { background: color-mix(in srgb, #f2c94c 18%, transparent); }
+.wp-tl-item.system { color: var(--color-neutral-700); }
+.wp-csat { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px dashed var(--color-accent); border-radius: 4px; padding: 8px 12px; font-size: 14px; }
+.wp-star { border: 0; background: transparent; cursor: pointer; font-size: 20px; color: var(--color-accent); padding: 0 2px; }
+.wp-star:hover, .wp-star:hover ~ .wp-star { opacity: 0.6; }
+.wp-num { width: 90px; text-align: right; }
+
+@media (max-width: 960px) {
+  .wp-feed { grid-template-columns: minmax(0, 1fr); }
+  .wp-feed-side { position: static; }
+  .wp-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .wp-ticket-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 520px) {
+  .wp-filters, .wp-ticket-meta, .wp-ticket-meta-ro { grid-template-columns: minmax(0, 1fr); }
+  .wp-post-title { font-size: 19px; }
+}

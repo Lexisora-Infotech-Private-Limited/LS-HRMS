@@ -1,4 +1,7 @@
-/** Seeded chart of accounts. `key` = systemKey used by auto-postings (never renamed/deleted). */
+/**
+ * Seeded chart of accounts. `key` = systemKey used by auto-postings (never renamed/deleted).
+ * AR (1130) and AP (2100) are groups: every client / vendor gets its own sub-ledger.
+ */
 export type CoaEntry = {
   code: string;
   name: string;
@@ -23,7 +26,7 @@ export const CHART_OF_ACCOUNTS: CoaEntry[] = [
   { code: '1210', name: 'Laptops & computers', type: 'ASSET', parent: '1200', key: 'LAPTOPS' },
   { code: '1220', name: 'Furniture & fixtures', type: 'ASSET', parent: '1200' },
   { code: '2000', name: 'Liabilities', type: 'LIABILITY', group: true },
-  { code: '2100', name: 'Sundry creditors', type: 'LIABILITY', parent: '2000', key: 'AP' },
+  { code: '2100', name: 'Sundry creditors', type: 'LIABILITY', parent: '2000', group: true, key: 'AP' },
   { code: '2110', name: 'Output CGST', type: 'LIABILITY', parent: '2000', key: 'GST_OUTPUT_CGST' },
   { code: '2111', name: 'Output SGST', type: 'LIABILITY', parent: '2000', key: 'GST_OUTPUT_SGST' },
   { code: '2112', name: 'Output IGST', type: 'LIABILITY', parent: '2000', key: 'GST_OUTPUT_IGST' },
@@ -51,6 +54,7 @@ export const CHART_OF_ACCOUNTS: CoaEntry[] = [
   { code: '5250', name: 'Travel & conveyance', type: 'EXPENSE', parent: '5000', key: 'TRAVEL' },
   { code: '5260', name: 'Repairs & maintenance', type: 'EXPENSE', parent: '5000', key: 'REPAIRS' },
   { code: '5270', name: 'Professional fees', type: 'EXPENSE', parent: '5000', key: 'PROFESSIONAL_FEES' },
+  { code: '5275', name: 'Subcontracting charges', type: 'EXPENSE', parent: '5000', key: 'SUBCONTRACT' },
   { code: '5280', name: 'Bank charges', type: 'EXPENSE', parent: '5000', key: 'BANK_CHARGES' },
   { code: '5290', name: 'Electricity', type: 'EXPENSE', parent: '5000', key: 'ELECTRICITY' },
 ];

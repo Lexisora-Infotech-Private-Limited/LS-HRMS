@@ -3,11 +3,13 @@ import { Prisma, type SaasInvoice, type Subscription, type Tenant } from '@prism
 import {
   FREE_SEATS,
   GROWTH_PRICE_PAISE,
+  GST_STATE_NAMES,
   YEARLY_SAVINGS_PCT,
   formatDate,
   formatINR,
   type BillingCycleKey,
   type BillingOverview,
+  type BillingProfileInput,
   type CheckoutDetailDto,
   type CheckoutDto,
   type ContactSalesInput,
@@ -16,6 +18,8 @@ import {
   type QuoteInput,
   type QuoteLine,
   type SaasInvoiceDto,
+  type SeatChangeResult,
+  type SeatQuoteDto,
 } from '@lexisora/shared';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { requireContext, runAsTenant } from '../../../core/context/request-context';
@@ -91,15 +95,20 @@ export class BillingService {
   }
 
   async overview(): Promise<BillingOverview> {
-    const [sub, used, promo] = await Promise.all([this.subscription(), this.seatsUsed(), this.pendingPromo()]);
+    const [sub, used, promo, tenant] = await Promise.all([this.subscription(), this.seatsUsed(), this.pendingPromo(), this.tenant()]);
     const plan = sub.planCode as PlanCode;
+    const due = await this.prisma.saasInvoice.findFirst({ where: { status: { in: ['ISSUED', 'OVERDUE'] } }, orderBy: { createdAt: 'desc' } });
     let billingState: string | null = null;
     if (sub.status === 'PAST_DUE') {
-      const due = await this.prisma.saasInvoice.findFirst({ where: { status: { in: ['ISSUED', 'OVERDUE'] } }, orderBy: { createdAt: 'desc' } });
       billingState = `Payment of ${formatINR(due?.totalPaise ?? 0)} due since ${formatDate(sub.pastDueSince)}. Workspace becomes read-only on ${formatDate(sub.graceEndsAt)}.`;
     } else if (sub.status === 'READ_ONLY') billingState = 'Your workspace is read-only until the overdue invoice is paid.';
+    else if (sub.status === 'SUSPENDED') billingState = 'Your workspace is suspended. Pay the overdue invoice or contact Lexisora billing to reactivate it.';
     else if (sub.cancelAtPeriodEnd) billingState = `Downgrade to Free scheduled for ${formatDate(sub.currentPeriodEnd)}.`;
+    else if (due) billingState = `Invoice ${due.number ? `${due.number} ` : ''}for ${formatINR(due.totalPaise)} is awaiting payment${due.dueDate ? ` (due ${formatDate(due.dueDate)})` : ''}.`;
     return {
+      tenantName: tenant.brandName ?? tenant.name,
+      dueInvoice: due ? { id: due.id, number: due.number, totalPaise: due.totalPaise } : null,
+      profile: { legalName: tenant.legalName ?? tenant.name, gstin: tenant.gstin, stateCode: tenant.stateCode, stateName: tenant.stateName ?? (tenant.stateCode ? (GST_STATE_NAMES[tenant.stateCode] ?? null) : null), address: tenant.address },
       planCode: plan,
       planName: planLabel(plan, sub.cycle),
       cycle: sub.cycle,
@@ -201,7 +210,7 @@ export class BillingService {
     return this.createOrder(inv, { kind: 'SETTLE' }, tenant.brandName ?? tenant.name);
   }
 
-  async changeSeats(quantity: number): Promise<{ checkout?: CheckoutDto; scheduled?: { quantity: number; effective: string | null }; message: string }> {
+  async changeSeats(quantity: number): Promise<SeatChangeResult> {
     const [sub, used, tenant] = await Promise.all([this.subscription(), this.seatsUsed(), this.tenant()]);
     if (sub.planCode !== 'GROWTH') throw badRequest(sub.planCode === 'FREE' ? 'Upgrade to Growth to buy more seats' : 'Seats on your plan are managed by Lexisora sales');
     if (quantity < used) throw badRequest(`You have ${used} active users — seats can’t go below that`, 'SEATS_BELOW_USAGE');
@@ -232,7 +241,7 @@ export class BillingService {
     return { checkout, message: `Adding ${quantity - sub.quantity} seats: ${formatINR(t.taxablePaise, { decimals: true })} prorated + GST` };
   }
 
-  async seatQuote(quantity: number): Promise<{ amountPaise: number; totalPaise: number; remainingDays: number; totalDays: number }> {
+  async seatQuote(quantity: number): Promise<SeatQuoteDto> {
     const sub = await this.subscription();
     const tenant = await this.tenant();
     const cycle = sub.cycle ?? 'YEARLY';
@@ -242,7 +251,73 @@ export class BillingService {
     const total = daysInclusive(sub.currentPeriodStart ?? now, end) || 1;
     const amount = prorationPaise(sub.quantity, quantity, cycle, remaining, total, sub.unitPaise ?? GROWTH_PRICE_PAISE[cycle]);
     const t = totalsFor([{ kind: 'PRORATION', description: '', quantity: 1, unitPaise: amount, amountPaise: amount }], tenant.stateCode ?? '24');
-    return { amountPaise: amount, totalPaise: t.totalPaise, remainingDays: remaining, totalDays: total };
+    return { quantity, addedSeats: quantity - sub.quantity, amountPaise: amount, totalPaise: amount ? t.totalPaise : 0, remainingDays: remaining, totalDays: total };
+  }
+
+  /** Billing details on the invoice (legal name, GSTIN, place of supply). */
+  async updateProfile(input: BillingProfileInput): Promise<BillingOverview> {
+    const t = await this.tenant();
+    const data = { legalName: input.legalName, gstin: input.gstin, stateCode: input.stateCode, stateName: GST_STATE_NAMES[input.stateCode] ?? null, address: input.address };
+    await this.prisma.raw.tenant.update({ where: { id: t.id }, data });
+    await this.audit.record({
+      action: 'billing.profile.updated',
+      entity: 'Tenant',
+      entityId: t.id,
+      meta: { summary: `Billing details updated · ${data.stateName ?? input.stateCode}${input.gstin ? ` · GSTIN ${input.gstin}` : ''}`, changes: { legalName: [t.legalName, input.legalName], gstin: [t.gstin, input.gstin], stateCode: [t.stateCode, input.stateCode] } },
+    });
+    return this.overview();
+  }
+
+  /**
+   * First invoice for a paid tenant provisioned by Lexisora (Tenants → Add tenant): issued at once,
+   * collected offline Net 15 — or paid by the tenant admin from Subscription & billing → Pay now.
+   * Runs in the new tenant's context.
+   */
+  async issueOpeningInvoice(): Promise<SaasInvoice | null> {
+    const [sub, tenant] = await Promise.all([this.subscription(), this.tenant()]);
+    if (sub.planCode !== 'GROWTH' || !sub.cycle || !sub.currentPeriodStart || !sub.currentPeriodEnd) return null;
+    const now = new Date();
+    const t = totalsFor([periodLine(sub.cycle, sub.quantity, sub.unitPaise ?? GROWTH_PRICE_PAISE[sub.cycle])], tenant.stateCode ?? '24');
+    const { number, fy } = await this.nextInvoiceNumber(now);
+    const inv = await this.prisma.saasInvoice.create({
+      data: {
+        number,
+        fyLabel: fy,
+        issueDate: now,
+        dueDate: new Date(now.getTime() + 15 * 86_400_000),
+        subscriptionId: sub.id,
+        kind: 'UPGRADE',
+        periodStart: sub.currentPeriodStart,
+        periodEnd: sub.currentPeriodEnd,
+        planCode: 'GROWTH',
+        cycle: sub.cycle,
+        quantity: sub.quantity,
+        lines: t.lines as unknown as Prisma.InputJsonValue,
+        subtotalPaise: t.subtotalPaise,
+        discountPaise: t.discountPaise,
+        taxablePaise: t.taxablePaise,
+        cgstPaise: t.cgstPaise,
+        sgstPaise: t.sgstPaise,
+        igstPaise: t.igstPaise,
+        roundOffPaise: t.roundOffPaise,
+        totalPaise: t.totalPaise,
+        placeOfSupply: t.placeOfSupply,
+        recipientGstin: tenant.gstin,
+        status: 'ISSUED',
+      } as any,
+    });
+    await this.audit.record({ action: 'billing.invoice.issued', entity: 'SaasInvoice', entityId: inv.id, meta: { summary: `Issued ${number} · ${formatINR(inv.totalPaise)} · due in 15 days`, number } });
+    return inv;
+  }
+
+  /** Next "LXS/26-27/0005": the platform sequence, starting after any invoice numbers already issued this FY. */
+  private async nextInvoiceNumber(now = new Date()): Promise<{ number: string; fy: string }> {
+    const fy = financialYear(now);
+    const prefix = invoiceNumber(fy, 0).slice(0, -4);
+    const last = await this.prisma.raw.saasInvoice.findFirst({ where: { number: { startsWith: prefix } }, orderBy: { number: 'desc' }, select: { number: true } });
+    const start = last?.number ? Number(last.number.slice(prefix.length)) + 1 : 1;
+    const n = await this.seq.nextValue('saas.invoice', { tenantId: await platformTenantId(this.prisma.raw), period: fy, start });
+    return { number: invoiceNumber(fy, Math.max(n, start)), fy };
   }
 
   async downgrade(): Promise<{ message: string }> {
@@ -380,6 +455,7 @@ export class BillingService {
   async confirmMock(orderId: string, outcome: 'success' | 'fail'): Promise<{ status: string; message: string }> {
     const pay = await this.prisma.saasPayment.findUnique({ where: { gatewayOrderId: orderId } });
     if (!pay) throw notFound('Checkout');
+    if (pay.gateway !== 'MOCK' || this.gateway.name !== 'MOCK') throw badRequest('This order is paid on the payment gateway’s own checkout', 'GATEWAY_CHECKOUT');
     if (pay.status !== 'CREATED') return { status: pay.status, message: pay.status === 'CAPTURED' ? 'Already paid' : 'This checkout is closed' };
     const event: GatewayEvent = {
       id: `evt_${orderId}_${outcome}`,
@@ -427,7 +503,7 @@ export class BillingService {
     const sub = await this.subscription();
     const now = new Date();
     const inv = pay.invoice;
-    const number = inv.number ?? invoiceNumber(financialYear(now), await this.seq.nextValue('saas.invoice', { tenantId: await platformTenantId(this.prisma.raw), period: financialYear(now), start: 1 }));
+    const number = inv.number ?? (await this.nextInvoiceNumber(now)).number;
     await this.prisma.saasPayment.update({ where: { id: pay.id }, data: { status: 'CAPTURED', gatewayPaymentId: event.paymentId ?? null } });
     await this.prisma.saasInvoice.update({ where: { id: inv.id }, data: { status: 'PAID', paidAt: now, number, fyLabel: financialYear(inv.issueDate ?? now), issueDate: inv.issueDate ?? now, dueDate: inv.dueDate ?? now } });
 
@@ -508,8 +584,7 @@ export class BillingService {
     const start = sub.currentPeriodEnd ?? now;
     const end = addCycle(start, cycle);
     const t = totalsFor([periodLine(cycle, quantity)], tenant.stateCode ?? '24', promo);
-    const fy = financialYear(now);
-    const number = invoiceNumber(fy, await this.seq.nextValue('saas.invoice', { tenantId: await platformTenantId(this.prisma.raw), period: fy, start: 1 }));
+    const { number, fy } = await this.nextInvoiceNumber(now);
     const inv = await this.prisma.saasInvoice.create({
       data: { number, fyLabel: fy, issueDate: now, dueDate: now, subscriptionId: sub.id, kind: 'RENEWAL', periodStart: start, periodEnd: end, planCode: sub.planCode, cycle, quantity, lines: t.lines as unknown as Prisma.InputJsonValue, subtotalPaise: t.subtotalPaise, discountPaise: t.discountPaise, taxablePaise: t.taxablePaise, cgstPaise: t.cgstPaise, sgstPaise: t.sgstPaise, igstPaise: t.igstPaise, roundOffPaise: t.roundOffPaise, totalPaise: t.totalPaise, placeOfSupply: t.placeOfSupply, recipientGstin: tenant.gstin, promoRedemptionId: promo?.redemptionId ?? null, status: 'ISSUED' } as any,
     });

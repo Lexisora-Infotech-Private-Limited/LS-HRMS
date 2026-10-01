@@ -186,6 +186,13 @@ export class InterviewsController {
     return this.interviews.cancel(id, dto.reason);
   }
 
+  @Post(':id/no-show')
+  @RequirePerm('candidates.manage', 'jobs.manage')
+  @HttpCode(200)
+  noShow(@Param('id') id: string) {
+    return this.interviews.noShow(id);
+  }
+
   @Put(':id/scorecard')
   scorecard(@Param('id') id: string, @Body(new ZodPipe(scorecardSchema)) dto: ScorecardInput) {
     return this.interviews.saveScorecard(id, dto);

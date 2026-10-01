@@ -14,6 +14,9 @@ import { SpineReader } from './common/spine';
 import { shortTime, todayKey } from './common/dates';
 import { celebrationsWithin, DashboardService } from './dashboard/dashboard.service';
 import { NoticesService } from './notices/notices.service';
+import { FeedService } from './feed/feed.service';
+import { HelpdeskService } from './helpdesk/helpdesk.service';
+import { PoliciesService } from './policies/policies.service';
 
 const OPEN_TICKET = ['OPEN', 'IN_PROGRESS', 'WAITING'] as const;
 
@@ -36,6 +39,9 @@ export class WorkplaceRegistry implements OnModuleInit {
     private readonly spine: SpineReader,
     private readonly dashboard: DashboardService,
     private readonly notices: NoticesService,
+    private readonly feed: FeedService,
+    private readonly helpdesk: HelpdeskService,
+    private readonly policies: PoliciesService,
   ) {}
 
   onModuleInit() {
@@ -48,18 +54,28 @@ export class WorkplaceRegistry implements OnModuleInit {
       const count = await this.prisma.helpdeskTicket.count({
         where: { status: { in: [...OPEN_TICKET] }, escalationLevel: { gt: 0 }, ...(agent ? {} : { escalatedToEmployeeIds: { has: ctx.employeeId } }) },
       });
-      return { key: 'helpdesk', label: 'Helpdesk escalations', count, link: '/helpdesk?tab=escalated' };
+      return { key: 'helpdesk', label: 'Helpdesk escalations', count, link: '/helpdesk?tab=escalations' };
     });
 
     this.search.register('Notices', async (q, ctx) => (hasPerm(ctx, 'notices.view') ? this.notices.search(q, ctx) : []));
+    this.search.register('Feed', async (q, ctx) => (hasPerm(ctx, 'feed.view') ? this.feed.search(q) : []));
+    this.search.register('Tickets', async (q, ctx) => (hasPerm(ctx, 'helpdesk.use') || hasPerm(ctx, 'helpdesk.agent') ? this.helpdesk.search(q) : []));
+    this.search.register('Policies', async (q, ctx) => (hasPerm(ctx, 'policies.view') ? this.policies.search(q) : []));
     fileAccessCheckers.push((fileId) => this.notices.canOpenAttachment(fileId).catch(() => false));
+    fileAccessCheckers.push((fileId) => this.feed.canOpenFile(fileId).catch(() => false));
+    fileAccessCheckers.push((fileId) => this.policies.canOpenFile(fileId).catch(() => false));
+    fileAccessCheckers.push((fileId) => this.helpdesk.canOpenFile(fileId).catch(() => false));
 
     // Late joiners receive live notices whose audience now matches them.
     this.events.on('employee.created', async (p: { employeeId?: string }) => {
-      if (p.employeeId) await this.notices.syncRecipientsFor(p.employeeId);
+      if (!p.employeeId) return;
+      await this.notices.syncRecipientsFor(p.employeeId);
+      await this.policies.materializeForEmployee(p.employeeId);
     });
     this.events.on('employee.statusChanged', async (p: { employeeId?: string; to?: string }) => {
-      if (p.employeeId && (p.to === 'ACTIVE' || p.to === 'NOTICE_PERIOD')) await this.notices.syncRecipientsFor(p.employeeId);
+      if (!p.employeeId || !(p.to === 'ACTIVE' || p.to === 'NOTICE_PERIOD')) return;
+      await this.notices.syncRecipientsFor(p.employeeId);
+      await this.policies.materializeForEmployee(p.employeeId);
     });
 
     // Live dashboard refresh (dashboard:invalidate → the web refetches the named sections).
@@ -171,6 +187,30 @@ export class WorkplaceRegistry implements OnModuleInit {
       sent++;
     }
     return sent;
+  }
+
+  /** Every 5 minutes: helpdesk SLA monitor (at-risk alerts, L1/L2 escalations). */
+  @Cron('*/5 * * * *')
+  async helpdeskSla() {
+    await this.forEachTenant('helpdesk.slaMonitor', () => this.helpdesk.monitorSla());
+  }
+
+  /** Hourly: close resolved tickets after the auto-close window. */
+  @Cron('20 * * * *')
+  async helpdeskAutoClose() {
+    await this.forEachTenant('helpdesk.autoClose', () => this.helpdesk.autoClose());
+  }
+
+  /** 10:00 IST daily: policy acknowledgement reminders. */
+  @Cron('0 10 * * *', { timeZone: 'Asia/Kolkata' })
+  async policyReminders() {
+    await this.forEachTenant('policies.ackReminders', () => this.policies.sendReminders());
+  }
+
+  /** Monday 09:00 IST: overdue acknowledgement digest to HR and reporting managers. */
+  @Cron('0 9 * * 1', { timeZone: 'Asia/Kolkata' })
+  async policyOverdueDigest() {
+    await this.forEachTenant('policies.overdueDigest', () => this.policies.overdueDigest());
   }
 
   /** 03:30 IST: delete personal to-dos completed more than 90 days ago. */

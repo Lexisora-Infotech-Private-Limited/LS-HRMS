@@ -17,6 +17,7 @@ export type SpineClient = {
   pan: string | null;
   address: string | null;
   city?: string | null;
+  pincode?: string | null;
   stateCode: string | null;
   billingEmails: string[];
   defaultRatePerHourPaise: number | null;
@@ -94,5 +95,21 @@ export class SpineReader {
       else if (PENDING_SHEET_STATUSES.includes(st)) pending.push(c);
     }
     return { approved, pending, sheets: sheetById, lines: lineById };
+  }
+
+  /** Cell id → timesheet status, only for cells whose sheet is still invoiceable (L1+ approved). */
+  async cellSheetStatus(cellIds: string[]): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    if (!cellIds.length || !this.db.timesheetCell || !this.db.timesheetLine || !this.db.timesheet) return out;
+    const cells = await this.db.timesheetCell.findMany({ where: { id: { in: cellIds } }, select: { id: true, lineId: true } });
+    const lines = await this.db.timesheetLine.findMany({ where: { id: { in: [...new Set(cells.map((c) => c.lineId))] } }, select: { id: true, timesheetId: true } });
+    const sheets = await this.db.timesheet.findMany({ where: { id: { in: [...new Set(lines.map((l) => l.timesheetId))] } }, select: { id: true, status: true } });
+    const lineSheet = new Map(lines.map((l) => [l.id, l.timesheetId]));
+    const status = new Map(sheets.map((s) => [s.id, s.status]));
+    for (const c of cells) {
+      const st = status.get(lineSheet.get(c.lineId) ?? '') ?? '';
+      if (BILLABLE_SHEET_STATUSES.includes(st)) out.set(c.id, st);
+    }
+    return out;
   }
 }

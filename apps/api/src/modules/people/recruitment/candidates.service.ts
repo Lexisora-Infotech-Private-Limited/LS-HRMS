@@ -58,12 +58,27 @@ export class CandidatesService {
     if (!this.canManage()) throw forbidden('Only recruiters can change candidates');
   }
 
+  /**
+   * Leads (recruiters without `jobs.manage`) see only candidates for jobs in their own
+   * department or jobs they are the hiring manager for (spec M6). HR/admin: no scope.
+   */
+  async jobScope(): Promise<Prisma.JobWhereInput | null> {
+    const ctx = requireContext();
+    if (hasPerm(ctx, 'jobs.manage')) return null;
+    const me = ctx.employeeId;
+    if (!me) return { id: '__none__' };
+    const e = await this.prisma.employee.findUnique({ where: { id: me }, select: { departmentId: true } });
+    return { OR: [{ hiringManagerId: me }, ...(e?.departmentId ? [{ departmentId: e.departmentId }] : [])] };
+  }
+
   // ── List / detail ────────────────────────────────────────────────────────
 
   async list(q: CandidateListQuery) {
     const base: Prisma.JobApplicationWhereInput = { candidate: { anonymisedAt: null } };
+    const scope = await this.jobScope();
+    if (scope) base.job = scope;
     if (q.jobId) base.jobId = q.jobId;
-    if (q.q) base.candidate = { anonymisedAt: null, OR: [{ fullName: { contains: q.q, mode: 'insensitive' } }, { email: { contains: q.q, mode: 'insensitive' } }] };
+    if (q.q) base.candidate = { anonymisedAt: null, OR: [{ fullName: { contains: q.q, mode: 'insensitive' } }, { email: { contains: q.q, mode: 'insensitive' } }, { tags: { has: q.q.toLowerCase() } }] };
     const stages = TAB_STAGES[q.tab];
     const where: Prisma.JobApplicationWhereInput = stages ? { AND: [base, { stage: { in: stages } }] } : base;
     const [apps, grouped] = await Promise.all([
@@ -105,7 +120,7 @@ export class CandidatesService {
       include: {
         applications: {
           include: {
-            job: { select: { title: true } },
+            job: { select: { title: true, departmentId: true, hiringManagerId: true } },
             offer: true,
             events: { orderBy: { at: 'asc' } },
             interviews: { include: { panelists: true, scorecards: true }, orderBy: { startsAt: 'asc' } },
@@ -115,6 +130,13 @@ export class CandidatesService {
       },
     });
     if (!c || c.anonymisedAt) throw notFound('Candidate');
+    const scope = await this.jobScope();
+    if (scope) {
+      const me = requireContext().employeeId;
+      const dept = me ? (await this.prisma.employee.findUnique({ where: { id: me }, select: { departmentId: true } }))?.departmentId : null;
+      c.applications = c.applications.filter((a) => a.job.hiringManagerId === me || (!!dept && a.job.departmentId === dept));
+      if (!c.applications.length) throw notFound('Candidate');
+    }
     const empIds = c.applications.flatMap((a) => a.interviews.flatMap((i) => [...i.panelists.map((p) => p.employeeId), ...i.scorecards.map((s) => s.interviewerEmployeeId)]));
     const names = new Map((await this.prisma.employee.findMany({ where: { id: { in: [...new Set(empIds)] } }, select: { id: true, fullName: true } })).map((e) => [e.id, e.fullName]));
     return {
@@ -180,7 +202,7 @@ export class CandidatesService {
     if (job.status === 'CLOSED') throw conflict(`${job.title} is closed for applications`, 'JOB_CLOSED');
     const file = await this.prisma.fileObject.findUnique({ where: { id: i.resumeFileId } });
     if (!file) throw badRequest('Attach the resume', 'FILE_MISSING');
-    const tags = (i.tags ?? '').split(',').map((t) => t.trim()).filter(Boolean).slice(0, 10);
+    const tags = (i.tags ?? '').split(',').map((t) => t.trim().toLowerCase()).filter(Boolean).slice(0, 10);
     const existing = await this.prisma.candidate.findFirst({ where: { email: i.email } });
     let candidateId: string;
     if (existing) {
@@ -350,7 +372,8 @@ export class CandidatesService {
   }
 
   async lookupOptions() {
-    const apps = await this.prisma.jobApplication.findMany({ where: { stage: { in: ['SCREENING', 'INTERVIEW', 'OFFERED'] }, candidate: { anonymisedAt: null } }, include: { candidate: { select: { fullName: true } }, job: { select: { title: true } } }, orderBy: { stageChangedAt: 'desc' }, take: 300 });
+    const scope = await this.jobScope();
+    const apps = await this.prisma.jobApplication.findMany({ where: { stage: { in: ['SCREENING', 'INTERVIEW', 'OFFERED'] }, candidate: { anonymisedAt: null }, ...(scope ? { job: scope } : {}) }, include: { candidate: { select: { fullName: true } }, job: { select: { title: true } } }, orderBy: { stageChangedAt: 'desc' }, take: 300 });
     return apps.map((a) => ({ value: a.id, label: `${a.candidate.fullName} · ${a.job.title}` }));
   }
 }

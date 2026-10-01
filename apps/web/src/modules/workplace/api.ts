@@ -1,4 +1,34 @@
 import type {
+  BadgeRow,
+  BadgeUpsertInput,
+  CertificateRow,
+  EmployeeBadge,
+  EotmCreateInput,
+  EotmOptions,
+  EotmRow,
+  FeedComment,
+  FeedDraftRow,
+  FeedListResponse,
+  FeedPostView,
+  FeedSidebar,
+  HelpdeskMeta,
+  HelpdeskSettings,
+  KudosCreateInput,
+  KudosListResponse,
+  KudosRow,
+  KudosTab,
+  PolicyComplianceRow,
+  PolicyCompliancePerson,
+  PolicyDetail,
+  PolicyListResponse,
+  PostUpsertInput,
+  SupportGroupInput,
+  TicketCategoryInput,
+  TicketCreateInput,
+  TicketDetail,
+  TicketListResponse,
+  TicketTab,
+  WpHolidayList,
   CompanyEventInput,
   CompanyEventRow,
   DailyQuoteInput,
@@ -16,7 +46,7 @@ import type {
   TodoCreateInput,
   TodosResponse,
 } from '@lexisora/shared';
-import { del, get, patch, post } from '@/lib/api';
+import { del, fileUrl, get, patch, post, put } from '@/lib/api';
 
 /** Query keys — everything under ['workplace', …] so one invalidation refreshes the domain. */
 export const wpKeys = {
@@ -32,6 +62,25 @@ export const wpKeys = {
   events: ['workplace', 'events'] as const,
   celebrations: ['workplace', 'celebrations'] as const,
   quotes: ['workplace', 'quotes'] as const,
+  feed: ['workplace', 'feed'] as const,
+  feedDrafts: ['workplace', 'feed', 'drafts'] as const,
+  feedSidebar: ['workplace', 'feed', 'sidebar'] as const,
+  comments: (postId: string) => ['workplace', 'feed', 'comments', postId] as const,
+  kudos: ['workplace', 'kudos'] as const,
+  kudosList: (tab: KudosTab, page: number) => ['workplace', 'kudos', 'list', tab, page] as const,
+  badges: ['workplace', 'kudos', 'badges'] as const,
+  eotm: ['workplace', 'kudos', 'eotm'] as const,
+  policies: ['workplace', 'policies'] as const,
+  policyList: (tab: string) => ['workplace', 'policies', 'list', tab] as const,
+  policy: (id: string) => ['workplace', 'policies', 'detail', id] as const,
+  compliance: ['workplace', 'policies', 'compliance'] as const,
+  compliancePeople: (id: string, state: string) => ['workplace', 'policies', 'compliance', id, state] as const,
+  holidays: (year: number | null) => ['workplace', 'policies', 'holidays', year] as const,
+  helpdesk: ['workplace', 'helpdesk'] as const,
+  ticketList: (q: Record<string, unknown>) => ['workplace', 'helpdesk', 'list', q] as const,
+  ticket: (id: string) => ['workplace', 'helpdesk', 'ticket', id] as const,
+  helpdeskMeta: ['workplace', 'helpdesk', 'meta'] as const,
+  helpdeskSettings: ['workplace', 'helpdesk', 'settings'] as const,
 };
 
 export type NoticeSave = NoticeUpsertInput;
@@ -77,7 +126,95 @@ export const wpApi = {
   createQuote: (b: DailyQuoteInput) => post<QuoteRow>('/quotes', b),
   updateQuote: (id: string, b: Partial<DailyQuoteInput>) => patch<QuoteRow>(`/quotes/${id}`, b),
   deleteQuote: (id: string) => del<{ ok: true }>(`/quotes/${id}`),
+
+  // company feed
+  feed: (q: { kind?: string; page: number; pageSize?: number }) => get<FeedListResponse>('/feed/posts', q),
+  post: (id: string) => get<FeedPostView>(`/feed/posts/${id}`),
+  feedDrafts: () => get<FeedDraftRow[]>('/feed/drafts'),
+  feedSidebar: () => get<FeedSidebar>('/feed/sidebar'),
+  createPost: (b: PostUpsertInput) => post<FeedPostView>('/feed/posts', b),
+  updatePost: (id: string, b: PostUpsertInput) => put<FeedPostView>(`/feed/posts/${id}`, b),
+  publishPost: (id: string) => post<FeedPostView>(`/feed/posts/${id}/publish`),
+  archivePost: (id: string) => post<{ ok: true }>(`/feed/posts/${id}/archive`),
+  pinPost: (id: string, pinned: boolean) => post<{ ok: true; pinned: boolean }>(`/feed/posts/${id}/pin`, { pinned }),
+  deleteDraft: (id: string) => del<{ ok: true }>(`/feed/posts/${id}`),
+  like: (id: string, on: boolean) => (on ? put<{ liked: boolean; likeCount: number }>(`/feed/posts/${id}/like`) : del<{ liked: boolean; likeCount: number }>(`/feed/posts/${id}/like`)),
+  comments: (id: string) => get<FeedComment[]>(`/feed/posts/${id}/comments`),
+  addComment: (id: string, body: string, parentId?: string | null) => post<FeedComment[]>(`/feed/posts/${id}/comments`, { body, parentId: parentId ?? null }),
+  deleteComment: (id: string) => del<{ ok: true; commentCount: number }>(`/feed/comments/${id}`),
+
+  // kudos & EOTM & certificates
+  kudos: (q: { tab: KudosTab; page: number; pageSize?: number }) => get<KudosListResponse>('/kudos', q),
+  giveKudos: (b: KudosCreateInput) => post<KudosRow>('/kudos', b),
+  revokeKudos: (id: string, reason?: string | null) => post<{ ok: true }>(`/kudos/${id}/revoke`, { reason: reason ?? null }),
+  badges: () => get<BadgeRow[]>('/kudos/badges'),
+  createBadge: (b: BadgeUpsertInput) => post<BadgeRow[]>('/kudos/badges', b),
+  updateBadge: (id: string, b: BadgeUpsertInput) => patch<BadgeRow[]>(`/kudos/badges/${id}`, b),
+  employeeBadges: (employeeId: string) => get<EmployeeBadge[]>(`/kudos/employees/${employeeId}/badges`),
+  eotmList: () => get<EotmRow[]>('/eotm'),
+  eotmOptions: () => get<EotmOptions>('/eotm/options'),
+  announceEotm: (b: EotmCreateInput) => post<EotmRow>('/eotm', b),
+  revokeEotm: (id: string, reason: string) => post<{ ok: true }>(`/eotm/${id}/revoke`, { reason }),
+  myCertificates: () => get<CertificateRow[]>('/certificates/mine'),
+  certificatePdfPath: (id: string) => `/certificates/${id}/pdf`,
+
+  // policies
+  policies: (tab: string) => get<PolicyListResponse>('/policies', { tab }),
+  policy: (id: string) => get<PolicyDetail>(`/policies/${id}`),
+  createPolicy: (b: Record<string, unknown>) => post<PolicyDetail>('/policies', b),
+  newPolicyVersion: (id: string, b: Record<string, unknown>) => post<PolicyDetail>(`/policies/${id}/versions`, b),
+  archivePolicy: (id: string) => post<{ ok: true }>(`/policies/${id}/archive`),
+  restorePolicy: (id: string) => post<PolicyDetail>(`/policies/${id}/restore`),
+  acknowledge: (versionId: string, readSeconds: number) => post<PolicyDetail>(`/policies/versions/${versionId}/ack`, { readSeconds }),
+  compliance: () => get<PolicyComplianceRow[]>('/policies/compliance'),
+  compliancePeople: (id: string, state: string) => get<PolicyCompliancePerson[]>(`/policies/${id}/compliance`, { state }),
+  remindPolicy: (id: string) => post<{ reminded: number; skipped: number }>(`/policies/${id}/remind`),
+  holidays: (year?: number | null) => get<WpHolidayList>('/policies/holidays', year ? { year } : undefined),
+
+  // helpdesk
+  helpdeskMeta: () => get<HelpdeskMeta>('/helpdesk/meta'),
+  tickets: (q: { tab: TicketTab; page: number; pageSize?: number; status?: string; categoryId?: string; priority?: string; sla?: string; q?: string }) => get<TicketListResponse>('/helpdesk/tickets', q),
+  ticket: (id: string) => get<TicketDetail>(`/helpdesk/tickets/${id}`),
+  raiseTicket: (b: TicketCreateInput) => post<TicketDetail>('/helpdesk/tickets', b),
+  updateTicket: (id: string, b: { status?: 'OPEN' | 'IN_PROGRESS' | 'WAITING'; priority?: 'HIGH' | 'MEDIUM' | 'LOW'; assigneeEmployeeId?: string | null; categoryId?: string }) => patch<TicketDetail>(`/helpdesk/tickets/${id}`, b),
+  ticketComment: (id: string, b: { body: string; visibility: 'PUBLIC' | 'INTERNAL'; fileIds: string[] }) => post<TicketDetail>(`/helpdesk/tickets/${id}/comments`, b),
+  resolveTicket: (id: string, note: string) => post<TicketDetail>(`/helpdesk/tickets/${id}/resolve`, { note }),
+  reopenTicket: (id: string) => post<TicketDetail>(`/helpdesk/tickets/${id}/reopen`),
+  cancelTicket: (id: string) => post<TicketDetail>(`/helpdesk/tickets/${id}/cancel`),
+  closeTicket: (id: string) => post<TicketDetail>(`/helpdesk/tickets/${id}/close`),
+  escalateTicket: (id: string, note?: string | null) => post<TicketDetail>(`/helpdesk/tickets/${id}/escalate`, { note: note ?? null }),
+  rateTicket: (id: string, score: number, comment?: string | null) => post<TicketDetail>(`/helpdesk/tickets/${id}/csat`, { score, comment: comment ?? null }),
+  helpdeskSettings: () => get<HelpdeskSettings>('/helpdesk/settings'),
+  saveGroup: (id: string | null, b: SupportGroupInput) => (id ? patch<HelpdeskSettings>(`/helpdesk/groups/${id}`, b) : post<HelpdeskSettings>('/helpdesk/groups', b)),
+  saveCategory: (id: string | null, b: TicketCategoryInput) => (id ? patch<HelpdeskSettings>(`/helpdesk/categories/${id}`, b) : post<HelpdeskSettings>('/helpdesk/categories', b)),
+  saveSla: (priority: string, b: { firstResponseMins: number; resolutionMins: number }) => put<HelpdeskSettings>(`/helpdesk/sla/${priority}`, b),
+  saveAutoClose: (days: number) => put<HelpdeskSettings>('/helpdesk/auto-close', { days }),
 };
+
+const FILE_IMG = /(<img[^>]+src=")\/api\/v1\/files\/([A-Za-z0-9_-]+)(?:\?[^"]*)?"/g;
+
+/** Feed/notice HTML stores tenant images as /api/v1/files/:id — add the access token for <img>. */
+export function withFileTokens(html: string): string {
+  return (html ?? '').replace(FILE_IMG, (_m, pre: string, id: string) => `${pre}${fileUrl(id) ?? ''}"`);
+}
+
+/** "29 Sep 2026" (IST) */
+export function longDay(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const s = new Date(new Date(iso).getTime() + 330 * 60_000);
+  return `${s.getUTCDate()} ${MONTHS_SHORT[s.getUTCMonth()]} ${s.getUTCFullYear()}`;
+}
+
+/** "just now" / "12 m ago" / "3 h ago" / "2 d ago" / "27 Sep" */
+export function ago(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const diff = Date.now() - new Date(iso).getTime();
+  if (diff < 60_000) return 'just now';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} h ago`;
+  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)} d ago`;
+  return dayMonthOf(iso);
+}
 
 /** Fixed month names — recent CLDR renders en-GB September as "Sept"; the product copy uses "Sep". */
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];

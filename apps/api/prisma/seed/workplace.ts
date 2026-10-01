@@ -1,15 +1,18 @@
-import type { Prisma, PrismaClient } from '@prisma/client';
+import type { Prisma, PrismaClient, WpTicketStatus } from '@prisma/client';
 import PDFDocument from 'pdfkit';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { quoteIndexFor, type WpAudienceRule } from '@lexisora/shared';
+import { DEFAULT_SLA, HELPDESK_PRIORITIES, quoteIndexFor, type WpAudienceRule } from '@lexisora/shared';
 import type { SeedCtx } from './core';
 import { projectIdsByEmployee, resolveAudience, type AudienceSubject } from '../../src/modules/workplace/common/audience.rules';
 import { excerptOf, sanitizeHtml } from '../../src/modules/workplace/common/html';
+import { calendarWith } from '../../src/modules/workplace/helpdesk/business-hours';
+import { dueDatesFor, evaluateSla, resolvedSlaState } from '../../src/modules/workplace/helpdesk/helpdesk.rules';
+import { kudosPostBody, kudosPostTitle } from '../../src/modules/workplace/kudos/kudos.rules';
 
 /**
- * Demo data for the workplace domain — core release ("today" = Tue 29 Sep 2026, IST):
+ * Demo data for the workplace domain ("today" = Tue 29 Sep 2026, IST):
  *  - Thought of the day: the wireframe's 4 QUOTES plus a curated pool, ordered so that the
  *    rotation shows "Do the hard thing first…" on 29 Sep (the wireframe's pick for that date).
  *  - Notice board: the 4 wireframe rows with materialised read receipts (Diwali potluck with a
@@ -18,9 +21,20 @@ import { excerptOf, sanitizeHtml } from '../../src/modules/workplace/common/html
  *    computed from the real audience (13-person demo tenant), so "112 / 128" becomes "10 / 11".
  *  - Company events: Town hall 3 Oct 5 pm (dashboard), Security awareness training, Diwali.
  *    Birthdays/anniversaries come from core Employee rows (Rahul 30 Sep, Sneha 3 years 2 Oct).
- *  - Policies (minimal, feeds the dashboard "Acknowledge … update" to-do): the 5 wireframe
- *    documents; everyone acknowledged except the Leave & attendance policy update for Priya
- *    and a few others (due today).
+ *  - Policies & rulebook: the 5 wireframe documents (versioned PDFs); everyone acknowledged
+ *    except the Leave & attendance policy update for Priya and a few others (due today).
+ *  - Company feed: the 3 wireframe posts (EOTM Priya by Rohit · 1 Sep, pinned; "How we run
+ *    appraisals this cycle" by Kavya · 25 Sep; "Kestrel app crosses 50,000 installs" by Arjun ·
+ *    20 Sep) with 18 / 6 / 11 comments. Likes are real rows, so the wireframe's 64 / 21 / 38
+ *    become 10 / 6 / 9 in the 13-person tenant. Kudos posts for every kudos row; one HR draft.
+ *  - Kudos & EOTM: badges Star Coder / Bug Hunter / Team Player / Rising Star (+ the system
+ *    Employee of the Month badge); the wireframe rows (Rahul ← Neha 26 Sep, Sneha ← Arjun
+ *    22 Sep, Priya EOTM ← Rohit 1 Sep) plus Priya's earlier Star Coder (her profile badge);
+ *    EOTM September 2026 = Priya with a verifiable certificate (PDF rendered on first download).
+ *  - Helpdesk: IT desk / Payroll desk / HR desk, categories IT hardware, IT access, Payroll
+ *    (restricted), HR (restricted), default SLAs; Priya's HD-1031, HD-1038, HD-1042 as in the
+ *    wireframe plus HD-1037/1039/1040/1041 (one waiting, one escalated → "Helpdesk escalations 1").
+ *    The next ticket is HD-1043.
  *  - Personal to-dos for the sign-in personas.
  * Reads people/work rows defensively: works when the work seed (projects) is absent.
  */
@@ -113,6 +127,8 @@ export async function seed_workplace(prisma: PrismaClient, ctx: SeedCtx): Promis
   await seedEvents(prisma, tenantId, E);
   await seedNotices();
   await seedPolicies();
+  await seedFeedAndKudos();
+  await seedHelpdesk();
   await seedTodos(prisma, tenantId, E);
 
   // ── Notice board ─────────────────────────────────────────────────────────
@@ -336,7 +352,7 @@ export async function seed_workplace(prisma: PrismaClient, ctx: SeedCtx): Promis
         const buf = await pdf('Lexisora Infotech · Policies & rulebook', `${p.title}${v.version > 1 ? ` (v${v.version})` : ''}`, [`Effective from ${v.effectiveFrom}.`, ...(v.summary ? [`What changed: ${v.summary}`] : []), ...v.lines]);
         const f = await file(hr, `${p.title} v${v.version}.pdf`, 'policy', false, buf, v.publishedAt);
         const ver = await prisma.hrPolicyVersion.create({
-          data: { tenantId, policyId: policy.id, version: v.version, fileId: f.id, effectiveFrom: d(v.effectiveFrom), changeSummary: v.summary ?? null, requiresReack: true, publishedAt: v.publishedAt, publishedByEmployeeId: hrId },
+          data: { tenantId, policyId: policy.id, version: v.version, fileId: f.id, pageCount: 1, effectiveFrom: d(v.effectiveFrom), changeSummary: v.summary ?? null, requiresReack: true, publishedAt: v.publishedAt, publishedByEmployeeId: hrId },
         });
         currentId = ver.id;
         if (!p.requiresAck) continue;
@@ -355,6 +371,492 @@ export async function seed_workplace(prisma: PrismaClient, ctx: SeedCtx): Promis
       if (currentId) await prisma.hrPolicy.update({ where: { id: policy.id }, data: { currentVersionId: currentId } });
     }
   }
+
+  async function nameMap(): Promise<Map<string, string>> {
+    const rows = await prisma.employee.findMany({ where: { tenantId }, select: { id: true, fullName: true } });
+    return new Map(rows.map((e) => [e.id, e.fullName]));
+  }
+
+  // ── Company feed, kudos & Employee of the Month ──────────────────────────
+  async function seedFeedAndKudos() {
+    const names = await nameMap();
+    const setupAt = at('2026-01-02', '09:00');
+    const badgeDefs: { name: string; icon: string; description: string; system?: boolean }[] = [
+      { name: 'Star Coder', icon: 'star', description: 'Outstanding code quality or delivery' },
+      { name: 'Bug Hunter', icon: 'bug', description: 'Caught a critical issue before it reached a customer' },
+      { name: 'Team Player', icon: 'people', description: 'Went out of the way to help the team' },
+      { name: 'Rising Star', icon: 'rocket', description: 'A strong start or fast growth in the role' },
+      // The system badge KudosService uses for EOTM rows (same name/icon/description).
+      { name: 'Employee of the Month', icon: 'trophy', description: 'Announced monthly by HR', system: true },
+    ];
+    const badge: Record<string, string> = {};
+    for (const b of badgeDefs) {
+      const row = await prisma.badge.create({ data: { tenantId, name: b.name, icon: b.icon, description: b.description, system: !!b.system, active: true, createdAt: setupAt } });
+      badge[b.name] = row.id;
+    }
+
+    type CommentSeed = { who: string; body: string; mins: number; replyTo?: number; mentions?: string[] };
+    type PostSeed = {
+      kind: 'BLOG' | 'MILESTONE' | 'UPDATE' | 'EOTM' | 'KUDOS';
+      title: string;
+      html: string;
+      author: string;
+      publishedBy?: string;
+      at: Date;
+      draft?: boolean;
+      pinned?: boolean;
+      likers?: string[];
+      comments?: CommentSeed[];
+      eotmAwardId?: string;
+      kudosId?: string;
+    };
+
+    /** A post with its like rows and comment thread (replies by index); counters match the rows. */
+    async function createPost(p: PostSeed) {
+      const authorId = E(p.author);
+      if (!authorId) return null;
+      const bodyHtml = sanitizeHtml(p.html);
+      const likers = [...new Set((p.likers ?? []).map(E).filter((x): x is string => !!x))];
+      const comments = (p.comments ?? []).map((c) => ({ ...c, authorId: E(c.who) }));
+      const lastActivity = comments.reduce((m, c) => Math.max(m, c.mins), 0);
+      const post = await prisma.post.create({
+        data: {
+          tenantId,
+          kind: p.kind,
+          status: p.draft ? 'DRAFT' : 'PUBLISHED',
+          title: p.title,
+          bodyHtml,
+          excerpt: excerptOf(bodyHtml, 300),
+          authorEmployeeId: authorId,
+          publishedAt: p.draft ? null : p.at,
+          publishedByEmployeeId: p.draft ? null : (E(p.publishedBy ?? p.author) ?? authorId),
+          pinned: !!p.pinned,
+          likeCount: p.draft ? 0 : likers.length,
+          commentCount: p.draft ? 0 : comments.filter((c) => c.authorId).length,
+          eotmAwardId: p.eotmAwardId ?? null,
+          kudosId: p.kudosId ?? null,
+          createdAt: p.at,
+          updatedAt: addMin(p.at, lastActivity),
+        },
+      });
+      if (p.draft) return post;
+      const likedAt = (employeeId: string, i: number) => {
+        const t = addMin(p.at, 4 + i * 19);
+        const joined = pop.find((x) => x.id === employeeId)?.joiningDate;
+        return joined && joined > t ? addMin(joined, 24 * 60 + 5 * 60) : t; // joiners like it on their first day
+      };
+      if (likers.length) await prisma.postLike.createMany({ data: likers.map((employeeId, i) => ({ tenantId, postId: post.id, employeeId, createdAt: likedAt(employeeId, i) })) });
+      const ids: (string | null)[] = [];
+      for (const c of comments) {
+        if (!c.authorId) {
+          ids.push(null);
+          continue;
+        }
+        const parentId = c.replyTo !== undefined ? (ids[c.replyTo] ?? null) : null;
+        const row = await prisma.postComment.create({
+          data: { tenantId, postId: post.id, authorEmployeeId: c.authorId, parentId, body: c.body, mentions: (c.mentions ?? []).map(E).filter((x): x is string => !!x), createdAt: addMin(p.at, c.mins) },
+        });
+        ids.push(row.id);
+      }
+      return post;
+    }
+
+    /** A kudos row and its KUDOS feed post, as KudosService.give creates them. */
+    async function giveKudos(k: { from: string; to: string; badge: string; message: string; at: Date; likers?: string[]; comments?: CommentSeed[] }) {
+      const giver = E(k.from);
+      const recipient = E(k.to);
+      if (!giver || !recipient) return;
+      const row = await prisma.kudos.create({ data: { tenantId, giverEmployeeId: giver, recipientEmployeeId: recipient, badgeId: badge[k.badge]!, message: k.message, createdAt: k.at } });
+      const post = await createPost({ kind: 'KUDOS', title: kudosPostTitle(k.badge, names.get(recipient) ?? k.to), html: kudosPostBody(k.message), author: k.from, at: k.at, likers: k.likers, comments: k.comments, kudosId: row.id });
+      if (post) await prisma.kudos.update({ where: { id: row.id }, data: { postId: post.id } });
+    }
+
+    // Employee of the Month · September 2026 → Priya (wireframe feed p1, sidebar, kudos row).
+    const rohit = E('rohit');
+    const priya = E('priya');
+    if (rohit && priya) {
+      const eotmAt = at('2026-09-01', '10:00');
+      const citation = 'Shipped the Atlas CRM billing module two weeks early.';
+      const holderName = names.get(priya) ?? 'Priya Sharma';
+      const award = await prisma.eotmAward.create({ data: { tenantId, employeeId: priya, month: '2026-09', citation, announcedByEmployeeId: rohit, createdAt: eotmAt } });
+      const post = await createPost({
+        kind: 'EOTM',
+        title: `Employee of the Month: ${holderName}`,
+        html: '<p>Priya shipped the Atlas CRM billing module two weeks ahead of plan and mentored two interns along the way. Her certificate is ready to download.</p>',
+        author: 'rohit',
+        at: eotmAt,
+        pinned: true,
+        likers: ['neha', 'arjun', 'rahul', 'sneha', 'kavya', 'vikram', 'ananya', 'isha', 'karan', 'divya'],
+        comments: [
+          { who: 'neha', body: 'Thoroughly deserved, Priya! The billing module was the smoothest release of the year.', mins: 12 },
+          { who: 'priya', body: 'Thank you, Neha! It was a real team effort.', mins: 25, replyTo: 0 },
+          { who: 'arjun', body: 'Two weeks early and mentoring two interns along the way. Congratulations, Priya!', mins: 31 },
+          { who: 'rahul', body: 'Congratulations, Priya! Well earned.', mins: 40 },
+          { who: 'sneha', body: 'The cleanest release candidate we have tested this year. Congrats!', mins: 52 },
+          { who: 'priya', body: 'QA caught the tricky edge cases early — thank you, Sneha!', mins: 60, replyTo: 4 },
+          { who: 'kavya', body: 'Congratulations @Priya! Your certificate is on this post — download it any time.', mins: 75, mentions: ['priya'] },
+          { who: 'vikram', body: 'Congratulations from the Pune office!', mins: 95 },
+          { who: 'ananya', body: 'Congratulations! Finance loved the GST invoice preview.', mins: 130 },
+          { who: 'rohit', body: 'Agreed — the new billing flow already saves us hours at month end.', mins: 142, replyTo: 8 },
+          { who: 'rahul', body: 'Next month I’m coming for that trophy, Priya!', mins: 180 },
+          { who: 'priya', body: 'Bring it on, Rahul!', mins: 195, replyTo: 10 },
+          { who: 'neha', body: 'Also a shout-out for the documentation — the billing runbook is excellent.', mins: 240 },
+          { who: 'arjun', body: '+1, we are using it as the template for Kestrel.', mins: 250, replyTo: 12 },
+          { who: 'sneha', body: 'Cake at 4?', mins: 300 },
+          { who: 'kavya', body: 'Already ordered. Cafeteria, 4 pm!', mins: 310, replyTo: 14 },
+          { who: 'rohit', body: 'Proud of you, Priya. Keep raising the bar.', mins: 330 },
+          { who: 'priya', body: 'Thank you all — this means a lot. On to the next release!', mins: 360 },
+        ],
+        eotmAwardId: award.id,
+      });
+      // Rendered lazily on the first download (CertificatesService.pdfFor); READY = no "certificate ready" alert.
+      const cert = await prisma.certificate.create({
+        data: { tenantId, type: 'EOTM', recipientEmployeeId: priya, holderName, title: 'Employee of the Month', subtitle: 'September 2026', issuedAt: eotmAt, verificationCode: verificationCode(), status: 'READY', sourceType: 'EOTM', sourceId: award.id, metadata: { citation, month: '2026-09', holderName }, createdAt: eotmAt },
+      });
+      await prisma.eotmAward.update({ where: { id: award.id }, data: { postId: post?.id ?? null, certificateId: cert.id } });
+      await prisma.kudos.create({ data: { tenantId, giverEmployeeId: rohit, recipientEmployeeId: priya, badgeId: badge['Employee of the Month']!, message: 'Atlas CRM billing shipped early', postId: post?.id ?? null, createdAt: eotmAt } });
+    }
+
+    // Kudos (wireframe rows + Priya's earlier Star Coder, shown on her profile).
+    await giveKudos({ from: 'arjun', to: 'priya', badge: 'Star Coder', message: 'Built the Atlas invoice PDF export with zero review comments', at: at('2026-08-12', '15:30'), likers: ['neha', 'rahul', 'sneha'] });
+    await giveKudos({
+      from: 'arjun',
+      to: 'sneha',
+      badge: 'Bug Hunter',
+      message: 'Caught the GST rounding issue before release',
+      at: at('2026-09-22', '11:05'),
+      likers: ['neha', 'karan', 'priya', 'rahul'],
+      comments: [{ who: 'neha', body: 'Great catch, Sneha — that would have hit every invoice.', mins: 25 }],
+    });
+    await giveKudos({
+      from: 'neha',
+      to: 'rahul',
+      badge: 'Star Coder',
+      message: 'Refactored the payroll engine in a week',
+      at: at('2026-09-26', '11:15'),
+      likers: ['arjun', 'priya', 'sneha', 'rohit', 'kavya'],
+      comments: [
+        { who: 'priya', body: 'Well deserved, Rahul!', mins: 14 },
+        { who: 'rahul', body: 'Thanks, Neha! Happy to finally retire the old engine.', mins: 31 },
+      ],
+    });
+
+    // Wireframe posts p2 (Blog) and p3 (Milestone).
+    await createPost({
+      kind: 'BLOG',
+      title: 'How we run appraisals this cycle',
+      html: [
+        '<p>Self reviews open on 1 October. This post explains the new KRA template, timelines and what managers will look for.</p>',
+        '<h2>Timeline</h2>',
+        '<ul><li>1–10 Oct: self review (Appraisals → My review)</li><li>12–20 Oct: manager review and calibration</li><li>From 26 Oct: one-to-one conversations and letters</li></ul>',
+        '<h2>The new KRA template</h2>',
+        '<p>Every role now has 4–6 KRAs with weights that add up to 100%. Rate yourself on a 5-point scale and add at least one example for every rating above 3.</p>',
+        '<h2>What managers look for</h2>',
+        '<ul><li>Outcomes against the KRAs, not hours logged</li><li>How you helped the team: reviews, mentoring, documentation</li><li>One area you want to grow in next cycle</li></ul>',
+        '<p>Questions? Ask in the comments or raise an HR ticket on the <a href="/helpdesk">Helpdesk</a>.</p>',
+      ].join(''),
+      author: 'kavya',
+      at: at('2026-09-25', '11:30'),
+      likers: ['neha', 'arjun', 'priya', 'rahul', 'sneha', 'rohit'],
+      comments: [
+        { who: 'rahul', body: 'Will the KRA weights be visible before we start the self review?', mins: 20 },
+        { who: 'kavya', body: 'Yes — your manager shares them by 30 Sep, and you will see them on your review form from 1 Oct.', mins: 35, replyTo: 0 },
+        { who: 'sneha', body: 'Can we add more than one example per rating?', mins: 60 },
+        { who: 'kavya', body: 'Absolutely. One example is the minimum for ratings above 3.', mins: 72, replyTo: 2 },
+        { who: 'priya', body: 'Thanks for the clear timeline, Kavya.', mins: 95 },
+        { who: 'neha', body: 'Managers: please block 30 minutes per report for the one-to-ones in the last week of October.', mins: 130 },
+      ],
+    });
+    await createPost({
+      kind: 'MILESTONE',
+      title: 'Kestrel app crosses 50,000 installs',
+      html: '<p>Thanks to the mobile and QA teams for three releases in six weeks.</p>',
+      author: 'arjun',
+      publishedBy: 'kavya',
+      at: at('2026-09-20', '17:45'),
+      likers: ['rohit', 'neha', 'sneha', 'karan', 'vikram', 'priya', 'rahul', 'kavya', 'divya'],
+      comments: [
+        { who: 'rohit', body: 'Fantastic milestone. Well done, team Kestrel!', mins: 15 },
+        { who: 'sneha', body: 'Three releases in six weeks with zero P1 bugs. Proud of the QA team.', mins: 30 },
+        { who: 'arjun', body: 'Your regression suite made that possible, Sneha.', mins: 42, replyTo: 1 },
+        { who: 'karan', body: 'Happy to have been part of the last release cycle!', mins: 55 },
+        { who: 'vikram', body: 'The new onboarding screens went out in v2.3 — thanks for the quick feedback loops.', mins: 70 },
+        { who: 'neha', body: 'Congratulations, everyone. Let’s keep the crash-free rate above 99.5%.', mins: 90 },
+        { who: 'priya', body: 'Congrats, team! 50k is huge.', mins: 120 },
+        { who: 'rahul', body: 'What’s the next target — 100k by March?', mins: 150 },
+        { who: 'arjun', body: 'That’s the plan. The store listing refresh lands in October.', mins: 165, replyTo: 7 },
+        { who: 'kavya', body: 'Congratulations! Cake in the cafeteria on Friday.', mins: 200 },
+        { who: 'divya', body: 'Congrats! Loved working on the illustrations.', mins: 240 },
+      ],
+    });
+    // An HR draft ("My drafts (1)" in Kavya's composer).
+    await createPost({
+      kind: 'BLOG',
+      title: 'Diwali celebration — what to expect',
+      html: '<p>Families are welcome on 8 November from 4 pm on the terrace at Ahmedabad HQ.</p><ul><li>Potluck: sign up for a dish by 1 Nov</li><li>Rangoli competition at 5 pm</li></ul>',
+      author: 'kavya',
+      at: at('2026-09-28', '17:10'),
+      draft: true,
+    });
+  }
+
+  // ── Helpdesk ─────────────────────────────────────────────────────────────
+  async function seedHelpdesk() {
+    const names = await nameMap();
+    const nm = (k: string) => names.get(E(k) ?? '') ?? k;
+    const setupAt = at('2026-01-05', '10:00');
+    const groupDefs = [
+      { key: 'it', name: 'IT desk', lead: 'neha', members: ['arjun'] },
+      { key: 'payroll', name: 'Payroll desk', lead: 'kavya', members: ['ananya'] },
+      { key: 'hr', name: 'HR desk', lead: 'kavya', members: [] as string[] },
+    ];
+    const groups: Record<string, string> = {};
+    for (const g of groupDefs) {
+      const row = await prisma.supportGroup.create({
+        data: { tenantId, name: g.name, leadEmployeeId: E(g.lead), memberEmployeeIds: g.members.map(E).filter((x): x is string => !!x), active: true, roundRobin: false, createdAt: setupAt },
+      });
+      groups[g.key] = row.id;
+    }
+    // Categories in the wireframe FORMS.ticket order; Payroll and HR are restricted (requester + desk only).
+    const catDefs = [
+      { name: 'IT hardware', group: 'it', restricted: false },
+      { name: 'IT access', group: 'it', restricted: false },
+      { name: 'Payroll', group: 'payroll', restricted: true },
+      { name: 'HR', group: 'hr', restricted: true },
+    ];
+    const cats: Record<string, { id: string; groupId: string }> = {};
+    for (const [i, c] of catDefs.entries()) {
+      const row = await prisma.ticketCategory.create({ data: { tenantId, name: c.name, groupId: groups[c.group]!, restricted: c.restricted, active: true, sortOrder: i + 1 } });
+      cats[c.name] = { id: row.id, groupId: row.groupId };
+    }
+    await prisma.slaPolicy.createMany({ data: HELPDESK_PRIORITIES.map((priority) => ({ tenantId, priority, ...DEFAULT_SLA[priority] })) });
+
+    // Business calendar = Mon–Fri 09:30–18:30 IST minus company-wide mandatory holidays (as HelpdeskService.calendar()).
+    const holidays = await prisma.holiday.findMany({ where: { tenantId, type: 'MANDATORY' }, select: { date: true, locationIds: true } }).catch(() => [] as { date: Date; locationIds: string[] }[]);
+    const cal = calendarWith(holidays.filter((h) => !h.locationIds.length).map((h) => h.date.toISOString().slice(0, 10)));
+    const assigned = (k: string) => `Assigned to ${nm(k)}`;
+
+    type Ev = { at: Date; who: string | null; kind: 'COMMENT' | 'STATUS_CHANGE' | 'ASSIGNMENT' | 'ESCALATION' | 'CSAT'; body: string; internal?: boolean };
+    type TicketSeed = {
+      number: number;
+      requester: string;
+      category: string;
+      priority: 'HIGH' | 'MEDIUM' | 'LOW';
+      subject: string;
+      description: string;
+      createdAt: Date;
+      status: WpTicketStatus;
+      assignee?: string;
+      firstRespondedAt?: Date;
+      resolvedAt?: Date;
+      closedAt?: Date;
+      pausedSince?: Date;
+      resolutionNote?: string;
+      csat?: number;
+      escalatedTo?: string[];
+      events: Ev[];
+    };
+    const resolved = (note: string) => `Resolved: ${note}`;
+    const notes = {
+      1031: 'VPN profile installed and access to the client’s staging server verified with Priya.',
+      1037: 'Form 16 (Parts A and B) emailed to your work address.',
+      1038: 'PF for August was calculated on your old basic. The shortfall will be added to your September PF contribution.',
+      1039: 'GitLab access granted: Developer on atlas/crm.',
+    };
+    const tickets: TicketSeed[] = [
+      {
+        number: 1031,
+        requester: 'priya',
+        category: 'IT access',
+        priority: 'MEDIUM',
+        subject: 'VPN access for client server',
+        description: 'I need VPN access to the Atlas client’s staging server to debug the invoice sync. The client’s IT team has approved the request on their side.',
+        createdAt: at('2026-09-21', '11:00'),
+        status: 'RESOLVED',
+        firstRespondedAt: at('2026-09-21', '11:40'),
+        resolvedAt: at('2026-09-23', '15:10'),
+        resolutionNote: notes[1031],
+        csat: 5,
+        events: [
+          { at: at('2026-09-21', '11:40'), who: 'arjun', kind: 'COMMENT', body: 'I’ve requested a VPN profile from the client’s IT team. We’ll install it on your laptop once they whitelist our office IP.' },
+          { at: at('2026-09-21', '11:41'), who: 'arjun', kind: 'STATUS_CHANGE', body: 'Status changed to In progress' },
+          { at: at('2026-09-22', '10:05'), who: 'priya', kind: 'COMMENT', body: 'Thanks! Let me know if you need anything from my side.' },
+          { at: at('2026-09-23', '15:10'), who: 'arjun', kind: 'STATUS_CHANGE', body: resolved(notes[1031]) },
+          { at: at('2026-09-23', '15:32'), who: 'priya', kind: 'CSAT', body: 'Rated 5/5' },
+        ],
+      },
+      {
+        number: 1037,
+        requester: 'rahul',
+        category: 'Payroll',
+        priority: 'LOW',
+        subject: 'Form 16 for FY 2025-26 not received',
+        description: 'I haven’t received Form 16 for FY 2025-26 yet. The bank needs it for my home-loan application.',
+        createdAt: at('2026-09-22', '09:50'),
+        status: 'RESOLVED',
+        assignee: 'ananya',
+        firstRespondedAt: at('2026-09-22', '10:30'),
+        resolvedAt: at('2026-09-25', '17:10'),
+        resolutionNote: notes[1037],
+        csat: 4,
+        events: [
+          { at: at('2026-09-22', '10:10'), who: 'kavya', kind: 'ASSIGNMENT', body: assigned('ananya') },
+          { at: at('2026-09-22', '10:30'), who: 'ananya', kind: 'COMMENT', body: 'Part B is generated once Part A is downloaded from TRACES. You’ll have both by 26 Sep.' },
+          { at: at('2026-09-22', '10:31'), who: 'ananya', kind: 'STATUS_CHANGE', body: 'Status changed to In progress' },
+          { at: at('2026-09-25', '17:10'), who: 'ananya', kind: 'STATUS_CHANGE', body: resolved(notes[1037]) },
+          { at: at('2026-09-25', '17:40'), who: 'rahul', kind: 'CSAT', body: 'Rated 4/5' },
+        ],
+      },
+      {
+        number: 1038,
+        requester: 'priya',
+        category: 'Payroll',
+        priority: 'MEDIUM',
+        subject: 'Payslip shows wrong PF',
+        description: 'The PF deduction on my August payslip is lower than in July, although my basic was revised in July. Could you check whether the revised basic was used?',
+        createdAt: at('2026-09-23', '10:20'),
+        status: 'RESOLVED',
+        assignee: 'kavya',
+        firstRespondedAt: at('2026-09-23', '11:02'),
+        resolvedAt: at('2026-09-24', '12:15'),
+        resolutionNote: notes[1038],
+        events: [
+          { at: at('2026-09-23', '10:45'), who: 'kavya', kind: 'ASSIGNMENT', body: assigned('kavya') },
+          { at: at('2026-09-23', '11:02'), who: 'kavya', kind: 'COMMENT', body: 'Thanks, Priya — I’m checking the August payroll run and will update you today.' },
+          { at: at('2026-09-23', '11:03'), who: 'kavya', kind: 'STATUS_CHANGE', body: 'Status changed to In progress' },
+          { at: at('2026-09-23', '16:40'), who: 'kavya', kind: 'COMMENT', internal: true, body: 'The August run used the pre-revision basic for PF. The correction goes into the September run.' },
+          { at: at('2026-09-24', '12:15'), who: 'kavya', kind: 'STATUS_CHANGE', body: resolved(notes[1038]) },
+        ],
+      },
+      {
+        number: 1039,
+        requester: 'isha',
+        category: 'IT access',
+        priority: 'MEDIUM',
+        subject: 'Access to the Atlas GitLab group',
+        description: 'I joined the Atlas CRM team as an intern and need access to the GitLab group to clone the repository.',
+        createdAt: at('2026-09-24', '10:05'),
+        status: 'CLOSED',
+        assignee: 'arjun',
+        firstRespondedAt: at('2026-09-24', '10:40'),
+        resolvedAt: at('2026-09-24', '10:45'),
+        closedAt: at('2026-09-24', '11:30'),
+        resolutionNote: notes[1039],
+        csat: 5,
+        events: [
+          { at: at('2026-09-24', '10:20'), who: 'neha', kind: 'ASSIGNMENT', body: assigned('arjun') },
+          { at: at('2026-09-24', '10:40'), who: 'arjun', kind: 'COMMENT', body: 'Added you to atlas/crm as a Developer. Please turn on two-factor authentication in GitLab before you push.' },
+          { at: at('2026-09-24', '10:45'), who: 'arjun', kind: 'STATUS_CHANGE', body: resolved(notes[1039]) },
+          { at: at('2026-09-24', '11:30'), who: 'isha', kind: 'STATUS_CHANGE', body: 'Closed — the requester confirmed the fix' },
+          { at: at('2026-09-24', '11:31'), who: 'isha', kind: 'CSAT', body: 'Rated 5/5' },
+        ],
+      },
+      {
+        number: 1040,
+        requester: 'sneha',
+        category: 'IT hardware',
+        priority: 'LOW',
+        subject: 'Second monitor for regression testing',
+        description: 'Running the billing regression suite side by side with the app needs a second monitor at my desk.',
+        createdAt: at('2026-09-25', '14:00'),
+        status: 'WAITING',
+        firstRespondedAt: at('2026-09-25', '15:20'),
+        pausedSince: at('2026-09-25', '15:21'),
+        events: [
+          { at: at('2026-09-25', '15:20'), who: 'neha', kind: 'COMMENT', body: 'We have 24-inch Dell and 27-inch LG monitors in stock — which one suits your test bench?' },
+          { at: at('2026-09-25', '15:21'), who: 'neha', kind: 'STATUS_CHANGE', body: 'Status changed to Waiting' },
+        ],
+      },
+      {
+        number: 1041,
+        requester: 'vikram',
+        category: 'IT access',
+        priority: 'HIGH',
+        subject: 'Pune office Wi-Fi drops every few minutes',
+        description: 'Since this morning the Wi-Fi on the Pune office floor disconnects every 5–10 minutes and client video calls keep dropping. Divya is affected too.',
+        createdAt: at('2026-09-28', '10:15'),
+        status: 'OPEN',
+        // First response was due 11:15; the SLA monitor escalated to the IT desk lead and Vikram's manager.
+        escalatedTo: ['neha', 'arjun'],
+        events: [
+          { at: at('2026-09-28', '11:20'), who: null, kind: 'ESCALATION', internal: true, body: `First response overdue · level 1 → ${nm('neha')}, ${nm('arjun')}` },
+          { at: at('2026-09-28', '14:30'), who: 'vikram', kind: 'COMMENT', body: 'Still dropping. We’ve moved today’s client call to a mobile hotspot for now.' },
+        ],
+      },
+      {
+        number: 1042,
+        requester: 'priya',
+        category: 'IT hardware',
+        priority: 'HIGH',
+        subject: 'Laptop battery drains fast',
+        description: 'My laptop battery goes from 100% to 20% in under two hours with just the IDE and a browser open. It started after last week’s BIOS update.',
+        createdAt: at('2026-09-28', '15:30'),
+        status: 'IN_PROGRESS',
+        firstRespondedAt: at('2026-09-28', '16:05'),
+        events: [
+          { at: at('2026-09-28', '16:05'), who: 'arjun', kind: 'COMMENT', body: 'Could you bring the laptop to the IT desk tomorrow at 11? We’ll run a battery health check and roll back the BIOS update if needed.' },
+          { at: at('2026-09-28', '16:06'), who: 'arjun', kind: 'STATUS_CHANGE', body: 'Status changed to In progress' },
+          { at: at('2026-09-28', '16:12'), who: 'priya', kind: 'COMMENT', body: 'Sure — I’ll come in to the office tomorrow. Thanks!' },
+        ],
+      },
+    ];
+
+    for (const t of tickets) {
+      const requesterId = E(t.requester);
+      const cat = cats[t.category];
+      if (!requesterId || !cat) continue;
+      const policy = DEFAULT_SLA[t.priority];
+      const due = dueDatesFor(t.createdAt, policy, cal);
+      const clock = { createdAt: t.createdAt, status: t.status, ...due, firstRespondedAt: t.firstRespondedAt ?? null, resolvedAt: t.resolvedAt ?? null, pausedMins: 0, pausedSince: t.pausedSince ?? null };
+      const escalatedTo = (t.escalatedTo ?? []).map(E).filter((x): x is string => !!x);
+      const slaState = t.resolvedAt ? resolvedSlaState(clock, t.resolvedAt) : escalatedTo.length ? 'BREACHED' : t.pausedSince ? 'ON_TRACK' : evaluateSla(clock, policy, NOW, cal).state;
+      const events = t.events.filter((e) => !e.who || E(e.who));
+      const updatedAt = new Date(Math.max(t.createdAt.getTime(), ...events.map((e) => e.at.getTime())));
+      const row = await prisma.helpdeskTicket.create({
+        data: {
+          tenantId,
+          number: t.number,
+          code: `HD-${t.number}`,
+          categoryId: cat.id,
+          groupId: cat.groupId,
+          priority: t.priority,
+          subject: t.subject,
+          description: t.description,
+          status: t.status,
+          requesterEmployeeId: requesterId,
+          assigneeEmployeeId: t.assignee ? E(t.assignee) : null,
+          firstResponseDueAt: due.firstResponseDueAt,
+          resolutionDueAt: due.resolutionDueAt,
+          firstRespondedAt: t.firstRespondedAt ?? null,
+          resolvedAt: t.resolvedAt ?? null,
+          closedAt: t.closedAt ?? null,
+          pausedMins: 0,
+          pausedSince: t.pausedSince ?? null,
+          slaState,
+          escalationLevel: escalatedTo.length ? 1 : 0,
+          escalatedToEmployeeIds: escalatedTo,
+          resolutionNote: t.resolutionNote ?? null,
+          csat: t.csat ?? null,
+          attachmentFileIds: [],
+          createdAt: t.createdAt,
+          updatedAt,
+        },
+      });
+      if (events.length) {
+        await prisma.ticketComment.createMany({
+          data: events.map((e) => ({ tenantId, ticketId: row.id, authorEmployeeId: e.who ? E(e.who) : null, visibility: e.internal ? 'INTERNAL' : 'PUBLIC', kind: e.kind, body: e.body, fileIds: [], createdAt: e.at })),
+        });
+      }
+    }
+    // No NumberSequence row: HelpdeskService allocates max(1043, highest + 1) → the next ticket is HD-1043.
+  }
+}
+
+const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+/** 10 Crockford base32 characters (same alphabet as CertificatesService codes). */
+function verificationCode(): string {
+  return [...randomBytes(10)].map((b) => CROCKFORD[b & 31]).join('');
 }
 
 // ── Thought of the day ─────────────────────────────────────────────────────

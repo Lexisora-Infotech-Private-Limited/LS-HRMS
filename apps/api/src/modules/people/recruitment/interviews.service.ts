@@ -20,7 +20,7 @@ import { buildIcs, istDateTime, overallFromRatings, suggestResult } from '../peo
 import { fmtWhen, todayKey } from '../people.util';
 import { CandidatesService } from './candidates.service';
 
-const RESULT_LABEL: Record<string, string> = { PENDING: 'Pending', SELECTED: 'Selected', REJECTED: 'Rejected', ON_HOLD: 'On hold', CANCELLED: 'Cancelled' };
+const RESULT_LABEL: Record<string, string> = { PENDING: 'Pending', SELECTED: 'Selected', REJECTED: 'Rejected', ON_HOLD: 'On hold', CANCELLED: 'Cancelled', NO_SHOW: 'No-show' };
 const DEFAULT_CRITERIA = [
   { key: 'problem_solving', label: 'Problem solving' },
   { key: 'technical_depth', label: 'Technical depth' },
@@ -65,7 +65,7 @@ export class InterviewsService {
   private row(i: Full, names: Map<string, string>, me: string | null | undefined): InterviewRow {
     const lead = i.panelists.find((p) => p.role === 'LEAD') ?? i.panelists[0];
     const mine = me ? i.scorecards.find((s) => s.interviewerEmployeeId === me) : undefined;
-    const result = i.status === 'CANCELLED' ? 'CANCELLED' : i.result;
+    const result = i.status === 'CANCELLED' ? 'CANCELLED' : i.status === 'NO_SHOW' ? 'NO_SHOW' : i.result;
     return {
       id: i.id,
       candidate: i.application.candidate.fullName,
@@ -91,10 +91,14 @@ export class InterviewsService {
     const ctx = requireContext();
     const me = ctx.employeeId;
     const recruiter = this.isRecruiter();
-    const where: Prisma.InterviewWhereInput = {};
+    let where: Prisma.InterviewWhereInput = {};
     if (!recruiter || mine) {
       if (!me) return { items: [], canManage: false, counts: { upcoming: 0, past: 0, all: 0 } };
       where.panelists = { some: { employeeId: me } };
+    } else {
+      // Leads: interviews they sit on plus their department's jobs (spec M6).
+      const scope = await this.candidates.jobScope();
+      if (scope) where = { OR: [{ panelists: { some: { employeeId: me ?? '__none__' } } }, { application: { job: scope } }] };
     }
     const now = new Date();
     const tabWhere: Prisma.InterviewWhereInput = tab === 'upcoming' ? { startsAt: { gte: new Date(now.getTime() - 2 * 3600_000) }, status: 'SCHEDULED' } : tab === 'past' ? { OR: [{ startsAt: { lt: now } }, { status: { not: 'SCHEDULED' } }] } : {};
@@ -113,9 +117,12 @@ export class InterviewsService {
     return i as Full;
   }
 
-  private assertCanSee(i: Full) {
+  private async assertCanSee(i: Full) {
     const me = requireContext().employeeId;
-    if (!this.isRecruiter() && !(me && i.panelists.some((p) => p.employeeId === me))) throw notFound('Interview');
+    if (me && i.panelists.some((p) => p.employeeId === me)) return;
+    if (!this.isRecruiter()) throw notFound('Interview');
+    const scope = await this.candidates.jobScope();
+    if (scope && !(await this.prisma.interview.findFirst({ where: { id: i.id, application: { job: scope } }, select: { id: true } }))) throw notFound('Interview');
   }
 
   private async criteriaFor(roundName: string) {
@@ -126,7 +133,7 @@ export class InterviewsService {
 
   async detail(id: string): Promise<InterviewDetail> {
     const i = await this.load(id);
-    this.assertCanSee(i);
+    await this.assertCanSee(i);
     const me = requireContext().employeeId;
     const names = await this.names([...i.panelists.map((p) => p.employeeId), ...i.scorecards.map((s) => s.interviewerEmployeeId)]);
     const criteria = await this.criteriaFor(i.roundName);
@@ -264,6 +271,17 @@ export class InterviewsService {
     await this.sendInvites(await this.load(id), 'CANCEL');
     await this.audit.record({ action: 'interview.cancelled', entity: 'Interview', entityId: id, meta: { reason: reason ?? null } });
     return { ok: true };
+  }
+
+  /** Candidate did not turn up: closes the slot without a result (scorecards not owed). */
+  async noShow(id: string) {
+    if (!this.isRecruiter()) throw forbidden();
+    const i = await this.load(id);
+    if (i.status !== 'SCHEDULED') throw new AppError(409, 'INVALID_STATUS', 'Only scheduled interviews can be marked as no-show');
+    if (i.startsAt.getTime() > Date.now()) throw new AppError(409, 'NOT_YET', 'The interview has not started yet');
+    await this.prisma.interview.update({ where: { id }, data: { status: 'NO_SHOW' } });
+    await this.audit.record({ action: 'interview.no_show', entity: 'Interview', entityId: id, meta: { candidate: i.application.candidate.fullName } });
+    return this.detail(id);
   }
 
   // ── Scorecards & result ──────────────────────────────────────────────────

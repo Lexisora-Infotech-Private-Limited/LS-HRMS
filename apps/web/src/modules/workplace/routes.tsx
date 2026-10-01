@@ -6,6 +6,10 @@ import { Placeholder } from '@/components/Placeholder';
 
 const DashboardPage = lazy(() => import('./pages/DashboardPage'));
 const NoticesPage = lazy(() => import('./pages/NoticesPage'));
+const FeedPage = lazy(() => import('./pages/FeedPage'));
+const KudosPage = lazy(() => import('./pages/KudosPage'));
+const PoliciesPage = lazy(() => import('./pages/PoliciesPage'));
+const HelpdeskPage = lazy(() => import('./pages/HelpdeskPage'));
 
 const s = (el: ReactNode) => <Suspense fallback={<Loading />}>{el}</Suspense>;
 
@@ -13,13 +17,13 @@ const s = (el: ReactNode) => <Suspense fallback={<Loading />}>{el}</Suspense>;
 export const routes: RouteObject[] = [
   { path: 'dashboard', element: guard('dashboard.view', s(<DashboardPage />)) },
   { path: 'notices', element: guard('notices.view', s(<NoticesPage />)) },
-  // Next workplace release (feed, chat, policies, helpdesk, learning, kudos, facility, CCTV, wellness):
-  { path: 'feed', element: guard('feed.view', <Placeholder title='Company feed' screen='feed' />) },
+  { path: 'feed', element: guard('feed.view', s(<FeedPage />)) },
+  { path: 'kudos', element: guard('kudos.view', s(<KudosPage />)) },
+  { path: 'policies', element: guard('policies.view', s(<PoliciesPage />)) },
+  { path: 'helpdesk', element: guard('helpdesk.use', s(<HelpdeskPage />)) },
+  // Next workplace release (comms hub, learning, rooms & visitors, CCTV, wellness):
   { path: 'chat', element: guard('chat.use', <Placeholder title='Comms hub' screen='chat' />) },
-  { path: 'policies', element: guard('policies.view', <Placeholder title='Policies & rulebook' screen='policies' />) },
-  { path: 'helpdesk', element: guard('helpdesk.use', <Placeholder title='Helpdesk' screen='helpdesk' />) },
   { path: 'learning', element: guard('lms.view', <Placeholder title='Learning' screen='lms' />) },
-  { path: 'kudos', element: guard('kudos.view', <Placeholder title='Kudos & Employee of the Month' screen='kudos' />) },
   { path: 'facility', element: guard('facility.use', <Placeholder title='Rooms & visitors' screen='facility' />) },
   { path: 'cctv', element: guard('cctv.view', <Placeholder title='CCTV' screen='cctv' />) },
   { path: 'wellness', element: guard('wellness.play', <Placeholder title='Wellness games' screen='wellness' />) },

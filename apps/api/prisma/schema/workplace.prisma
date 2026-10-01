@@ -409,6 +409,8 @@ model SupportGroup {
   leadEmployeeId    String?
   memberEmployeeIds String[]
   active            Boolean          @default(true)
+  /// Auto-assign new tickets to the member with the fewest open tickets.
+  roundRobin        Boolean          @default(false)
   categories        TicketCategory[]
   createdAt         DateTime         @default(now())
 
@@ -711,6 +713,8 @@ model HrPolicyVersion {
   policy                HrPolicy    @relation(fields: [policyId], references: [id], onDelete: Cascade)
   version               Int
   fileId                String?
+  /// Pages in the PDF (reader gating: max(10 s, pages × 3 s)).
+  pageCount             Int?
   effectiveFrom         DateTime    @db.Date
   changeSummary         String?
   requiresReack         Boolean     @default(true)

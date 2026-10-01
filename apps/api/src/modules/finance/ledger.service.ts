@@ -6,6 +6,7 @@ import {
   type AccountStatement,
   type CreateVoucherInput,
   type FinAccountRow,
+  type FinLedgerOptions,
   type LedgerKpis,
   type LedgerLineRow,
   type Paginated,
@@ -24,6 +25,7 @@ import { hasPerm } from '../../core/auth/decorators';
 import { AppError, badRequest, conflict, forbidden, notFound } from '../../core/http/errors';
 import { paginated, pageArgs } from '../../core/http/paginate';
 import { CHART_OF_ACCOUNTS } from './lib/coa';
+import { payrollPostingLines, type PayrollTotals } from './lib/gst';
 import { computeTrialBalance, primaryLedger, reverseLines, runningStatement, validateVoucherLines, VoucherValidationError, type AccountMeta, type LineInput } from './lib/ledger-math';
 import { currentMonthKey, dateKeyOf, dateOnly, fyOf, fyStart, monthRange, todayDate, voucherSequence, type VoucherKind } from './lib/money';
 
@@ -109,18 +111,84 @@ export class LedgerService {
   }
 
   /** Receivable sub-ledger for a client (created lazily under Sundry debtors). */
-  async clientAccount(clientId: string, clientName: string): Promise<string> {
-    const found = await this.prisma.account.findFirst({ where: { partyType: 'CLIENT', partyId: clientId }, select: { id: true } });
+  clientAccount(clientId: string, clientName: string): Promise<string> {
+    return this.partyAccount('CLIENT', clientId, clientName, 'AR', 'ASSET');
+  }
+
+  /** Payable sub-ledger for a vendor (created lazily under Sundry creditors). */
+  vendorAccount(vendorId: string, vendorName: string): Promise<string> {
+    return this.partyAccount('VENDOR', vendorId, vendorName, 'AP', 'LIABILITY');
+  }
+
+  private async partyAccount(partyType: 'CLIENT' | 'VENDOR', partyId: string, name: string, groupKey: 'AR' | 'AP', type: 'ASSET' | 'LIABILITY'): Promise<string> {
+    const found = await this.prisma.account.findFirst({ where: { partyType, partyId }, select: { id: true, name: true } });
     if (found) return found.id;
-    const parentId = await this.accountIdByKey('AR');
-    const siblings = await this.prisma.account.findMany({ where: { parentId }, select: { code: true } });
-    const used = new Set(siblings.map((s) => s.code));
-    let n = 1131;
-    while (used.has(String(n))) n++;
-    const row = await this.prisma.account.create({
-      data: { code: String(n), name: clientName, type: 'ASSET', parentId, partyType: 'CLIENT', partyId: clientId, isSystem: true } as Prisma.AccountUncheckedCreateInput,
+    const parentId = await this.accountIdByKey(groupKey);
+    const parent = await this.prisma.account.findFirst({ where: { id: parentId }, select: { code: true } });
+    const used = new Set((await this.prisma.account.findMany({ where: { code: { startsWith: parent!.code } }, select: { code: true } })).map((s) => s.code));
+    let n = 1;
+    while (used.has(`${parent!.code}${String(n).padStart(3, '0')}`)) n++;
+    try {
+      const row = await this.prisma.account.create({
+        data: { code: `${parent!.code}${String(n).padStart(3, '0')}`, name, type, parentId, partyType, partyId, isSystem: true } as Prisma.AccountUncheckedCreateInput,
+      });
+      return row.id;
+    } catch (e) {
+      // Concurrent creation for the same party: reuse the winner.
+      const again = await this.prisma.account.findFirst({ where: { partyType, partyId }, select: { id: true } });
+      if (again) return again.id;
+      throw e;
+    }
+  }
+
+  /** Throws when the date is inside locked books (or in the future, unless allowed). */
+  assertOpen(date: Date, allowFuture = false) {
+    return this.assertOpenPeriod(date, allowFuture);
+  }
+
+  // ── Payroll (event consumers) ────────────────────────────────────────────
+
+  /**
+   * `payroll.finalized` → one aggregated accrual JV per run (never per employee):
+   * Dr Salaries + Employer PF; Cr Salary payable (net), PF, PT, TDS payable.
+   * Dated the period end (or today when the month is still running); idempotent per run.
+   */
+  async postPayroll(p: { runId: string; period: string; totals: PayrollTotals }) {
+    const count = await this.prisma.payslip.count({ where: { runId: p.runId } }).catch(() => 0);
+    const { end } = monthRange(p.period);
+    const today = todayDate();
+    let date = end.getTime() > today.getTime() ? today : end;
+    const s = await this.financeSettings();
+    if (s.booksLockedUpTo && dateKeyOf(date) <= s.booksLockedUpTo) date = today;
+    const lines = payrollPostingLines({ ...p.totals, employeeCount: p.totals.employeeCount ?? count });
+    return this.post({
+      type: 'PAYROLL',
+      date,
+      narration: `Payroll ${finMonthLabel(p.period)} (${count || p.totals.employeeCount || 0} employees)`,
+      lines: lines.map((l) => ({ accountId: '', systemKey: l.key, debitPaise: l.debitPaise, creditPaise: l.creditPaise, narration: l.narration })),
+      sourceType: 'PAYROLL_RUN',
+      sourceId: p.runId,
+      sourceRef: `${p.period} payroll`,
+      allowFuture: true,
     });
-    return row.id;
+  }
+
+  /** `payroll.paid` → salary payout: Dr Salary payable, Cr Bank (idempotent per run). */
+  async postPayrollPayment(p: { runId: string; period: string; netPaise: number; paidAt?: string | Date }) {
+    const date = p.paidAt ? todayDate(new Date(p.paidAt)) : todayDate();
+    return this.post({
+      type: 'PAYMENT',
+      date,
+      narration: `Salary payout ${finMonthLabel(p.period)}`,
+      lines: [
+        { accountId: '', systemKey: 'SALARY_PAYABLE', debitPaise: p.netPaise },
+        { accountId: '', systemKey: 'BANK', creditPaise: p.netPaise },
+      ],
+      sourceType: 'PAYROLL_RUN',
+      sourceId: `${p.runId}:paid`,
+      sourceRef: `${p.period} payroll`,
+      allowFuture: true,
+    });
   }
 
   // ── Posting ──────────────────────────────────────────────────────────────
@@ -370,11 +438,12 @@ export class LedgerService {
 
   async kpis(month = currentMonthKey()): Promise<LedgerKpis> {
     const { start, end } = monthRange(month);
-    const [sums, accounts, invoiceCount, s] = await Promise.all([
+    const [sums, accounts, invoiceCount, s, payroll] = await Promise.all([
       this.sums(start, end),
       this.prisma.account.findMany({ select: { id: true, type: true } }),
       this.prisma.invoice.count({ where: { invoiceDate: { gte: start, lte: end }, status: { notIn: ['DRAFT', 'CANCELLED'] } } }),
       this.financeSettings(),
+      this.prisma.voucher.count({ where: { type: 'PAYROLL', status: 'POSTED', date: { gte: start, lte: end } } }),
     ]);
     const type = new Map(accounts.map((a) => [a.id, a.type]));
     let income = 0;
@@ -384,7 +453,7 @@ export class LedgerService {
       if (t === 'INCOME') income += x.creditPaise - x.debitPaise;
       if (t === 'EXPENSE') expenses += x.debitPaise - x.creditPaise;
     }
-    return { month, monthLabel: finMonthLabel(month), incomePaise: income, expensesPaise: expenses, balancePaise: income - expenses, invoiceCount, booksLockedUpTo: s.booksLockedUpTo };
+    return { month, monthLabel: finMonthLabel(month), incomePaise: income, expensesPaise: expenses, balancePaise: income - expenses, invoiceCount, payrollPosted: payroll > 0, booksLockedUpTo: s.booksLockedUpTo };
   }
 
   async trialBalance(fromKey?: string, toKey?: string): Promise<TrialBalance> {
@@ -514,11 +583,11 @@ export class LedgerService {
   }
 
   /** Postable ledgers for the voucher form (HR: expense ledgers + payment sources only). */
-  async ledgerOptions(ctx: RequestContext) {
+  async ledgerOptions(ctx: RequestContext): Promise<FinLedgerOptions> {
     await this.ensureChart();
     const full = hasPerm(ctx, 'ledger.manage');
     const rows = await this.prisma.account.findMany({ where: { isGroup: false, isActive: true }, orderBy: { code: 'asc' } });
-    const money = rows.filter((a) => ['BANK', 'CASH'].includes(a.systemKey ?? '') || (!full && a.systemKey === 'REIMB_PAYABLE') || (full && a.systemKey === 'REIMB_PAYABLE'));
+    const money = rows.filter((a) => ['BANK', 'CASH', 'REIMB_PAYABLE'].includes(a.systemKey ?? ''));
     const ledgers = full ? rows : rows.filter((a) => a.type === 'EXPENSE');
     return {
       ledgers: ledgers.map((a) => ({ value: a.id, label: `${a.name}`, code: a.code, type: a.type, systemKey: a.systemKey })),

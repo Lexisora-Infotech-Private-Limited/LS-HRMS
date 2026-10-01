@@ -10,6 +10,30 @@ import type {
   RoleMemberDto,
   RolesResponse,
   SearchGroupDto,
+  BillingCycleKey,
+  BillingOverview,
+  BillingProfileInput,
+  BrandingDto,
+  CheckoutDetailDto,
+  CheckoutDto,
+  ContactSalesInput,
+  DomainCheckDto,
+  PrivacyOverview,
+  ProvisionResultDto,
+  PublishBrandingInput,
+  QuoteDto,
+  SaasInvoiceDto,
+  SeatChangeResult,
+  SeatQuoteDto,
+  SupportListResponse,
+  SupportStatusKey,
+  SupportTab,
+  SupportTicketDetailDto,
+  SupportTicketRowDto,
+  TenantDetailDto,
+  TenantRowDto,
+  TenantsResponse,
+  TenantTab,
 } from '@lexisora/shared';
 import { del, get, patch, post, put } from '@/lib/api';
 
@@ -75,3 +99,80 @@ export const alertsApi = {
 export const searchApi = (q: string) => get<SearchGroupDto[]>('/search', { q });
 export const useSearch = (q: string) =>
   useQuery({ queryKey: qk.search(q), queryFn: () => searchApi(q), enabled: q.trim().length >= 2, staleTime: 30_000, placeholderData: (prev) => prev });
+
+// ── Subscription & billing ─────────────────────────────────────────────────
+
+export const saasKeys = {
+  billing: ['platform', 'billing'] as const,
+  overview: ['platform', 'billing', 'overview'] as const,
+  invoices: ['platform', 'billing', 'invoices'] as const,
+  checkout: (orderId: string) => ['platform', 'billing', 'checkout', orderId] as const,
+  branding: ['platform', 'branding'] as const,
+  tenants: (q: Record<string, unknown>) => ['platform', 'tenants', q] as const,
+  tenantsAll: ['platform', 'tenants'] as const,
+  tenant: (id: string) => ['platform', 'tenants', 'detail', id] as const,
+  privacy: ['platform', 'privacy'] as const,
+  support: (q: Record<string, unknown>) => ['platform', 'support', q] as const,
+  supportAll: ['platform', 'support'] as const,
+  ticket: (id: string, view: string) => ['platform', 'support', 'ticket', id, view] as const,
+};
+
+export const useBillingOverview = () => useQuery({ queryKey: saasKeys.overview, queryFn: () => get<BillingOverview>('/billing/overview') });
+export const useSaasInvoices = () => useQuery({ queryKey: saasKeys.invoices, queryFn: () => get<SaasInvoiceDto[]>('/billing/invoices') });
+export const useCheckout = (orderId: string) => useQuery({ queryKey: saasKeys.checkout(orderId), queryFn: () => get<CheckoutDetailDto>(`/billing/checkout/${orderId}`) });
+
+export const billingApi = {
+  quote: (cycle: BillingCycleKey, quantity: number) => post<QuoteDto>('/billing/quote', { planCode: 'GROWTH', cycle, quantity }),
+  checkout: (cycle: BillingCycleKey, quantity: number) => post<CheckoutDto>('/billing/checkout', { planCode: 'GROWTH', cycle, quantity }),
+  confirm: (orderId: string, outcome: 'success' | 'fail') => post<{ status: string; message: string }>(`/billing/checkout/${orderId}/confirm`, { outcome }),
+  seatQuote: (quantity: number) => post<SeatQuoteDto>('/billing/seats/quote', { quantity }),
+  seats: (quantity: number) => post<SeatChangeResult>('/billing/seats', { quantity }),
+  downgrade: () => post<{ message: string }>('/billing/downgrade'),
+  cancelDowngrade: () => post<{ message: string }>('/billing/downgrade/cancel'),
+  promo: (code: string) => post<{ message: string }>('/billing/promo', { code }),
+  contactSales: (b: ContactSalesInput) => post<{ message: string }>('/billing/contact-sales', b),
+  profile: (b: BillingProfileInput) => patch<BillingOverview>('/billing/profile', b),
+  pay: (invoiceId: string) => post<CheckoutDto>(`/billing/invoices/${invoiceId}/pay`),
+};
+
+// ── Branding ────────────────────────────────────────────────────────────────
+
+export const useBranding = () => useQuery({ queryKey: saasKeys.branding, queryFn: () => get<BrandingDto>('/branding') });
+export const brandingApi = {
+  publish: (b: PublishBrandingInput) => post<BrandingDto>('/branding/publish', b),
+  restore: (versionId: string) => post<BrandingDto>(`/branding/versions/${versionId}/restore`),
+  domainCheck: (domain: string) => get<DomainCheckDto>('/branding/domain-check', { domain }),
+};
+
+// ── Tenants (platform admins) ───────────────────────────────────────────────
+
+export const useTenants = (q: { tab: TenantTab; q?: string; page: number }, enabled = true) =>
+  useQuery({ queryKey: saasKeys.tenants(q), queryFn: () => get<TenantsResponse>('/tenants', { ...q, pageSize: 50 }), enabled, placeholderData: (prev) => prev });
+export const useTenant = (id: string | null) => useQuery({ queryKey: saasKeys.tenant(id ?? ''), queryFn: () => get<TenantDetailDto>(`/tenants/${id}`), enabled: !!id });
+export const tenantsApi = {
+  create: (b: Record<string, unknown>) => post<ProvisionResultDto>('/tenants', b),
+  domainCheck: (domain: string) => get<DomainCheckDto>('/tenants/domain-check', { domain }),
+  suspend: (id: string, reason?: string | null) => post<TenantRowDto>(`/tenants/${id}/suspend`, { reason: reason ?? null }),
+  reactivate: (id: string) => post<TenantRowDto>(`/tenants/${id}/reactivate`),
+  extendGrace: (id: string, days: number) => post<TenantRowDto>(`/tenants/${id}/extend-grace`, { days }),
+  resendInvite: (id: string) => post<{ message: string }>(`/tenants/${id}/resend-invite`),
+};
+
+// ── Data privacy ────────────────────────────────────────────────────────────
+
+export const usePrivacy = () => useQuery({ queryKey: saasKeys.privacy, queryFn: () => get<PrivacyOverview>('/privacy/overview') });
+
+// ── Lexisora support ────────────────────────────────────────────────────────
+
+export const useSupportTickets = (q: { tab: SupportTab; scope: 'tenant' | 'all'; page: number; q?: string }) =>
+  useQuery({ queryKey: saasKeys.support(q), queryFn: () => get<SupportListResponse>('/support/tickets', { ...q, pageSize: 25 }), placeholderData: (prev) => prev });
+export const useSupportTicket = (id: string | null, view: 'tenant' | 'platform') =>
+  useQuery({ queryKey: saasKeys.ticket(id ?? '', view), queryFn: () => get<SupportTicketDetailDto>(`/support/tickets/${id}`, { view }), enabled: !!id });
+export const supportApi = {
+  create: (b: Record<string, unknown>) => post<SupportTicketRowDto>('/support/tickets', b),
+  reply: (id: string, body: string, opts: { internal?: boolean; asPlatform?: boolean } = {}) => post<SupportTicketDetailDto>(`/support/tickets/${id}/messages`, { body, ...opts }),
+  update: (id: string, b: { status?: SupportStatusKey; assignToMe?: boolean }) => patch<SupportTicketDetailDto>(`/support/tickets/${id}`, b),
+  resolve: (id: string) => post<SupportTicketDetailDto>(`/support/tickets/${id}/resolve`),
+  reopen: (id: string) => post<SupportTicketDetailDto>(`/support/tickets/${id}/reopen`),
+  rate: (id: string, score: number) => post<SupportTicketDetailDto>(`/support/tickets/${id}/csat`, { score }),
+};

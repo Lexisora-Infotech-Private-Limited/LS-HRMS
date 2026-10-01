@@ -53,7 +53,8 @@ export class JobsService {
     const where: Prisma.JobWhereInput = tab === 'closed' ? { status: 'CLOSED' } : { status: { not: 'CLOSED' } };
     const [jobs, open, closed] = await Promise.all([
       this.prisma.job.findMany({ where, orderBy: [{ status: 'asc' }, { createdAt: 'asc' }] }),
-      this.prisma.job.count({ where: { status: 'OPEN' } }),
+      // "Open · {n}" counts every job in the Open tab (drafts and on hold included) — spec M6 acceptance 1.
+      this.prisma.job.count({ where: { status: { not: 'CLOSED' } } }),
       this.prisma.job.count({ where: { status: 'CLOSED' } }),
     ]);
     return { items: await this.rows(jobs), counts: { open, closed } };

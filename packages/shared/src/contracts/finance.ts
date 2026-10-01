@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { paginationQuery } from '../api';
+import { paginationQuery, type Paginated } from '../api';
 
 /**
  * Finance domain contracts: GST invoices, purchases & input GST, double-entry ledger,
@@ -237,6 +237,8 @@ export type LedgerKpis = {
   expensesPaise: number;
   balancePaise: number;
   invoiceCount: number;
+  /** A payroll accrual is posted in the month (KPI sub-copy "incl. payroll"). */
+  payrollPosted: boolean;
   booksLockedUpTo: string | null;
 };
 export type TrialBalanceRow = {
@@ -280,7 +282,8 @@ export const finInvoicePreviewQuery = z.object({
 
 const finInvoiceBody = z.object({
   clientId: z.string().min(1, 'Client is required'),
-  projectId: z.string().min(1, 'Project is required'),
+  /** Optional only for clients without a billable project (manual hours need an adjustment note). */
+  projectId: z.string().optional().nullable(),
   period: finMonthKey,
   billableHours: z.number().positive('Billable hours must be more than zero').max(20000),
   ratePaise: paise.positive('Rate must be more than zero'),
@@ -312,6 +315,7 @@ export const finCancelInvoiceSchema = z.object({ reason: z.string().trim().min(3
 export type FinInvoiceRow = {
   id: string;
   number: string | null;
+  projectId: string | null;
   label: string; // number or "Draft"
   clientId: string;
   clientName: string;
@@ -360,7 +364,10 @@ export type FinInvoiceDetail = FinInvoiceRow & {
   timeEntries: { employeeName: string; taskLabel: string; minutes: number; hours: string }[];
   timeline: { at: string; label: string }[];
   salesVoucher: { id: string; number: string } | null;
+  hasPdf: boolean;
+  filingDocumentId: string | null;
 };
+export type FinInvoiceList = Paginated<FinInvoiceRow> & { counts: Record<(typeof finInvoiceTabs)[number], number> };
 export type FinInvoicePreview = {
   approvedMinutes: number;
   approvedHours: string;
@@ -381,6 +388,19 @@ export type FinInvoiceFormOptions = {
   clients: { id: string; name: string; stateCode: string | null; gstin: string | null; billingEmails: string[]; defaultRatePaise: number | null; paymentTermsDays: number }[];
   projects: { id: string; clientId: string; name: string; ratePaise: number | null; status: string }[];
   periods: { value: string; label: string }[];
+};
+export const finCreateCategorySchema = z.object({
+  name: z.string().trim().min(2, 'Category name is required').max(80),
+  accountId: z.string().min(1, 'Pick the expense ledger'),
+  defaultGstRateBp: z.number().int().min(0).max(2800).default(1800),
+  itcEligibleDefault: z.boolean().default(true),
+  createsAsset: z.boolean().default(false),
+});
+export const finUpdateCategorySchema = finCreateCategorySchema.partial().extend({ isActive: z.boolean().optional() });
+export type FinLedgerOptions = {
+  ledgers: { value: string; label: string; code: string; type: FinAccountTypeKey; systemKey: string | null }[];
+  counters: { value: string; label: string; systemKey: string | null }[];
+  canManage: boolean;
 };
 export type FinInvoiceKpis = { outstandingPaise: number; overduePaise: number; overdueCount: number; invoicedMonthPaise: number; invoicedMonthCount: number; monthLabel: string };
 
@@ -448,6 +468,19 @@ export type PurchaseRow = {
   voucherId: string | null;
   voucherNumber: string | null;
 };
+export type PurchaseDetail = PurchaseRow & {
+  vendorGstin: string | null;
+  vendorStateCode: string | null;
+  gstRateBp: number;
+  ocrConfidence: number | null;
+  fy: string;
+  itcPeriod: string;
+  notes: string | null;
+  createdAt: string;
+  supplyType: FinSupplyKind;
+  filingDocumentId: string | null;
+};
+export type PurchaseCategoryRow = { id: string; name: string; accountId: string; accountName: string; defaultGstRateBp: number; itcEligibleDefault: boolean; createsAsset: boolean; isActive: boolean; bills: number };
 export type PurchaseKpis = { month: string; monthLabel: string; purchasesPaise: number; bills: number; itcClaimablePaise: number };
 export type BillExtraction = {
   source: 'OCR' | 'ESTIMATED';
@@ -493,6 +526,8 @@ export const finUpdateDocumentSchema = z.object({
   folderId: z.string().optional(),
 });
 export const filingDocsQuery = paginationQuery.extend({ tag: z.string().trim().optional(), fy: z.string().optional() });
+export const finStatementQuery = z.object({ from: finDateKey.optional(), to: finDateKey.optional() });
+export const finExportQuery = z.object({ kind: z.enum(['daybook', 'trial']).default('daybook'), from: finDateKey.optional(), to: finDateKey.optional() });
 
 export type FilingFolderTile = { id: string; name: string; systemKey: string | null; isSystem: boolean; parentId: string | null; files: number };
 export type FilingDocumentRow = {

@@ -1,5 +1,6 @@
 import {
   FREE_SEATS,
+  istDateKey,
   GROWTH_PRICE_PAISE,
   chargeableSeats,
   seatPeriodPaise,
@@ -185,4 +186,15 @@ export function seatAvailable(planCode: string, quantity: number, activeUsers: n
 /** "LXS/26-27/0042" */
 export function invoiceNumber(fy: string, n: number): string {
   return `LXS/${fy.slice(2)}/${String(n).padStart(4, '0')}`;
+}
+
+/** Days from `now` to `end`, counted in whole IST calendar days. */
+export function daysUntil(end: Date, now: Date): number {
+  const day = (d: Date) => Date.parse(`${istDateKey(d)}T00:00:00Z`);
+  return Math.round((day(end) - day(now)) / 86_400_000);
+}
+
+/** Renewal reminder offsets (spec M10): T-30 for yearly plans only, then T-7 and T-1. */
+export function reminderDue(cycle: string | null, daysLeft: number): boolean {
+  return daysLeft === 7 || daysLeft === 1 || (cycle === 'YEARLY' && daysLeft === 30);
 }

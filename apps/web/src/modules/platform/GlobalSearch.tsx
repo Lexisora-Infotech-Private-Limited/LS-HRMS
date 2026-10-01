@@ -68,6 +68,8 @@ export function GlobalSearch() {
   // Roles & access changes apply live: when an admin changes my role, refresh the session so the
   // sidebar and screen guards follow without signing in again (the API re-reads permissions per request).
   useEffect(() => onRealtime('rbac.changed', () => void reload().catch(() => undefined)), [reload]);
+  // A newly published theme (Branding → Publish theme) applies live in every open session.
+  useEffect(() => onRealtime('branding.updated', () => void reload().catch(() => undefined)), [reload]);
 
   const term = text.trim();
   const showPanel = open && term.length >= 2;
