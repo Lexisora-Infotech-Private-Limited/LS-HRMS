@@ -76,6 +76,9 @@ and starts its own API against it (`e2e/playwright.config.ts`). Old `hrms_e2e_*`
 
 ## Production
 
+On this machine: double-click **`deploy.bat`** (menu) or run `deploy.bat start` — see `docs/DEPLOYMENT.md`.
+
+
 `docker-compose.prod.yml` builds the API (`apps/api/Dockerfile`) and the web app (nginx serving the
 SPA and proxying `/api` + `/socket.io`, `apps/web/Dockerfile`). Provide `POSTGRES_PASSWORD`,
 `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `DATA_ENCRYPTION_KEY`, `WEB_ORIGIN` and SMTP settings in

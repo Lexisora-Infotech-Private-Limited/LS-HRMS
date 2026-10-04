@@ -1,7 +1,15 @@
 # Deploying Lexisora HRMS with Docker (this machine)
 
 Runs the whole system — PostgreSQL, Redis, API, web portal and a mail outbox — as Docker containers.
-Commands are for Windows PowerShell, run from the repository root (`lexisora-hrms`).
+Commands are for Windows, run from the repository root (`lexisora-hrms`).
+
+**Quickest way:** double-click **`deploy.bat`** (or run `deploy.bat start`). It checks Docker, creates
+`.env.prod` on the first run (asks: real company or demo), builds, starts, waits until healthy and
+prints the addresses and logins. The menu also has Stop, Restart, Status, Logs, Rebuild, Backup,
+Build tracker installer, Open portal and Reset. Every menu item is also an argument:
+`deploy.bat start | stop | restart | status | logs | rebuild | backup | tracker | open | reset`.
+
+The sections below are the same steps done by hand.
 
 ## 1. Prerequisites
 
