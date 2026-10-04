@@ -176,6 +176,24 @@ export function planLabel(planCode: string, cycle: string | null | undefined): s
   return ({ FREE: 'Free', ENTERPRISE: 'Enterprise', INTERNAL: 'Internal' } as Record<string, string>)[planCode] ?? planCode;
 }
 
+/**
+ * The subscription a workspace gets when it has none yet (first visit to Subscription & billing).
+ * Customer workspaces always get one when provisioned (Tenants → Add tenant); a workspace without one
+ * is the operator's own (e.g. a fresh install from prisma/bootstrap.ts), which is never billed and has
+ * no seat limit — Internal, matching `effectivePlan(null)`. Creating Free there would cap the operator
+ * at 10 users and switch off paid-plan permissions.
+ */
+export function defaultSubscriptionFor(isOperator: boolean): { planCode: PlanCode; status: 'ACTIVE' | 'FREE'; quantity: number; collection: 'OFFLINE_INVOICE' | 'GATEWAY' } {
+  return isOperator ? { planCode: 'INTERNAL', status: 'ACTIVE', quantity: FREE_SEATS, collection: 'OFFLINE_INVOICE' } : { planCode: 'FREE', status: 'FREE', quantity: FREE_SEATS, collection: 'GATEWAY' };
+}
+
+/** Seats shown on Subscription & billing: Free is fixed at 10; Internal has no limit (shown as the users it has). */
+export function displayedSeats(planCode: string, quantity: number, used: number): number {
+  if (planCode === 'FREE') return FREE_SEATS;
+  if (planCode === 'INTERNAL') return Math.max(quantity, used);
+  return quantity;
+}
+
 /** Seats-gate for adding users (FREE: < 10; paid: < purchased). */
 export function seatAvailable(planCode: string, quantity: number, activeUsers: number): boolean {
   if (planCode === 'INTERNAL') return true;

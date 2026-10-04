@@ -102,6 +102,7 @@ export class SupportService implements OnModuleInit {
       assigneeName: t.assigneeName,
       slaDueAt: t.firstResponseDueAt.toISOString(),
       slaBreached: slaBreached(t, now),
+      firstRespondedAt: t.firstRespondedAt?.toISOString() ?? null,
     };
   }
 

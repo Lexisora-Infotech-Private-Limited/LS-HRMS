@@ -83,13 +83,15 @@ export class PurchaseService {
 
   async options(): Promise<PurchaseFormOptions> {
     await this.ensureCategories();
-    const [vendors, categories, accounts] = await Promise.all([
+    const [tenant, vendors, categories, accounts] = await Promise.all([
+      this.tenant(),
       this.prisma.vendor.findMany({ where: { isActive: true }, orderBy: { name: 'asc' } }),
       this.prisma.purchaseCategory.findMany({ where: { isActive: true }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] }),
       this.prisma.account.findMany({ select: { id: true, name: true } }),
     ]);
     const acc = new Map(accounts.map((a) => [a.id, a.name]));
     return {
+      tenantStateCode: tenant.stateCode,
       vendors: vendors.map((v) => ({ id: v.id, name: v.name, gstin: v.gstin, stateCode: v.stateCode })),
       categories: categories.map((c) => ({ id: c.id, name: c.name, defaultGstRateBp: c.defaultGstRateBp, itcEligibleDefault: c.itcEligibleDefault, accountName: acc.get(c.accountId) ?? '—' })),
     };

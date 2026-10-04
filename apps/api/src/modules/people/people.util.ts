@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { formatDate, istDateKey } from '@lexisora/shared';
+import { formatDate, formatDayMonth, formatMonthYear, formatTime, istDateKey } from '@lexisora/shared';
 
 /** Business "today" (IST) as YYYY-MM-DD. */
 export const todayKey = () => istDateKey(new Date());
@@ -10,10 +10,9 @@ export const dbDateKey = (d: Date | null | undefined) => (d ? d.toISOString().sl
 export const fmt = (d: Date | string | null | undefined) => (d ? formatDate(d) : '—');
 /** "Jan 2027" */
 export const fmtMonthYear = (d: Date | null | undefined) =>
-  d ? new Intl.DateTimeFormat('en-IN', { month: 'short', year: 'numeric', timeZone: 'UTC' }).format(d) : '—';
+  d ? formatMonthYear(d) : '—';
 /** "30 Sep, 11:00" in IST */
-export const fmtWhen = (d: Date) =>
-  `${new Intl.DateTimeFormat('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' }).format(d)}, ${new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' }).format(d)}`;
+export const fmtWhen = (d: Date) => `${formatDayMonth(d)}, ${formatTime(d)}`;
 /** "29 Sep 2026, 14:05" IST */
 export const fmtStamp = (d: Date) =>
   `${formatDate(d)}, ${new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' }).format(d)}`;

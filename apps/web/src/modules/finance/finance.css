@@ -65,6 +65,11 @@
 .fin-dim td { color: var(--color-neutral-600); }
 .fin-strike { text-decoration: line-through; color: var(--color-neutral-600); }
 
+.fin-total-row td { font-weight: 600; border-top: 1px solid var(--color-divider); white-space: nowrap; }
+.fin-tile.card { display: flex; flex-direction: column; gap: 4px; }
+.fin-split > * { min-width: 0; }
+.fin-toolbar input[type='date'] { min-width: 0; width: auto; }
+
 @media (max-width: 860px) {
   .fin-split, .fin-two { grid-template-columns: 1fr; }
   .fin-pdf { height: 380px; }

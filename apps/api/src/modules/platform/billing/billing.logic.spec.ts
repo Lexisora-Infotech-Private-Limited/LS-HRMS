@@ -3,7 +3,9 @@ import { FREE_SEATS, GROWTH_PRICE_PAISE, YEARLY_SAVINGS_PCT, chargeableSeats, pl
 import {
   daysInclusive,
   daysUntil,
+  defaultSubscriptionFor,
   discountFor,
+  displayedSeats,
   gstSplit,
   invoiceNumber,
   mrrPaise,
@@ -56,6 +58,21 @@ describe('Seats & prices', () => {
     expect(seatAvailable('GROWTH', 50, 49)).toBe(true);
     expect(seatAvailable('GROWTH', 50, 50)).toBe(false);
     expect(seatAvailable('INTERNAL', 0, 500)).toBe(true);
+  });
+
+  it('a workspace without a subscription gets Free — unless it is the operator’s own (Internal, unlimited)', () => {
+    expect(defaultSubscriptionFor(false)).toEqual({ planCode: 'FREE', status: 'FREE', quantity: FREE_SEATS, collection: 'GATEWAY' });
+    const op = defaultSubscriptionFor(true);
+    expect(op).toMatchObject({ planCode: 'INTERNAL', status: 'ACTIVE' });
+    // The operator never hits the seat gate, however many people it adds.
+    expect(seatAvailable(op.planCode, op.quantity, 128)).toBe(true);
+  });
+
+  it('seats shown: Free is fixed at 10, Internal shows its users, paid plans the purchased seats', () => {
+    expect(displayedSeats('FREE', 25, 9)).toBe(FREE_SEATS);
+    expect(displayedSeats('INTERNAL', FREE_SEATS, 128)).toBe(128);
+    expect(displayedSeats('INTERNAL', FREE_SEATS, 4)).toBe(FREE_SEATS);
+    expect(displayedSeats('GROWTH', 50, 42)).toBe(50);
   });
 
   it('Growth checkout needs at least 11 seats', () => {

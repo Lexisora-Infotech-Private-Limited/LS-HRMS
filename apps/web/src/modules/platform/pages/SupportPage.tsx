@@ -36,10 +36,19 @@ const requestFields: FieldDef[] = [
 const sevTone = (s: string) => (s === 'HIGH' ? 'outline' : 'neutral');
 const when = (iso: string) => `${formatDate(iso)} · ${formatTime(iso)}`;
 
+/** First-response SLA: met / breached once answered, else the deadline. */
 function slaCell(r: SupportTicketRowDto) {
-  if (r.status === 'RESOLVED' || r.status === 'CLOSED') return <span className="muted">—</span>;
   if (r.slaBreached) return <span className="pf-sla-breach">Breached</span>;
+  if (r.firstRespondedAt) return <span className="muted pf-nowrap">Met · {formatTime(r.firstRespondedAt)}</span>;
+  if (r.status === 'RESOLVED' || r.status === 'CLOSED') return <span className="muted">—</span>;
   return <span className="pf-nowrap">by {formatDate(r.slaDueAt)} {formatTime(r.slaDueAt)}</span>;
+}
+
+/** Header note on a ticket: when the first response is due, or when it came. */
+function slaNote(d: SupportTicketRowDto): string {
+  if (d.firstRespondedAt) return ` · first response ${when(d.firstRespondedAt)}${d.slaBreached ? ' (after the SLA)' : ''}`;
+  if (d.status === 'RESOLVED' || d.status === 'CLOSED') return '';
+  return ` · first response ${d.slaBreached ? 'overdue' : `due by ${when(d.slaDueAt)}`}`;
 }
 
 /** Ticket thread: description, replies, and the actions each side may take. */
@@ -99,7 +108,7 @@ function TicketModal({ id, platform, onClose }: { id: string; platform: boolean;
             {SUPPORT_CATEGORY_LABELS[d.category as keyof typeof SUPPORT_CATEGORY_LABELS] ?? d.category}
             {platform && d.tenantName ? ` · ${d.tenantName} (${d.planAtOpen.toLowerCase()})` : ''}
             {d.assigneeName ? ` · ${d.assigneeName}` : ' · unassigned'}
-            {d.status !== 'RESOLVED' && d.status !== 'CLOSED' ? ` · first response ${d.slaBreached ? 'overdue' : `by ${when(d.slaDueAt)}`}` : ''}
+            {slaNote(d)}
           </span>
         </div>
         {platform && (

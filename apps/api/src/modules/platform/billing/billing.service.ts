@@ -38,6 +38,8 @@ import {
   SUPPLIER_GSTIN,
   addCycle,
   daysInclusive,
+  defaultSubscriptionFor,
+  displayedSeats,
   invoiceNumber,
   periodLine,
   planLabel,
@@ -78,11 +80,22 @@ export class BillingService {
     return this.prisma.raw.tenant.findUniqueOrThrow({ where: { id: requireContext().tenantId } });
   }
 
-  /** The tenant's subscription (a Free subscription is created on first access). */
+  /** The tenant's subscription, created on first access: Free for a customer, Internal for the operator's own workspace. */
   async subscription(): Promise<Subscription> {
     const s = await this.prisma.subscription.findFirst();
     if (s) return s;
-    return this.prisma.subscription.create({ data: { planCode: 'FREE', status: 'FREE', quantity: FREE_SEATS } as any });
+    const tenantId = requireContext().tenantId;
+    const operator = await platformTenantId(this.prisma.raw).catch(() => null);
+    try {
+      return await this.prisma.subscription.create({ data: defaultSubscriptionFor(operator === tenantId) as any });
+    } catch (e) {
+      // Two first requests at once (e.g. overview + quote): the other one created it a moment ago.
+      if ((e as { code?: string }).code === 'P2002') {
+        const again = await this.prisma.subscription.findFirst();
+        if (again) return again;
+      }
+      throw e;
+    }
   }
 
   async seatsUsed(tenantId = requireContext().tenantId): Promise<number> {
@@ -114,7 +127,7 @@ export class BillingService {
       planName: planLabel(plan, sub.cycle),
       cycle: sub.cycle,
       status: sub.status,
-      quantity: plan === 'FREE' ? FREE_SEATS : sub.quantity,
+      quantity: displayedSeats(plan, sub.quantity, used),
       seatsUsed: used,
       freeSeats: FREE_SEATS,
       prices: { ...GROWTH_PRICE_PAISE },

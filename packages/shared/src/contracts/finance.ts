@@ -507,6 +507,8 @@ export type BillExtraction = {
   textFound: boolean;
 };
 export type PurchaseFormOptions = {
+  /** Tenant GST state (CGST+SGST vs IGST preview). */
+  tenantStateCode: string | null;
   vendors: { id: string; name: string; gstin: string | null; stateCode: string | null }[];
   categories: { id: string; name: string; defaultGstRateBp: number; itcEligibleDefault: boolean; accountName: string }[];
 };
@@ -555,6 +557,7 @@ export type FilingDocumentRow = {
   uploadedAt: string;
   uploadedByName: string | null;
   linkedEntityType: string | null;
+  linkedEntityId: string | null;
   linkedRef: string | null;
   locked: boolean;
 };

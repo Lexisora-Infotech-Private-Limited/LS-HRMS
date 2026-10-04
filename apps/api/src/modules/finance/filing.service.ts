@@ -95,6 +95,7 @@ export class FilingService {
       uploadedAt: d.uploadedAt.toISOString(),
       uploadedByName: d.uploadedByName,
       linkedEntityType: d.linkedEntityType,
+      linkedEntityId: d.linkedEntityId,
       linkedRef: d.linkedRef,
       locked: LOCKED_LINKS.has(d.linkedEntityType ?? ''),
     };

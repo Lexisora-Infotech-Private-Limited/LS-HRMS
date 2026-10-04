@@ -108,3 +108,65 @@ export function passToast(delivered: string[]): string {
 }
 
 export const visitorCode = (n: number) => `VIS-${String(n).padStart(4, '0')}`;
+
+/** A host may hold at most 3 overlapping bookings across rooms. */
+export const MAX_HOST_OVERLAPS = 3;
+
+export function hostOverlapProblem<T extends Interval & { id: string; status: string }>(hostBookings: T[], candidate: Interval, excludeId?: string | null): string | null {
+  const n = hostBookings.filter((b) => b.status === 'BOOKED' && b.id !== excludeId && overlaps(b, candidate)).length;
+  return n >= MAX_HOST_OVERLAPS ? `You already have ${MAX_HOST_OVERLAPS} bookings at that time` : null;
+}
+
+/** Wireframe tag tones: `~Booked` accent, `!E-pass sent` outline, `-Cancelled` neutral. */
+export function bookingTone(status: string): 'accent' | 'outline' | 'neutral' {
+  return status === 'BOOKED' ? 'accent' : 'neutral';
+}
+
+export function visitorTone(status: string): 'accent' | 'outline' | 'neutral' {
+  if (status === 'CHECKED_IN') return 'accent';
+  if (status === 'REGISTERED' || status === 'PASS_SENT') return 'outline';
+  return 'neutral';
+}
+
+const icsStamp = (d: Date) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+const icsText = (s: string) => s.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+
+/** Minimal RFC 5545 invite (REQUEST) or cancellation (CANCEL) for a room booking. */
+export function bookingIcs(p: {
+  uid: string;
+  method: 'REQUEST' | 'CANCEL';
+  startAt: Date;
+  endAt: Date;
+  summary: string;
+  location: string;
+  organizer: { name: string; email: string };
+  attendees: { name: string; email: string }[];
+  sequence?: number;
+  now?: Date;
+}): string {
+  const lines = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//Lexisora HRMS//Rooms//EN',
+    `METHOD:${p.method}`,
+    'BEGIN:VEVENT',
+    `UID:${p.uid}`,
+    `SEQUENCE:${p.sequence ?? 0}`,
+    `DTSTAMP:${icsStamp(p.now ?? new Date())}`,
+    `DTSTART:${icsStamp(p.startAt)}`,
+    `DTEND:${icsStamp(p.endAt)}`,
+    `SUMMARY:${icsText(p.summary)}`,
+    `LOCATION:${icsText(p.location)}`,
+    `ORGANIZER;CN=${icsText(p.organizer.name)}:mailto:${p.organizer.email}`,
+    ...p.attendees.map((a) => `ATTENDEE;CN=${icsText(a.name)};ROLE=REQ-PARTICIPANT;RSVP=TRUE:mailto:${a.email}`),
+    `STATUS:${p.method === 'CANCEL' ? 'CANCELLED' : 'CONFIRMED'}`,
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ];
+  return lines.join('\r\n');
+}
+
+/** Visitor log time column: "10:45", then "10:45 · in 10:52", then "… · out 12:10". */
+export function visitorTimeLabel(expected: string, inAt: string | null, outAt: string | null): string {
+  return [expected, inAt ? `in ${inAt}` : null, outAt ? `out ${outAt}` : null].filter(Boolean).join(' · ');
+}

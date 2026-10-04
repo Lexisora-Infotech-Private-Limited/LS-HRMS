@@ -1,20 +1,29 @@
-import type { Prisma, PrismaClient } from '@prisma/client';
+import type { ApplicationStage, CandidateSource, Prisma, PrismaClient } from '@prisma/client';
 import PDFDocument from 'pdfkit';
-import { createHash, randomUUID } from 'node:crypto';
+import sharp from 'sharp';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
+import type { IdCardElement } from '@lexisora/shared';
 import type { SeedCtx } from './core';
 import { CryptoService } from '../../src/core/crypto/crypto.service';
-import { EXIT_CHECKLIST, computeLwd, defaultNoticeDays, maskPan } from '../../src/modules/people/people.rules';
+import { EXIT_CHECKLIST, bandFor, computeLwd, defaultNoticeDays, initials, maskPan, weightedScore } from '../../src/modules/people/people.rules';
+import { fmt } from '../../src/modules/people/people.util';
+import { classicPortrait, landscapeMinimal, PT_PER_MM, qrDataUrl, renderCardSvg, svgToPng, toDataUrl } from '../../src/modules/people/idcards/card-render';
 
 /**
- * Demo data for the people domain (core release): Priya's digital vault rows exactly as the
- * wireframe shows them, statutory/bank details for the demo cast, Ananya's open exit case
- * (notice period) and Meera's paperless onboarding in progress (offer signed, NDA next).
+ * Demo data for the people domain.
+ * Core release: Priya's digital vault rows exactly as the wireframe shows them, statutory/bank
+ * details for the demo cast, Ananya's open exit case (notice period) and Meera's paperless
+ * onboarding in progress (offer signed, NDA next).
+ * Phase 2 (seed_people_phase2): photos, jobs/candidates/interviews (wireframe rows + a realistic
+ * applicant pool so the Applicants column reads 38 · 21 · 54 · 12), appraisal cycles, assets,
+ * welcome kits, ID card templates/cards/print batch and a visiting-card profile.
  */
 
 const d = (s: string) => new Date(`${s}T00:00:00.000Z`);
 const at = (s: string, hm = '10:00') => new Date(`${s}T${hm}:00+05:30`);
+const addDaysKey = (s: string, n: number) => new Date(d(s).getTime() + n * 86400_000).toISOString().slice(0, 10);
 
 function pdf(title: string, lines: string[]): Promise<Buffer> {
   return new Promise((res, rej) => {
@@ -32,23 +41,32 @@ function pdf(title: string, lines: string[]): Promise<Buffer> {
   });
 }
 
+async function saveFile(
+  prisma: PrismaClient,
+  tenantId: string,
+  f: { ownerUserId: string | null; name: string; buf: Buffer; mime: string; category: string; folder: string; createdAt: Date; isPrivate?: boolean },
+): Promise<{ id: string; sha256: string }> {
+  const storageRoot = resolve(process.env.STORAGE_DIR || './storage');
+  const key = `${tenantId}/${f.folder}/${randomUUID()}-${f.name}`;
+  const path = join(storageRoot, key);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, f.buf);
+  const sha256 = createHash('sha256').update(f.buf).digest('hex');
+  const row = await prisma.fileObject.create({
+    data: { tenantId, ownerUserId: f.ownerUserId, storageKey: key, filename: f.name, mime: f.mime, size: f.buf.length, sha256, category: f.category, isPrivate: f.isPrivate ?? true, createdAt: f.createdAt },
+  });
+  return { id: row.id, sha256 };
+}
+
 export async function seed_people(prisma: PrismaClient, ctx: SeedCtx): Promise<void> {
   const { tenantId, emp, user } = ctx;
   const crypto = new CryptoService();
-  const storageRoot = resolve(process.env.STORAGE_DIR || './storage');
   const hrName = 'Kavya Iyer';
   const hrUser = user.kavya ?? null;
 
   async function file(ownerKey: string, name: string, title: string, lines: string[], createdAt: Date) {
     const buf = await pdf(title, lines);
-    const key = `${tenantId}/vault/${randomUUID()}-${name}`;
-    const path = join(storageRoot, key);
-    await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, buf);
-    const row = await prisma.fileObject.create({
-      data: { tenantId, ownerUserId: user[ownerKey] ?? null, storageKey: key, filename: name, mime: 'application/pdf', size: buf.length, sha256: createHash('sha256').update(buf).digest('hex'), category: 'vault', isPrivate: true, createdAt },
-    });
-    return { id: row.id, sha256: row.sha256! };
+    return saveFile(prisma, tenantId, { ownerUserId: user[ownerKey] ?? null, name, buf, mime: 'application/pdf', category: 'vault', folder: 'vault', createdAt });
   }
 
   type DocSeed = {
@@ -162,8 +180,8 @@ export async function seed_people(prisma: PrismaClient, ctx: SeedCtx): Promise<v
             auto: c.auto,
             order: i,
             status: c.key === 'ASSET_RETURN' || c.key === 'EXIT_INTERVIEW' ? 'DONE' : 'PENDING',
-            doneByName: c.key === 'EXIT_INTERVIEW' ? hrName : null,
-            doneAt: c.key === 'EXIT_INTERVIEW' ? at('2026-09-18', '15:00') : null,
+            doneByName: c.key === 'EXIT_INTERVIEW' ? hrName : c.key === 'ASSET_RETURN' ? hrName : null,
+            doneAt: c.key === 'EXIT_INTERVIEW' ? at('2026-09-18', '15:00') : c.key === 'ASSET_RETURN' ? at('2026-09-25', '17:10') : null,
           })),
         },
       },
@@ -183,6 +201,7 @@ export async function seed_people(prisma: PrismaClient, ctx: SeedCtx): Promise<v
       uploaded: '2026-09-24',
       lines: ['Dear Meera Iyer,', 'This letter confirms your appointment at Lexisora Infotech as QA Engineer in the QA department, joining on 6 Oct 2026, with the compensation shown in Annexure A.', 'Signed electronically by Meera Iyer on 24 Sep 2026 · IP 49.36.112.18.'],
     });
+    await doc({ who: 'meera', category: 'CAREER', docType: 'RESUME', title: 'Resume', source: 'RECRUITMENT', status: 'NOT_REQUIRED', uploaded: '2026-09-05', lines: ['Meera Iyer — QA Engineer', 'Manual + automation testing (Selenium, Playwright), API testing with Postman. 2.5 years at Zoho.'] });
     const steps = [
       { key: 'offer', status: 'DONE' as const, completedAt: at('2026-09-24', '19:42'), data: { signedAt: at('2026-09-24', '19:42').toISOString(), signedSha256: signed?.sha256 ?? null } },
       { key: 'nda', status: 'PENDING' as const },
@@ -215,4 +234,536 @@ export async function seed_people(prisma: PrismaClient, ctx: SeedCtx): Promise<v
   }
 
   ctx.extra.people = { priyaPanMasked: maskPan(stat.priya!.pan) };
+
+  await seed_people_phase2(prisma, ctx);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Phase 2 — recruitment, appraisals, assets, welcome kits, ID & visiting cards
+// ════════════════════════════════════════════════════════════════════════════
+
+/** Light, warm "photo" with initials (the demo has no real portraits). */
+async function avatarPng(name: string): Promise<Buffer> {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="560" viewBox="0 0 480 560"><rect width="480" height="560" fill="#f3eadb"/><circle cx="240" cy="250" r="150" fill="#ffffff" fill-opacity="0.55"/><text x="240" y="262" font-family="Georgia, 'Times New Roman', serif" font-size="150" fill="#8a5f22" text-anchor="middle" dominant-baseline="middle">${initials(name)}</text></svg>`;
+  return sharp(Buffer.from(svg)).png().toBuffer();
+}
+
+const FIRST = ['Aarav', 'Vihaan', 'Ishaan', 'Kabir', 'Reyansh', 'Arnav', 'Dhruv', 'Krish', 'Aditi', 'Kavin', 'Nikhil', 'Pooja', 'Riya', 'Sanjana', 'Tanmay', 'Varun', 'Yash', 'Zoya', 'Harsh', 'Jhanvi', 'Kunal', 'Lavanya', 'Mihir', 'Nandini', 'Omkar', 'Pranav', 'Rutuja', 'Siddharth', 'Trisha', 'Ujwal', 'Vaidehi', 'Aakash', 'Bhavna', 'Chirag', 'Devika', 'Gaurav'];
+const LAST = ['Agarwal', 'Bhatt', 'Chauhan', 'Deshmukh', 'Gandhi', 'Jain', 'Khanna', 'Lal', 'Malhotra', 'Naidu', 'Oza', 'Pandya', 'Qureshi', 'Rathod', 'Saxena', 'Thakkar', 'Upadhyay', 'Vora', 'Wagh', 'Yadav', 'Bose', 'Chopra', 'Dave', 'Kulkarni', 'Mistry', 'Parikh', 'Rana', 'Sheth', 'Trivedi', 'Pillai', 'Menon'];
+const COMPANIES = ['Infosys', 'TCS', 'Wipro', 'Simform', 'eInfochips', 'Bacancy', 'Cybage', 'Persistent', 'Zensar', 'Freelance', 'LTIMindtree', 'Tech Mahindra'];
+
+export async function seed_people_phase2(prisma: PrismaClient, ctx: SeedCtx): Promise<void> {
+  const { tenantId, emp, user, dept, desig, branch } = ctx;
+  const hrName = 'Kavya Iyer';
+  const webOrigin = process.env.WEB_ORIGIN || 'http://localhost:5173';
+  const tenant = await prisma.tenant.findUnique({ where: { id: tenantId } });
+  const has = (...keys: string[]) => keys.every((k) => !!emp[k]);
+
+  async function seqAt(key: string, nextValue: number, period = '') {
+    const cur = await prisma.numberSequence.findUnique({ where: { tenantId_key_period: { tenantId, key, period } } });
+    if (cur && cur.nextValue >= nextValue) return;
+    await prisma.numberSequence.upsert({
+      where: { tenantId_key_period: { tenantId, key, period } },
+      create: { id: `seq_${tenantId}_${key}_${period}`, tenantId, key, period, nextValue },
+      update: { nextValue },
+    });
+  }
+
+  // ── Photos & blood groups (ID cards need both; Meera stays incomplete on purpose) ──
+  const emps = await prisma.employee.findMany({ where: { id: { in: Object.values(emp) } }, include: { designation: true, department: true } });
+  const byId = new Map(emps.map((e) => [e.id, e]));
+  const blood: Record<string, string> = { isha: 'O+', karan: 'B+', divya: 'A+' };
+  const photoBuf: Record<string, Buffer> = {};
+  for (const [k, id] of Object.entries(emp)) {
+    const e = byId.get(id);
+    if (!e || k === 'meera') continue;
+    const buf = await avatarPng(e.fullName);
+    const f = await saveFile(prisma, tenantId, { ownerUserId: user[k] ?? null, name: `${e.empCode.toLowerCase()}-photo.png`, buf, mime: 'image/png', category: 'avatar', folder: 'avatars', createdAt: e.joiningDate ?? new Date('2024-01-01') });
+    const data: Prisma.EmployeeUncheckedUpdateInput = { photoFileId: f.id };
+    if (blood[k] && !e.bloodGroup) data.bloodGroup = blood[k];
+    await prisma.employee.update({ where: { id }, data });
+    e.photoFileId = f.id;
+    if (data.bloodGroup) e.bloodGroup = blood[k]!;
+    photoBuf[k] = buf;
+  }
+
+  await seedRecruitment();
+  await seedAppraisals();
+  await seedAssets();
+  await seedKits();
+  await seedCards();
+
+  // ── Recruitment: rounds, jobs, candidates, interviews, scorecards, offers ──────
+  async function seedRecruitment() {
+    const ROUNDS: [string, number, string[]][] = [
+      ['Screening call', 30, ['Communication', 'Motivation', 'Availability']],
+      ['Technical 1', 60, ['Problem solving', 'Coding', 'Fundamentals']],
+      ['Technical 2', 60, ['System design', 'Code quality', 'Ownership']],
+      ['Portfolio', 45, ['Visual craft', 'Process', 'Communication']],
+      ['HR', 30, ['Culture fit', 'Communication', 'Expectations']],
+    ];
+    const ck = (l: string) => l.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+    const roundCriteria: Record<string, { key: string; label: string }[]> = {};
+    for (const [i, [name, min, crit]] of ROUNDS.entries()) {
+      const criteria = crit.map((label) => ({ key: ck(label), label }));
+      roundCriteria[name] = criteria;
+      await prisma.interviewRound.create({ data: { tenantId, name, order: i, defaultDurationMin: min, criteria } });
+    }
+
+    type JobSeed = { key: string; title: string; dept: string; desig: string; type: 'FULL_TIME' | 'INTERNSHIP'; openings: number; branch: string; status: 'OPEN' | 'ON_HOLD' | 'CLOSED'; manager: string; rounds: string[]; exp: [number, number] | null; published: string; description: string; closed?: string; closeReason?: string };
+    const JOBS: JobSeed[] = [
+      { key: 'react', title: 'React Developer', dept: 'Development', desig: 'React Developer', type: 'FULL_TIME', openings: 2, branch: 'Ahmedabad', status: 'OPEN', manager: 'neha', rounds: ['Technical 1', 'Technical 2', 'HR'], exp: [2, 5], published: '2026-08-20', description: 'Build product UIs for client SaaS projects (Atlas CRM, Nova Health) in React + TypeScript. You will own features end to end with the Node.js team, review code and write tests.\n\nMust have: React, TypeScript, REST/GraphQL, Git. Nice to have: Next.js, Playwright.' },
+      { key: 'qa', title: 'QA Engineer', dept: 'QA', desig: 'QA Engineer', type: 'FULL_TIME', openings: 1, branch: 'Ahmedabad', status: 'OPEN', manager: 'sneha', rounds: ['Technical 1', 'HR'], exp: [1, 4], published: '2026-08-25', description: 'Plan and run manual + automated tests for web and mobile releases. Write Playwright suites, test APIs and track defects to closure with developers.' },
+      { key: 'intern', title: 'UI/UX Intern', dept: 'Design', desig: 'Intern', type: 'INTERNSHIP', openings: 2, branch: 'Pune', status: 'OPEN', manager: 'vikram', rounds: ['Portfolio', 'HR'], exp: null, published: '2026-09-01', description: 'Six-month paid internship with the design team in Pune: user research, wireframes and high-fidelity Figma designs for client products. Share a portfolio with 2–3 case studies.' },
+      { key: 'acct', title: 'Accountant', dept: 'Finance', desig: 'Accountant', type: 'FULL_TIME', openings: 1, branch: 'Ahmedabad', status: 'ON_HOLD', manager: 'rohit', rounds: ['Technical 1', 'HR'], exp: [2, 6], published: '2026-08-10', description: 'GST returns, TDS, vendor payments, bank reconciliation and month-end closing in our ledger. CA Inter or M.Com with Tally/Zoho Books experience.' },
+      { key: 'ba', title: 'Business Analyst', dept: 'Management', desig: 'Project Lead', type: 'FULL_TIME', openings: 1, branch: 'Ahmedabad', status: 'CLOSED', manager: 'rohit', rounds: ['Screening call', 'HR'], exp: [3, 7], published: '2026-05-04', closed: '2026-07-15', closeReason: 'Hiring paused for H1 FY26-27', description: 'Gather requirements with clients, write user stories and acceptance criteria, and run UAT for fixed-bid projects.' },
+    ];
+    const jobId: Record<string, string> = {};
+    for (const [i, j] of JOBS.entries()) {
+      if (!dept[j.dept]) continue;
+      const row = await prisma.job.create({
+        data: {
+          tenantId,
+          code: `JOB-${String(i + 1).padStart(4, '0')}`,
+          title: j.title,
+          departmentId: dept[j.dept]!,
+          designationId: desig[j.desig] ?? null,
+          jobType: j.type,
+          openings: j.openings,
+          branchId: branch[j.branch] ?? null,
+          description: j.description,
+          experienceMinYrs: j.exp?.[0] ?? null,
+          experienceMaxYrs: j.exp?.[1] ?? null,
+          hiringManagerId: emp[j.manager] ?? null,
+          roundNames: j.rounds,
+          status: j.status,
+          publishedAt: at(j.published, '10:30'),
+          closedAt: j.closed ? at(j.closed, '18:00') : null,
+          closeReason: j.closeReason ?? null,
+          createdAt: at(j.published, '10:00'),
+        },
+      });
+      jobId[j.key] = row.id;
+    }
+    await seqAt('recruitment.job', JOBS.length + 1);
+
+    // Named candidates (wireframe rows + one open offer for the "Convert to employee" demo).
+    type CandSeed = {
+      name: string; email: string; phone: string; job: string; source: CandidateSource; stage: ApplicationStage; score: number | null; location: string; company: string | null; exp: number;
+      ctc: number | null; expected: number | null; notice: number | null; tags: string[]; applied: string; stageAt: Date; referredBy?: string; rejectReason?: string; employee?: string;
+      events: [ApplicationStage | null, ApplicationStage, Date, string?][]; resume: string[];
+    };
+    const NAMED: CandSeed[] = [
+      { name: 'Aditya Kulkarni', email: 'aditya.kulkarni@example.com', phone: '+91 98220 41123', job: 'react', source: 'LINKEDIN', stage: 'INTERVIEW', score: 8.2, location: 'Pune', company: 'Persistent', exp: 42, ctc: 950000, expected: 1300000, notice: 60, tags: ['react', 'typescript', 'redux'], applied: '2026-09-08', stageAt: at('2026-09-18', '12:00'),
+        events: [[null, 'SCREENING', at('2026-09-08', '09:40')], ['SCREENING', 'INTERVIEW', at('2026-09-18', '12:00')]], resume: ['Aditya Kulkarni — Frontend Engineer, Pune', '3.5 years with React, TypeScript and Redux Toolkit at Persistent Systems.', 'Built a design-system component library used by 6 product teams; Jest + Playwright tests.'] },
+      { name: 'Meera Iyer', email: 'meera.iyer.qa@example.com', phone: '+91 98400 77215', job: 'qa', source: 'REFERRAL', stage: 'HIRED', score: 7.5, location: 'Ahmedabad', company: 'Zoho', exp: 30, ctc: 520000, expected: 650000, notice: 15, tags: ['selenium', 'playwright', 'api testing'], applied: '2026-09-05', stageAt: at('2026-09-22', '11:00'), referredBy: 'sneha', employee: 'meera',
+        events: [[null, 'SCREENING', at('2026-09-05', '15:20')], ['SCREENING', 'INTERVIEW', at('2026-09-11', '10:00')], ['INTERVIEW', 'OFFERED', at('2026-09-21', '17:00')], ['OFFERED', 'HIRED', at('2026-09-22', '11:00'), 'Converted to employee LX-0160']], resume: ['Meera Iyer — QA Engineer', 'Manual + automation testing (Selenium, Playwright), API testing with Postman. 2.5 years at Zoho.'] },
+      { name: 'Farhan Ali', email: 'farhan.ali@example.com', phone: '+91 99090 31877', job: 'react', source: 'NAUKRI', stage: 'REJECTED', score: 5.1, location: 'Ahmedabad', company: 'TCS', exp: 24, ctc: 480000, expected: 800000, notice: 90, tags: ['react', 'javascript'], applied: '2026-09-03', stageAt: at('2026-09-17', '16:45'), rejectReason: 'Skills mismatch',
+        events: [[null, 'SCREENING', at('2026-09-03', '11:10')], ['SCREENING', 'INTERVIEW', at('2026-09-10', '10:30')], ['INTERVIEW', 'REJECTED', at('2026-09-17', '16:45'), 'Skills mismatch']], resume: ['Farhan Ali — Software Engineer', '2 years building internal dashboards in React and jQuery at TCS.'] },
+      { name: 'Tanvi Shah', email: 'tanvi.shah@example.org', phone: '+91 97250 66340', job: 'intern', source: 'CAMPUS', stage: 'SCREENING', score: null, location: 'Pune', company: null, exp: 0, ctc: null, expected: 25000, notice: 0, tags: ['figma', 'ui', 'research'], applied: '2026-09-21', stageAt: at('2026-09-21', '10:00'),
+        events: [[null, 'SCREENING', at('2026-09-21', '10:00')]], resume: ['Tanvi Shah — B.Des (Interaction Design), final year', 'Portfolio: food-delivery app redesign, campus wayfinding, accessibility audit of a banking app.'] },
+      { name: 'Rohan Gupta', email: 'rohan.gupta@example.net', phone: '+91 98790 12408', job: 'react', source: 'CAREERS_PAGE', stage: 'OFFERED', score: 7.9, location: 'Ahmedabad', company: 'Simform', exp: 36, ctc: 900000, expected: 1200000, notice: 30, tags: ['react', 'next.js', 'node'], applied: '2026-08-28', stageAt: at('2026-09-25', '15:30'),
+        events: [[null, 'SCREENING', at('2026-08-28', '18:05')], ['SCREENING', 'INTERVIEW', at('2026-09-04', '12:00')], ['INTERVIEW', 'OFFERED', at('2026-09-25', '15:30')]], resume: ['Rohan Gupta — React Developer', '3 years at Simform on Next.js storefronts and Node.js BFFs; led a checkout rewrite (−38% drop-off).'] },
+    ];
+    const appId: Record<string, string> = {};
+    for (const c of NAMED) {
+      if (!jobId[c.job]) continue;
+      const f = await saveFile(prisma, tenantId, { ownerUserId: user.kavya ?? null, name: `${c.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-resume.pdf`, buf: await pdf(`${c.name} — Resume`, c.resume), mime: 'application/pdf', category: 'resume', folder: 'resumes', createdAt: at(c.applied, '09:00') });
+      const cand = await prisma.candidate.create({
+        data: {
+          tenantId, fullName: c.name, email: c.email, phone: c.phone, location: c.location, currentCompany: c.company, currentCtcPaise: c.ctc ? c.ctc * 100 : null, expectedCtcPaise: c.expected ? c.expected * 100 : null,
+          noticePeriodDays: c.notice, totalExpMonths: c.exp, source: c.source, referredByEmployeeId: c.referredBy ? (emp[c.referredBy] ?? null) : null, tags: c.tags, resumeFileId: f.id,
+          consentAt: at(c.applied, '09:00'), retentionUntil: d(addDaysKey(c.applied, 730)), createdAt: at(c.applied, '09:00'),
+        },
+      });
+      const app = await prisma.jobApplication.create({
+        data: {
+          tenantId, candidateId: cand.id, jobId: jobId[c.job]!, stage: c.stage, stageChangedAt: c.stageAt, score: c.score, rejectReason: c.rejectReason ?? null, employeeId: c.employee ? (emp[c.employee] ?? null) : null, createdAt: at(c.applied, '09:00'),
+          events: { create: c.events.map(([from, to, when, reason]) => ({ tenantId, from, to, at: when, byName: from === null ? null : hrName, reason: reason ?? null })) },
+        },
+      });
+      appId[c.name] = app.id;
+    }
+
+    // Offers: Meera accepted (now onboarding), Rohan's is out for acceptance.
+    if (appId['Meera Iyer']) {
+      await prisma.jobOffer.create({ data: { tenantId, applicationId: appId['Meera Iyer']!, designationId: desig['QA Engineer'] ?? null, departmentId: dept.QA ?? null, branchId: branch.Ahmedabad ?? null, employmentType: 'FULL_TIME', annualCtcPaise: 65_000_000, joiningDate: d('2026-10-06'), expiresOn: d('2026-09-29'), status: 'ACCEPTED', employeeId: emp.meera ?? null, createdAt: at('2026-09-21', '17:00') } });
+    }
+    if (appId['Rohan Gupta']) {
+      await prisma.jobOffer.create({ data: { tenantId, applicationId: appId['Rohan Gupta']!, designationId: desig['React Developer'] ?? null, departmentId: dept.Development ?? null, branchId: branch.Ahmedabad ?? null, employmentType: 'FULL_TIME', annualCtcPaise: 120_000_000, joiningDate: d('2026-10-19'), expiresOn: d('2026-10-05'), status: 'ISSUED', createdAt: at('2026-09-25', '15:30') } });
+    }
+
+    // Interviews (IST). Rahul and Vikram are panelists without the Interviews nav (audit G2).
+    type IvSeed = { app: string; round: string; seq: number; date: string; time: string; min: number; mode: 'VIDEO' | 'IN_OFFICE'; location?: string; lead: string; status: 'SCHEDULED' | 'COMPLETED'; result: 'PENDING' | 'SELECTED' | 'REJECTED'; emailed: Date; card?: { ratings: number[]; overall: number; rec: string; notes: string } };
+    const IVS: IvSeed[] = [
+      { app: 'Aditya Kulkarni', round: 'Technical 1', seq: 1, date: '2026-09-23', time: '15:00', min: 60, mode: 'VIDEO', lead: 'rahul', status: 'COMPLETED', result: 'SELECTED', emailed: at('2026-09-18', '12:05'), card: { ratings: [4, 5, 4], overall: 8.2, rec: 'HIRE', notes: 'Strong React fundamentals and clean component design. Probe state management at scale in round 2.' } },
+      { app: 'Aditya Kulkarni', round: 'Technical 2', seq: 2, date: '2026-09-30', time: '11:00', min: 60, mode: 'VIDEO', lead: 'arjun', status: 'SCHEDULED', result: 'PENDING', emailed: at('2026-09-24', '16:30') },
+      { app: 'Tanvi Shah', round: 'Portfolio', seq: 1, date: '2026-10-01', time: '15:00', min: 45, mode: 'IN_OFFICE', location: 'Lexisora Infotech, Baner Road, Pune', lead: 'vikram', status: 'SCHEDULED', result: 'PENDING', emailed: at('2026-09-26', '11:00') },
+      { app: 'Meera Iyer', round: 'Technical 1', seq: 1, date: '2026-09-15', time: '11:00', min: 60, mode: 'VIDEO', lead: 'sneha', status: 'COMPLETED', result: 'SELECTED', emailed: at('2026-09-11', '10:05'), card: { ratings: [4, 3, 4], overall: 7.0, rec: 'HIRE', notes: 'Good test design and API testing depth; automation coding is average but improving.' } },
+      { app: 'Meera Iyer', round: 'HR', seq: 2, date: '2026-09-21', time: '12:00', min: 30, mode: 'VIDEO', lead: 'kavya', status: 'COMPLETED', result: 'SELECTED', emailed: at('2026-09-16', '14:00'), card: { ratings: [4, 4, 4], overall: 8.0, rec: 'STRONG_HIRE', notes: 'Clear communicator, referred by Sneha; expectations within band. Can join 6 Oct.' } },
+      { app: 'Farhan Ali', round: 'Technical 1', seq: 1, date: '2026-09-16', time: '11:00', min: 60, mode: 'VIDEO', lead: 'rahul', status: 'COMPLETED', result: 'REJECTED', emailed: at('2026-09-10', '10:35'), card: { ratings: [3, 2, 3], overall: 5.1, rec: 'NO_HIRE', notes: 'Struggled with async patterns and testing; hooks knowledge is shallow.' } },
+      { app: 'Rohan Gupta', round: 'Technical 1', seq: 1, date: '2026-09-11', time: '11:00', min: 60, mode: 'VIDEO', lead: 'arjun', status: 'COMPLETED', result: 'SELECTED', emailed: at('2026-09-04', '12:10'), card: { ratings: [4, 4, 3], overall: 7.6, rec: 'HIRE', notes: 'Solid Next.js experience; good trade-off discussion on SSR vs CSR.' } },
+      { app: 'Rohan Gupta', round: 'HR', seq: 2, date: '2026-09-18', time: '16:00', min: 30, mode: 'VIDEO', lead: 'kavya', status: 'COMPLETED', result: 'SELECTED', emailed: at('2026-09-12', '11:00'), card: { ratings: [4, 4, 4], overall: 8.2, rec: 'HIRE', notes: 'Wants product ownership; 30-day notice, negotiable.' } },
+    ];
+    for (const iv of IVS) {
+      if (!appId[iv.app] || !emp[iv.lead]) continue;
+      const crit = roundCriteria[iv.round] ?? [];
+      await prisma.interview.create({
+        data: {
+          tenantId, applicationId: appId[iv.app]!, roundName: iv.round, sequence: iv.seq, startsAt: at(iv.date, iv.time), durationMin: iv.min, mode: iv.mode, location: iv.location ?? null,
+          status: iv.status, result: iv.result, icsUid: `${randomUUID()}@lexisora-hrms`, icsSequence: 0, emailedAt: iv.emailed, createdAt: iv.emailed,
+          panelists: { create: [{ tenantId, employeeId: emp[iv.lead]!, role: 'LEAD' }] },
+          scorecards: iv.card
+            ? {
+                create: [
+                  {
+                    tenantId, interviewerEmployeeId: emp[iv.lead]!, overall: iv.card.overall, recommendation: iv.card.rec, notes: iv.card.notes, status: 'SUBMITTED', submittedAt: new Date(at(iv.date, iv.time).getTime() + (iv.min + 20) * 60_000),
+                    ratings: crit.map((c, n) => ({ key: c.key, label: c.label, rating: iv.card!.ratings[n] ?? 3, comment: null })),
+                  },
+                ],
+              }
+            : undefined,
+        },
+      });
+    }
+
+    // A realistic applicant pool so "Applicants" reads 38 · 21 · 54 · 12 like the wireframe.
+    type Pool = { job: string; total: number; sources: CandidateSource[]; stages: [ApplicationStage, number][]; from: string; to: string; tags: string[]; city: string[] };
+    const POOLS: Pool[] = [
+      { job: 'react', total: 35, sources: ['LINKEDIN', 'NAUKRI', 'CAREERS_PAGE', 'REFERRAL', 'AGENCY'], stages: [['SCREENING', 20], ['INTERVIEW', 4], ['REJECTED', 10], ['WITHDRAWN', 1]], from: '2026-08-21', to: '2026-09-16', tags: ['react', 'javascript', 'typescript'], city: ['Ahmedabad', 'Pune', 'Vadodara', 'Surat', 'Mumbai'] },
+      { job: 'qa', total: 20, sources: ['NAUKRI', 'LINKEDIN', 'REFERRAL', 'CAREERS_PAGE'], stages: [['SCREENING', 9], ['INTERVIEW', 2], ['REJECTED', 8], ['WITHDRAWN', 1]], from: '2026-08-26', to: '2026-09-16', tags: ['manual testing', 'selenium', 'jira'], city: ['Ahmedabad', 'Gandhinagar', 'Rajkot'] },
+      { job: 'intern', total: 53, sources: ['CAMPUS', 'LINKEDIN', 'CAREERS_PAGE', 'CAMPUS'], stages: [['SCREENING', 37], ['INTERVIEW', 3], ['REJECTED', 13]], from: '2026-09-02', to: '2026-09-16', tags: ['figma', 'ui design', 'prototyping'], city: ['Pune', 'Mumbai', 'Nashik', 'Ahmedabad'] },
+      { job: 'acct', total: 12, sources: ['NAUKRI', 'REFERRAL', 'WALK_IN', 'AGENCY'], stages: [['SCREENING', 7], ['REJECTED', 5]], from: '2026-08-11', to: '2026-09-05', tags: ['gst', 'tally', 'tds'], city: ['Ahmedabad', 'Vadodara'] },
+      { job: 'ba', total: 6, sources: ['LINKEDIN', 'NAUKRI'], stages: [['REJECTED', 4], ['WITHDRAWN', 2]], from: '2026-05-05', to: '2026-06-30', tags: ['requirements', 'uat', 'jira'], city: ['Ahmedabad', 'Mumbai'] },
+    ];
+    let n = 0;
+    for (const p of POOLS) {
+      if (!jobId[p.job]) continue;
+      const span = Math.max(1, (d(p.to).getTime() - d(p.from).getTime()) / 86400_000);
+      const stageList = p.stages.flatMap(([s, k]) => Array<ApplicationStage>(k).fill(s));
+      const rows: { cand: Prisma.CandidateCreateManyInput; stage: ApplicationStage; applied: Date; changed: Date }[] = [];
+      for (let i = 0; i < p.total; i++, n++) {
+        const first = FIRST[(n * 7) % FIRST.length]!;
+        const last = LAST[(n * 11 + 3) % LAST.length]!;
+        const applied = new Date(d(p.from).getTime() + Math.floor(((i * 37) % 100) / 100 * span) * 86400_000 + (9 + (i % 9)) * 3600_000);
+        const stage = stageList[i % stageList.length]!;
+        const changed = stage === 'SCREENING' ? applied : new Date(Math.min(applied.getTime() + (3 + (i % 6)) * 86400_000, d(p.to).getTime() + 15 * 3600_000));
+        const intern = p.job === 'intern';
+        const exp = intern ? 0 : 12 + ((n * 13) % 60);
+        rows.push({
+          stage,
+          applied,
+          changed,
+          cand: {
+            tenantId,
+            fullName: `${first} ${last}`,
+            email: `${first}.${last}.${n + 101}@example.${['com', 'org', 'net'][n % 3]}`.toLowerCase(),
+            phone: `+91 9${String(8_000_000_00 + ((n * 7_919_831) % 199_999_999)).slice(0, 4)} ${String(10_000 + ((n * 4_721) % 89_999))}`,
+            location: p.city[n % p.city.length]!,
+            currentCompany: intern ? null : COMPANIES[n % COMPANIES.length]!,
+            currentCtcPaise: intern ? null : (300_000 + ((n * 37_000) % 900_000)) * 100,
+            expectedCtcPaise: intern ? 20_000_00 : (450_000 + ((n * 41_000) % 1_100_000)) * 100,
+            noticePeriodDays: intern ? 0 : [15, 30, 30, 60, 90][n % 5]!,
+            totalExpMonths: exp,
+            source: p.sources[n % p.sources.length]!,
+            tags: p.tags.slice(0, 1 + (n % p.tags.length)),
+            consentAt: applied,
+            retentionUntil: d(addDaysKey(applied.toISOString().slice(0, 10), 730)),
+            createdAt: applied,
+          },
+        });
+      }
+      await prisma.candidate.createMany({ data: rows.map((r) => r.cand) });
+      const created = await prisma.candidate.findMany({ where: { tenantId, email: { in: rows.map((r) => r.cand.email) } }, select: { id: true, email: true } });
+      const idByEmail = new Map(created.map((c) => [c.email, c.id]));
+      await prisma.jobApplication.createMany({
+        data: rows.map((r) => ({
+          tenantId,
+          candidateId: idByEmail.get(r.cand.email)!,
+          jobId: jobId[p.job]!,
+          stage: r.stage,
+          stageChangedAt: r.changed,
+          rejectReason: r.stage === 'REJECTED' ? ['Skills mismatch', 'Experience mismatch', 'Salary expectations', 'Not reachable'][r.applied.getDate() % 4]! : null,
+          createdAt: r.applied,
+        })),
+      });
+    }
+  }
+
+  // ── Appraisals: KRA templates, H2 FY25-26 (closed) and H1 FY26-27 (manager review) ──
+  async function seedAppraisals() {
+    if (!has('rohit', 'kavya', 'neha', 'arjun', 'priya', 'rahul', 'sneha', 'vikram', 'ananya')) return;
+    const LABELS = ['Unsatisfactory', 'Needs improvement', 'Meets expectations', 'Exceeds expectations', 'Outstanding'];
+    type Kra = { title: string; description: string; measurement: string; weight: number };
+    async function template(name: string, version: number, status: string, items: Kra[], createdAt: Date) {
+      const t = await prisma.kraTemplate.create({
+        data: { tenantId, name, version, status, ratingLabels: LABELS, createdAt, items: { create: items.map((k, i) => ({ tenantId, ...k, order: i })) } },
+        include: { items: { orderBy: { order: 'asc' } } },
+      });
+      return { id: t.id, snap: t.items.map((i) => ({ id: i.id, title: i.title, description: i.description, measurement: i.measurement, weight: i.weight })) };
+    }
+    const engV1 = await template('Engineering', 1, 'ARCHIVED', [
+      { title: 'Delivery', description: 'Ship committed sprint scope on time.', measurement: 'Sprint commitment %', weight: 50 },
+      { title: 'Technical quality', description: 'Code reviews, tests and low defect leakage.', measurement: 'QA defects per release', weight: 30 },
+      { title: 'Teamwork', description: 'Help teammates, share knowledge.', measurement: 'Peer feedback', weight: 20 },
+    ], at('2025-09-20'));
+    const engV2 = await template('Engineering', 2, 'PUBLISHED', [
+      { title: 'Delivery & quality', description: 'Ship committed sprint scope with low defect leakage.', measurement: 'Sprint commitment %, QA defects', weight: 40 },
+      { title: 'Technical excellence', description: 'Code reviews, design docs, paying down tech debt.', measurement: 'Review turnaround, design docs', weight: 25 },
+      { title: 'Collaboration & communication', description: 'Clear status updates, client calls, mentoring interns.', measurement: 'Peer and lead feedback', weight: 20 },
+      { title: 'Learning & growth', description: 'Certifications, LMS courses and new skills applied on projects.', measurement: 'Courses completed', weight: 15 },
+    ], at('2026-03-15'));
+    const ops = await template('Operations', 1, 'PUBLISHED', [
+      { title: 'Process excellence', description: 'Run monthly processes accurately and on time.', measurement: 'SLA adherence', weight: 40 },
+      { title: 'Stakeholder service', description: 'Turnaround and quality of responses to employees and vendors.', measurement: 'Helpdesk CSAT', weight: 30 },
+      { title: 'Compliance', description: 'Statutory filings and audits without findings.', measurement: 'Audit findings', weight: 20 },
+      { title: 'Learning & growth', description: 'Courses and certifications.', measurement: 'Courses completed', weight: 10 },
+    ], at('2025-09-20'));
+
+    const reviewer: Record<string, string> = { kavya: 'rohit', neha: 'rohit', ananya: 'rohit', arjun: 'neha', priya: 'neha', rahul: 'neha', sneha: 'neha', vikram: 'arjun' };
+    const opsPeople = new Set(['kavya', 'ananya']);
+    type R = Record<string, { selfRating?: number | null; selfComment?: string | null; managerRating?: number | null; managerComment?: string | null }>;
+    const rate = (snap: { id: string; weight: number }[], self: (number | null)[] | null, mgr: (number | null)[] | null, comments?: { self?: string; mgr?: string }): { ratings: R; selfScore: number | null; managerScore: number | null } => {
+      const ratings: R = {};
+      snap.forEach((k, i) => {
+        ratings[k.id] = {
+          selfRating: self?.[i] ?? null,
+          selfComment: self?.[i] && i === 0 ? (comments?.self ?? null) : null,
+          managerRating: mgr?.[i] ?? null,
+          managerComment: mgr?.[i] && i === 0 ? (comments?.mgr ?? null) : null,
+        };
+      });
+      return {
+        ratings,
+        selfScore: self ? weightedScore(snap.map((k, i) => ({ weight: k.weight, rating: self[i] }))) : null,
+        managerScore: mgr ? weightedScore(snap.map((k, i) => ({ weight: k.weight, rating: mgr[i] }))) : null,
+      };
+    };
+
+    // H2 FY25-26 — closed, every review done, final ratings acknowledged.
+    const h2 = await prisma.appraisalCycle.create({
+      data: { tenantId, name: 'H2 FY25-26', periodFrom: d('2025-10-01'), periodTo: d('2026-03-31'), templateId: engV1.id, selfReviewDue: d('2026-04-10'), managerReviewDue: d('2026-04-20'), eligibility: { minTenureDays: 90, types: ['FULL_TIME'] }, status: 'CLOSED', launchedAt: at('2026-03-25'), closedAt: at('2026-04-28', '18:00'), createdAt: at('2026-03-20') },
+    });
+    const H2: Record<string, { self: number[]; mgr: number[]; calibrated?: number; note?: string }> = {
+      kavya: { self: [4, 4, 4, 4], mgr: [4, 4, 4, 4] },
+      neha: { self: [5, 4, 4], mgr: [5, 4, 4] },
+      arjun: { self: [4, 5, 4], mgr: [4, 5, 4] },
+      priya: { self: [4, 4, 5], mgr: [4, 4, 5] },
+      rahul: { self: [4, 4, 4], mgr: [4, 4, 3], calibrated: 4.0, note: 'Calibrated up: owned two incident-free production releases.' },
+      sneha: { self: [4, 4, 4], mgr: [4, 4, 5] },
+      vikram: { self: [4, 3, 4], mgr: [4, 3, 3] },
+      ananya: { self: [4, 3, 3, 3], mgr: [3, 4, 3, 3] },
+    };
+    for (const [k, r] of Object.entries(H2)) {
+      const tpl = opsPeople.has(k) ? ops : engV1;
+      const s = rate(tpl.snap, r.self, r.mgr, { self: 'Delivered all committed work for the half.', mgr: 'Consistent delivery; see review notes.' });
+      const final = r.calibrated ?? s.managerScore;
+      await prisma.appraisalParticipant.create({
+        data: {
+          tenantId, cycleId: h2.id, employeeId: emp[k]!, reviewerEmployeeId: emp[reviewer[k]!]!, templateId: tpl.id, templateSnapshot: tpl.snap, ratings: s.ratings as Prisma.InputJsonValue,
+          selfStatus: 'SUBMITTED', managerStatus: 'SUBMITTED', selfSubmittedAt: at('2026-04-08', '18:30'), managerSubmittedAt: at('2026-04-18', '17:00'), selfScore: s.selfScore, managerScore: s.managerScore,
+          calibratedScore: r.calibrated ?? null, calibrationNote: r.note ?? null, finalScore: final, band: bandFor(final), acknowledgedAt: k === 'ananya' ? null : at('2026-04-30', '11:00'),
+        },
+      });
+    }
+
+    // H1 FY26-27 — "In review": self reviews 7 of 8 submitted, managers have done 3.
+    const h1 = await prisma.appraisalCycle.create({
+      data: { tenantId, name: 'H1 FY26-27', periodFrom: d('2026-04-01'), periodTo: d('2026-09-30'), templateId: engV2.id, selfReviewDue: d('2026-09-25'), managerReviewDue: d('2026-10-09'), eligibility: { minTenureDays: 90, types: ['FULL_TIME'] }, status: 'MANAGER_REVIEW', launchedAt: at('2026-09-10', '10:00'), createdAt: at('2026-09-08') },
+    });
+    const H1: Record<string, { self: (number | null)[] | null; selfDone: boolean; mgr: (number | null)[] | null; mgrDone: boolean }> = {
+      kavya: { self: [4, 4, 5, 4], selfDone: true, mgr: [4, 4, 4, 4], mgrDone: true },
+      neha: { self: [5, 4, 4, 4], selfDone: true, mgr: [5, 4, 4, 4], mgrDone: true },
+      arjun: { self: [4, 5, 4, 4], selfDone: true, mgr: [4, 4, 4, 5], mgrDone: true },
+      priya: { self: [4, 4, 4, 5], selfDone: true, mgr: [5, 4, null, null], mgrDone: false },
+      rahul: { self: [4, 4, 3, 4], selfDone: true, mgr: null, mgrDone: false },
+      sneha: { self: [4, 4, 5, 4], selfDone: true, mgr: null, mgrDone: false },
+      vikram: { self: [4, 3, 4, 4], selfDone: true, mgr: null, mgrDone: false },
+      ananya: { self: [3, 4, null, null], selfDone: false, mgr: null, mgrDone: false },
+    };
+    for (const [k, r] of Object.entries(H1)) {
+      const tpl = opsPeople.has(k) ? ops : engV2;
+      const s = rate(tpl.snap, r.self, r.mgr, { self: k === 'priya' ? 'Shipped the Atlas CRM billing module two weeks early; 0 P1 defects.' : 'Met sprint commitments this half.', mgr: 'Strong half.' });
+      await prisma.appraisalParticipant.create({
+        data: {
+          tenantId, cycleId: h1.id, employeeId: emp[k]!, reviewerEmployeeId: emp[reviewer[k]!]!, templateId: tpl.id, templateSnapshot: tpl.snap, ratings: s.ratings as Prisma.InputJsonValue,
+          selfStatus: r.selfDone ? 'SUBMITTED' : r.self ? 'IN_PROGRESS' : 'NOT_STARTED', selfSubmittedAt: r.selfDone ? at('2026-09-23', '19:10') : null, selfScore: r.selfDone ? s.selfScore : null,
+          managerStatus: r.mgrDone ? 'SUBMITTED' : r.mgr ? 'IN_PROGRESS' : 'NOT_STARTED', managerSubmittedAt: r.mgrDone ? at('2026-09-28', '17:40') : null, managerScore: r.mgrDone ? s.managerScore : null,
+        },
+      });
+    }
+  }
+
+  // ── Assets & inventory ───────────────────────────────────────────────────
+  async function seedAssets() {
+    const cats: Record<string, string> = {};
+    for (const [name, requiresSerial] of [['Laptop', true], ['Monitor', true], ['Peripheral', true], ['Audio', true], ['Furniture', false]] as const) {
+      cats[name] = (await prisma.assetCategory.create({ data: { tenantId, name, requiresSerial, createdAt: at('2023-01-02') } })).id;
+    }
+    type A = { name: string; cat: string; make: string; model: string; serial: string | null; bought: string; cost: number; vendor: string; warranty: string; status: 'ASSIGNED' | 'IN_STOCK' | 'UNDER_REPAIR' | 'RETURNED'; to?: string; on?: string; ack?: boolean; condition?: 'NEW' | 'GOOD' | 'FAIR'; returned?: { by: string; on: string; from: string; notes: string }; repair?: { vendor: string; issue: string; sent: string; back: string }; notes?: string };
+    const ASSETS: A[] = [
+      { name: 'Dell Latitude 5440', cat: 'Laptop', make: 'Dell', model: 'Latitude 5440', serial: 'DL5440-8821', bought: '2024-01-05', cost: 78_500, vendor: 'Dell India (direct)', warranty: '2027-01-11', status: 'ASSIGNED', to: 'priya', on: '2024-01-12', ack: true, condition: 'GOOD' },
+      { name: 'Logitech M331 mouse', cat: 'Peripheral', make: 'Logitech', model: 'M331 Silent Plus', serial: 'LG-M331-203', bought: '2024-01-05', cost: 1_295, vendor: 'Croma Business', warranty: '2026-01-11', status: 'ASSIGNED', to: 'priya', on: '2024-01-12', ack: true, condition: 'GOOD' },
+      { name: 'MacBook Air M3', cat: 'Laptop', make: 'Apple', model: 'MacBook Air 13" M3', serial: 'C02XK1', bought: '2025-02-25', cost: 1_14_900, vendor: 'Imagine Store, Pune', warranty: '2026-03-02', status: 'ASSIGNED', to: 'vikram', on: '2025-03-03', ack: true, condition: 'GOOD' },
+      { name: 'Dell P2422H monitor', cat: 'Monitor', make: 'Dell', model: 'P2422H 24"', serial: 'CN0P24-11', bought: '2024-08-10', cost: 13_999, vendor: 'Dell India (direct)', warranty: '2027-08-15', status: 'IN_STOCK', condition: 'GOOD' },
+      { name: 'MacBook Pro 14 M3 Pro', cat: 'Laptop', make: 'Apple', model: 'MacBook Pro 14" M3 Pro', serial: 'C02ZM4P14', bought: '2024-11-20', cost: 1_99_900, vendor: 'Imagine Store, Ahmedabad', warranty: '2027-11-19', status: 'ASSIGNED', to: 'rohit', on: '2024-11-22', ack: true, condition: 'GOOD' },
+      { name: 'Lenovo ThinkPad T14 Gen 4', cat: 'Laptop', make: 'Lenovo', model: 'ThinkPad T14 Gen 4', serial: 'PF4T14-5520', bought: '2024-06-12', cost: 92_000, vendor: 'Lenovo Partner — Shiv Infotech', warranty: '2027-06-11', status: 'ASSIGNED', to: 'kavya', on: '2024-06-14', ack: true, condition: 'GOOD' },
+      { name: 'HP EliteBook 840 G10', cat: 'Laptop', make: 'HP', model: 'EliteBook 840 G10', serial: '5CG3408KQ1', bought: '2024-03-01', cost: 1_08_000, vendor: 'HP World, Ahmedabad', warranty: '2027-02-28', status: 'ASSIGNED', to: 'neha', on: '2024-03-04', ack: true, condition: 'GOOD' },
+      { name: 'Dell Latitude 7440', cat: 'Laptop', make: 'Dell', model: 'Latitude 7440', serial: 'DL7440-1102', bought: '2024-04-10', cost: 1_12_000, vendor: 'Dell India (direct)', warranty: '2027-04-09', status: 'ASSIGNED', to: 'arjun', on: '2024-04-12', ack: true, condition: 'GOOD' },
+      { name: 'Lenovo ThinkPad E14 Gen 5', cat: 'Laptop', make: 'Lenovo', model: 'ThinkPad E14 Gen 5', serial: 'PF4E14-7781', bought: '2023-02-15', cost: 68_000, vendor: 'Lenovo Partner — Shiv Infotech', warranty: '2026-10-15', status: 'ASSIGNED', to: 'rahul', on: '2023-02-20', ack: true, condition: 'FAIR', notes: 'Extended warranty ends Oct 2026 — renew or plan replacement.' },
+      { name: 'Dell Latitude 5440', cat: 'Laptop', make: 'Dell', model: 'Latitude 5440', serial: 'DL5440-9014', bought: '2023-09-25', cost: 76_000, vendor: 'Dell India (direct)', warranty: '2026-12-31', status: 'ASSIGNED', to: 'sneha', on: '2023-10-02', ack: true, condition: 'GOOD' },
+      { name: 'Dell Latitude 3540', cat: 'Laptop', make: 'Dell', model: 'Latitude 3540', serial: 'DL3540-4410', bought: '2022-07-25', cost: 58_000, vendor: 'Dell India (direct)', warranty: '2026-11-30', status: 'RETURNED', condition: 'GOOD', returned: { by: 'ananya', from: '2022-08-01', on: '2026-09-25', notes: 'Returned with charger and bag; awaiting IT inspection.' } },
+      { name: 'Lenovo IdeaPad Slim 3', cat: 'Laptop', make: 'Lenovo', model: 'IdeaPad Slim 3 15', serial: 'PF3IP3-2231', bought: '2026-09-08', cost: 52_000, vendor: 'Lenovo Partner — Shiv Infotech', warranty: '2027-09-07', status: 'ASSIGNED', to: 'isha', on: '2026-09-15', ack: true, condition: 'NEW' },
+      { name: 'HP 250 G9', cat: 'Laptop', make: 'HP', model: '250 G9', serial: '5CD3G9-7710', bought: '2026-09-08', cost: 45_000, vendor: 'HP World, Ahmedabad', warranty: '2027-09-07', status: 'ASSIGNED', to: 'karan', on: '2026-09-15', ack: false, condition: 'NEW' },
+      { name: 'Dell Inspiron 14', cat: 'Laptop', make: 'Dell', model: 'Inspiron 14 5440', serial: 'DI5440-3302', bought: '2026-09-08', cost: 61_000, vendor: 'Dell India (direct)', warranty: '2027-09-07', status: 'ASSIGNED', to: 'divya', on: '2026-09-15', ack: true, condition: 'NEW' },
+      { name: 'Dell Latitude 5440', cat: 'Laptop', make: 'Dell', model: 'Latitude 5440', serial: 'DL5440-9120', bought: '2026-09-20', cost: 79_000, vendor: 'Dell India (direct)', warranty: '2029-09-19', status: 'IN_STOCK', condition: 'NEW', notes: 'Imaged and ready for the QA joiner (Meera Iyer, 6 Oct).' },
+      { name: 'HP EliteBook 840 G8', cat: 'Laptop', make: 'HP', model: 'EliteBook 840 G8', serial: '5CG1234XYZ', bought: '2022-01-10', cost: 95_000, vendor: 'HP World, Ahmedabad', warranty: '2027-01-09', status: 'UNDER_REPAIR', condition: 'FAIR', repair: { vendor: 'HP Authorised Service, Ahmedabad', issue: 'Battery swelling; trackpad lifting', sent: '2026-09-24', back: '2026-10-03' } },
+      { name: 'Dell P2422H monitor', cat: 'Monitor', make: 'Dell', model: 'P2422H 24"', serial: 'CN0P24-12', bought: '2024-08-10', cost: 13_999, vendor: 'Dell India (direct)', warranty: '2027-08-15', status: 'ASSIGNED', to: 'rahul', on: '2024-08-12', ack: true, condition: 'GOOD' },
+      { name: 'Dell P2419H monitor', cat: 'Monitor', make: 'Dell', model: 'P2419H 24"', serial: 'CN0P19-77', bought: '2021-10-20', cost: 11_500, vendor: 'Dell India (direct)', warranty: '2026-10-06', status: 'ASSIGNED', to: 'arjun', on: '2023-04-03', ack: true, condition: 'FAIR' },
+      { name: 'Logitech MK270 keyboard & mouse', cat: 'Peripheral', make: 'Logitech', model: 'MK270', serial: 'LG-MK270-551', bought: '2025-06-01', cost: 1_795, vendor: 'Croma Business', warranty: '2027-05-31', status: 'IN_STOCK', condition: 'NEW' },
+      { name: 'Jabra Evolve2 40 headset', cat: 'Audio', make: 'Jabra', model: 'Evolve2 40 UC', serial: 'JB-E240-118', bought: '2025-05-10', cost: 8_499, vendor: 'Amazon Business', warranty: '2027-05-09', status: 'ASSIGNED', to: 'priya', on: '2025-05-12', ack: true, condition: 'GOOD' },
+      { name: 'Jabra Evolve2 40 headset', cat: 'Audio', make: 'Jabra', model: 'Evolve2 40 UC', serial: 'JB-E240-119', bought: '2025-05-10', cost: 8_499, vendor: 'Amazon Business', warranty: '2027-05-09', status: 'IN_STOCK', condition: 'NEW' },
+      { name: 'Ergonomic chair · Featherlite Optima', cat: 'Furniture', make: 'Featherlite', model: 'Optima HB', serial: null, bought: '2025-01-15', cost: 14_500, vendor: 'Featherlite Ahmedabad', warranty: '2028-01-14', status: 'IN_STOCK', condition: 'NEW' },
+    ];
+    let tag = 0;
+    for (const a of ASSETS) {
+      if (a.to && !emp[a.to]) continue;
+      if (a.returned && !emp[a.returned.by]) continue;
+      tag++;
+      const asset = await prisma.asset.create({
+        data: {
+          tenantId, assetTag: `AST-${String(tag).padStart(4, '0')}`, name: a.name, categoryId: cats[a.cat] ?? null, make: a.make, model: a.model, serialNo: a.serial, purchaseDate: d(a.bought), purchaseCostPaise: a.cost * 100, vendor: a.vendor,
+          warrantyTill: d(a.warranty), status: a.status, condition: a.condition ?? 'GOOD', branchId: a.to === 'vikram' || a.to === 'divya' ? (branch.Pune ?? null) : (branch.Ahmedabad ?? null), notes: a.notes ?? null,
+          statusBeforeRepair: a.repair ? 'IN_STOCK' : null, createdAt: at(a.bought, '12:00'),
+        },
+      });
+      if (a.status === 'ASSIGNED' && a.to && a.on) {
+        const asg = await prisma.assetAssignment.create({ data: { tenantId, assetId: asset.id, employeeId: emp[a.to]!, assignedOn: d(a.on), assignedByName: hrName, acknowledgedAt: a.ack ? at(addDaysKey(a.on, 1), '10:30') : null, createdAt: at(a.on, '10:00') } });
+        await prisma.asset.update({ where: { id: asset.id }, data: { currentAssigneeId: emp[a.to]!, currentAssignmentId: asg.id } });
+      }
+      if (a.returned) {
+        await prisma.assetAssignment.create({ data: { tenantId, assetId: asset.id, employeeId: emp[a.returned.by]!, assignedOn: d(a.returned.from), assignedByName: hrName, acknowledgedAt: at(addDaysKey(a.returned.from, 1)), returnedOn: d(a.returned.on), returnCondition: 'GOOD', returnNotes: a.returned.notes, createdAt: at(a.returned.from) } });
+      }
+      if (a.repair) {
+        await prisma.assetRepair.create({ data: { tenantId, assetId: asset.id, vendor: a.repair.vendor, issue: a.repair.issue, sentOn: d(a.repair.sent), expectedBack: d(a.repair.back), createdAt: at(a.repair.sent, '15:00') } });
+      }
+    }
+    await seqAt('asset.tag', tag + 1);
+  }
+
+  // ── Welcome kits (wireframe rows: Meera, Isha, Karan) ─────────────────────
+  async function seedKits() {
+    const ITEMS: { name: string; sizes: string[]; stock: Record<string, number>; low: number }[] = [
+      { name: 'T-shirt', sizes: ['S', 'M', 'L', 'XL', 'XXL'], stock: { S: 5, M: 8, L: 6, XL: 4, XXL: 2 }, low: 3 },
+      { name: 'Mug', sizes: [], stock: { _: 17 }, low: 5 },
+      { name: 'Notebook', sizes: [], stock: { _: 24 }, low: 5 },
+      { name: 'Bag', sizes: [], stock: { _: 3 }, low: 5 },
+    ];
+    const item: Record<string, string> = {};
+    for (const [i, it] of ITEMS.entries()) {
+      item[it.name] = (await prisma.welcomeKitItem.create({ data: { tenantId, name: it.name, sizes: it.sizes, stock: it.stock, lowStockThreshold: it.low, isActive: true, order: i, createdAt: at('2024-01-02') } })).id;
+    }
+    const KITS: { who: string; size: string; issued: Record<string, boolean>; on: string }[] = [
+      { who: 'meera', size: 'M', issued: { 'T-shirt': true, Mug: true, Notebook: true, Bag: false }, on: '2026-09-28' },
+      { who: 'isha', size: 'S', issued: { 'T-shirt': true, Mug: true, Notebook: true, Bag: true }, on: '2026-09-15' },
+      { who: 'karan', size: 'L', issued: { 'T-shirt': true, Mug: false, Notebook: true, Bag: true }, on: '2026-09-15' },
+    ];
+    for (const k of KITS) {
+      if (!emp[k.who]) continue;
+      const all = Object.values(k.issued).every(Boolean);
+      await prisma.welcomeKitIssue.create({
+        data: {
+          tenantId, employeeId: emp[k.who]!, status: all ? 'ISSUED' : 'PARTIAL', tshirtSize: k.size, delivery: 'HANDOVER', lastIssuedName: hrName, completedAt: all ? at(k.on, '11:00') : null, createdAt: at(addDaysKey(k.on, -7), '10:00'),
+          lines: { create: ITEMS.map((it) => ({ tenantId, itemId: item[it.name]!, size: it.sizes.length ? k.size : null, issued: !!k.issued[it.name], issuedOn: k.issued[it.name] ? d(k.on) : null, issuedByName: k.issued[it.name] ? hrName : null })) },
+        },
+      });
+    }
+  }
+
+  // ── ID cards: templates, settings, issued cards (batch PB-001), 3 joiners ready + Meera waiting ──
+  async function seedCards() {
+    const settings = { printVendorEmail: 'print@shreeprints.in', printVendorName: 'Shree Prints', returnAddress: 'Lexisora Infotech, 4th Floor, Titanium City Centre, Ahmedabad', emergencyLine: '+91 98250 11010', autoGenerate: true, requireBloodGroup: true };
+    await prisma.setting.upsert({ where: { tenantId_key: { tenantId, key: 'people.idcard.settings' } }, create: { tenantId, key: 'people.idcard.settings', value: settings }, update: { value: settings } });
+    const c = classicPortrait();
+    const l = landscapeMinimal();
+    const classic = await prisma.idCardTemplate.create({ data: { tenantId, name: 'Classic portrait', orientation: 'PORTRAIT', widthMm: 53.98, heightMm: 85.6, front: c.front as unknown as Prisma.InputJsonValue, back: c.back as unknown as Prisma.InputJsonValue, isDefault: true, createdAt: at('2026-03-30') } });
+    await prisma.idCardTemplate.create({ data: { tenantId, name: 'Landscape minimal', orientation: 'LANDSCAPE', widthMm: 85.6, heightMm: 53.98, front: l.front as unknown as Prisma.InputJsonValue, back: l.back as unknown as Prisma.InputJsonValue, isDefault: false, createdAt: at('2026-03-30') } });
+
+    const cardData = (k: string, serial: string, token: string): Record<string, string | null> => {
+      const e = byId.get(emp[k]!)!;
+      return {
+        'employee.full_name': e.fullName,
+        'employee.emp_code': e.empCode,
+        'employee.designation': e.designation?.name ?? null,
+        'employee.department': e.department?.name ?? null,
+        'employee.blood_group': e.bloodGroup ?? null,
+        'employee.photo': e.photoFileId ?? null,
+        'employee.emergency_contact': e.emergencyContactName ? `${e.emergencyContactName}${e.emergencyContactPhone ? ` · ${e.emergencyContactPhone}` : ''}` : null,
+        'employee.joining_date': e.joiningDate ? fmt(e.joiningDate) : null,
+        'employee.code_blood': [e.empCode, e.bloodGroup].filter(Boolean).join(' · '),
+        'card.serial': serial,
+        'qr.verify_url': `${webOrigin}/api/v1/id-cards/verify/${token}`,
+        'tenant.name': tenant?.name ?? 'Lexisora Infotech',
+        'tenant.logo': tenant?.logoFileId ?? null,
+        'tenant.address': tenant?.address ?? null,
+        'settings.return_address': settings.returnAddress,
+        'settings.emergency_line': settings.emergencyLine,
+      };
+    };
+
+    const ISSUED = ['rohit', 'kavya', 'neha', 'arjun', 'priya', 'rahul', 'sneha', 'vikram', 'ananya'].filter((k) => emp[k] && byId.get(emp[k]!)?.photoFileId);
+    let serialNo = 0;
+    const pages: { front: Buffer; back: Buffer }[] = [];
+    const issuedRows: { k: string; serial: string; token: string; data: Record<string, string | null> }[] = [];
+    for (const k of ISSUED) {
+      const serial = `IDC-2026-${String(++serialNo).padStart(4, '0')}`;
+      const token = randomBytes(16).toString('base64url');
+      const data = cardData(k, serial, token);
+      const images = { photo: photoBuf[k] ? await toDataUrl(photoBuf[k]!, 700) : null, qr: await qrDataUrl(data['qr.verify_url']!), logo: null, bg: null };
+      const side = (els: IdCardElement[]) => renderCardSvg({ widthMm: 53.98, heightMm: 85.6, elements: els }, data, images);
+      pages.push({ front: await svgToPng(side(c.front)), back: await svgToPng(side(c.back)) });
+      issuedRows.push({ k, serial, token, data });
+    }
+    if (issuedRows.length) {
+      const size: [number, number] = [53.98 * PT_PER_MM, 85.6 * PT_PER_MM];
+      const batchPdf = await new Promise<Buffer>((res, rej) => {
+        const doc = new PDFDocument({ size, margin: 0, info: { Title: 'ID cards · PB-001', Author: 'Lexisora HRMS' } });
+        const chunks: Buffer[] = [];
+        doc.on('data', (b: Buffer) => chunks.push(b));
+        doc.on('end', () => res(Buffer.concat(chunks)));
+        doc.on('error', rej);
+        pages.forEach((p, i) => {
+          [p.front, p.back].forEach((png, j) => {
+            if (i > 0 || j > 0) doc.addPage({ size, margin: 0 });
+            doc.image(png, 0, 0, { width: size[0], height: size[1] });
+          });
+        });
+        doc.end();
+      });
+      const f = await saveFile(prisma, tenantId, { ownerUserId: user.kavya ?? null, name: 'PB-001-id-cards.pdf', buf: batchPdf, mime: 'application/pdf', category: 'id-card', folder: 'id-cards', createdAt: at('2026-04-08', '16:00') });
+      const batch = await prisma.idCardPrintBatch.create({ data: { tenantId, code: 'PB-001', vendorEmail: settings.printVendorEmail, cardCount: issuedRows.length, pdfFileId: f.id, status: 'DELIVERED', sentAt: at('2026-04-08', '16:05'), sentByName: hrName, createdAt: at('2026-04-08', '16:05') } });
+      for (const r of issuedRows) {
+        await prisma.idCard.create({
+          data: {
+            tenantId, employeeId: emp[r.k]!, templateId: classic.id, serial: r.serial, status: 'ISSUED', missingFields: [], dataSnapshot: r.data, verifyToken: r.token,
+            generatedAt: at('2026-04-08', '15:30'), printBatchId: batch.id, issuedAt: at('2026-04-15', '11:00'), createdAt: at('2026-04-08', '15:00'),
+          },
+        });
+      }
+      await seqAt('idcard.printBatch', 2);
+    }
+    // New joiners: three complete (→ "Generate for 3 new joiners"), Meera waiting for photo + blood group.
+    for (const k of ['isha', 'karan', 'divya', 'meera']) {
+      const e = emp[k] ? byId.get(emp[k]!) : undefined;
+      if (!e) continue;
+      const missing = [...(e.photoFileId ? [] : ['employee.photo']), ...(e.bloodGroup ? [] : ['employee.blood_group'])];
+      await prisma.idCard.create({
+        data: { tenantId, employeeId: e.id, templateId: classic.id, serial: `IDC-2026-${String(++serialNo).padStart(4, '0')}`, status: 'QUEUED', missingFields: missing, verifyToken: randomBytes(16).toString('base64url'), createdAt: k === 'meera' ? at('2026-09-22', '11:00') : at('2026-09-15', '09:30') },
+      });
+    }
+    await seqAt('idcard.serial', serialNo + 1, '2026');
+
+    // Visiting card profile (public slug as in the spec example).
+    if (emp.priya) await prisma.vCardProfile.upsert({ where: { employeeId: emp.priya }, create: { tenantId, employeeId: emp.priya, publicSlug: 'priya-sharma-7k2', showPhone: true, isPublic: true, createdAt: at('2024-01-15') }, update: {} });
+  }
 }

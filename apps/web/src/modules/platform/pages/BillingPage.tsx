@@ -224,6 +224,8 @@ export default function BillingPage() {
   const o = ov.data;
   const c = cycle ?? o.cycle ?? 'YEARLY';
   const isGrowth = o.planCode === 'GROWTH';
+  /** The operator's own workspace (a fresh install): never billed, no seat limit. */
+  const isInternal = o.planCode === 'INTERNAL';
 
   function choose(card: PlanCardCode) {
     const a = ctas![card].action;
@@ -260,7 +262,7 @@ export default function BillingPage() {
 
   return (
     <div data-screen-label="Subscription" className="stack" style={{ gap: 20 }}>
-      <PageHeader title="Subscription & billing" sub={seatUsageCopy(o.seatsUsed, o.quantity)} />
+      <PageHeader title="Subscription & billing" sub={isInternal ? `${o.seatsUsed} users · operator workspace — not billed, no seat limit.` : seatUsageCopy(o.seatsUsed, o.quantity)} />
 
       {o.billingState && (
         <div className={`pf-banner${o.status === 'PAST_DUE' || o.status === 'READ_ONLY' || o.status === 'SUSPENDED' ? ' danger' : ''}`} role="status">
@@ -320,8 +322,10 @@ export default function BillingPage() {
           {isGrowth ? (
             <SeatsCard ov={o} />
           ) : (
-            <Card kicker="Seats" title={o.planCode === 'FREE' ? `${o.seatsUsed} of ${FREE_SEATS} free seats in use` : `${o.seatsUsed} of ${o.quantity} seats in use`}>
-              <div className="card-meta">{o.planCode === 'FREE' ? 'Upgrade to Growth to add more than 10 users.' : 'Seats on your contract are managed by Lexisora sales.'}</div>
+            <Card kicker="Seats" title={o.planCode === 'FREE' ? `${o.seatsUsed} of ${FREE_SEATS} free seats in use` : isInternal ? `${o.seatsUsed} users` : `${o.seatsUsed} of ${o.quantity} seats in use`}>
+              <div className="card-meta">
+                {o.planCode === 'FREE' ? 'Upgrade to Growth to add more than 10 users.' : isInternal ? 'As the platform operator, your own workspace has no seat limit and is never invoiced.' : 'Seats on your contract are managed by Lexisora sales.'}
+              </div>
             </Card>
           )}
           <Card kicker="Invoices" title="Lexisora tax invoices">
@@ -332,8 +336,8 @@ export default function BillingPage() {
           <Card kicker="Current plan" title={o.planName}>
             <div className="kv-row"><span>Status</span><span>{o.status === 'ACTIVE' ? 'Active' : o.status === 'PAST_DUE' ? 'Payment due' : o.status === 'READ_ONLY' ? 'Read-only' : o.status === 'FREE' ? 'Free' : o.status.charAt(0) + o.status.slice(1).toLowerCase()}</span></div>
             {o.currentPeriodEnd && <div className="kv-row"><span>{o.cancelAtPeriodEnd ? 'Ends' : 'Renews'}</span><span>{formatDate(o.currentPeriodEnd)}</span></div>}
-            <div className="kv-row"><span>Seats</span><span>{o.quantity} ({Math.max(0, o.quantity - FREE_SEATS)} billed)</span></div>
-            <div className="kv-row"><span>Payment method</span><span>{o.gateway === 'MOCK' ? 'Test gateway · no real charge' : 'Razorpay checkout'}</span></div>
+            <div className="kv-row"><span>Seats</span><span>{isInternal ? 'No limit · not billed' : `${o.quantity} (${Math.max(0, o.quantity - FREE_SEATS)} billed)`}</span></div>
+            <div className="kv-row"><span>Payment method</span><span>{isInternal ? 'Not billed' : o.gateway === 'MOCK' ? 'Test gateway · no real charge' : 'Razorpay checkout'}</span></div>
           </Card>
           <Card kicker="Billing details" title={o.profile.legalName ?? o.tenantName} actions={<button className="btn btn-secondary btn-sm" onClick={() => setModal('profile')}>Edit</button>}>
             <div className="kv-row"><span>GSTIN</span><span className="pf-mono">{o.profile.gstin ?? 'Unregistered'}</span></div>

@@ -79,6 +79,8 @@ export function primaryLedger(
     return m && !MONEY_KEYS.has(m.systemKey ?? '') && !TAX_KEYS.test(m.systemKey ?? '') && m.systemKey !== 'ROUND_OFF';
   });
   let pick = party ?? (others.length === 1 ? others[0] : undefined);
+  // Two-line vouchers (expense vs payable, asset vs capital…): the debit account is the ledger.
+  if (!pick && others.length > 1 && lines.length === 2) pick = lines.find((l) => l.debitPaise > 0);
   if (!pick && others.length > 1) {
     // Several ledgers: when all sit on one side, show "Multiple" on that side.
     const debitSide = others.every((l) => l.debitPaise > 0);

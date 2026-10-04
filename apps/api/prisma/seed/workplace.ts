@@ -3,8 +3,11 @@ import PDFDocument from 'pdfkit';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { DEFAULT_SLA, HELPDESK_PRIORITIES, quoteIndexFor, type WpAudienceRule } from '@lexisora/shared';
+import { DEFAULT_SLA, generateLadder, generateQueens, generateSudoku, HELPDESK_PRIORITIES, quoteIndexFor, scoreGame, type GameKey, type WpAudienceRule } from '@lexisora/shared';
 import type { SeedCtx } from './core';
+import { CryptoService } from '../../src/core/crypto/crypto.service';
+import { maskRtsp } from '../../src/modules/workplace/cctv/cctv.rules';
+import { newPassToken, passWindow, waLink } from '../../src/modules/workplace/facility/facility.rules';
 import { projectIdsByEmployee, resolveAudience, type AudienceSubject } from '../../src/modules/workplace/common/audience.rules';
 import { excerptOf, sanitizeHtml } from '../../src/modules/workplace/common/html';
 import { calendarWith } from '../../src/modules/workplace/helpdesk/business-hours';
@@ -130,6 +133,7 @@ export async function seed_workplace(prisma: PrismaClient, ctx: SeedCtx): Promis
   await seedFeedAndKudos();
   await seedHelpdesk();
   await seedTodos(prisma, tenantId, E);
+  await seedHub(prisma, ctx, { atlasId, file });
 
   // ── Notice board ─────────────────────────────────────────────────────────
   async function seedNotices() {
@@ -936,4 +940,347 @@ async function seedTodos(prisma: PrismaClient, tenantId: string, E: (k: string) 
     .filter((r) => E(r.who))
     .map((r, i) => ({ tenantId, employeeId: E(r.who)!, title: r.title, note: r.note ?? null, dueDate: r.due ? d(r.due) : null, completedAt: r.done ?? null, createdAt: addMin(at('2026-09-25', '09:30'), i * 97) }));
   if (data.length) await prisma.personalTodo.createMany({ data });
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Comms hub, learning, rooms & visitors, CCTV and wellness (workplace part B)
+// ═════════════════════════════════════════════════════════════════════════════
+
+type FileFn = (ownerKey: string, name: string, category: string, isPrivate: boolean, buf: Buffer, createdAt: Date) => Promise<{ id: string }>;
+
+const MONTH_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+/**
+ *  - Comms hub: #general (the wireframe's three messages at 10:02 / 10:05 / 10:09 today),
+ *    #atlas-crm (3 unread for Priya, one @mention, yesterday's call summary), #qa-team
+ *    (1 unread for Priya), #announcements (HR/Admin only) and Priya's DMs with Neha and Rahul.
+ *  - Learning: the 4 wireframe tiles with Priya's progress (Secure coding 3 of 5, due 12 Oct;
+ *    Git workflow completed · certificate ready; Writing good test cases not started; POSH
+ *    completed) plus teammates' enrollments for the course reports.
+ *  - Rooms & visitors: Board room / Huddle 1 / Huddle 2, the wireframe bookings (Board room
+ *    30 Sep 11:00 – 12:00 Rohit "Nimbus Retail review", Huddle 2 15:00 – 15:30 Arjun "Sprint
+ *    planning") and visitor Amit Khanna (Nimbus) 30 Sep 10:45 with an e-pass sent.
+ *  - CCTV: 5 live cameras + Server room offline (last seen 08:12), RTSP URLs encrypted.
+ *  - Wellness: this week's and last week's puzzle results (Development leads); Priya on a
+ *    4-day streak with today's set still to play.
+ */
+export async function seedHub(prisma: PrismaClient, ctx: SeedCtx, h: { atlasId: string | null; file: FileFn }) {
+  const { tenantId, emp, user, dept, branch } = ctx;
+  const E = (k: string): string | null => emp[k] ?? null;
+  const U = (k: string): string | null => user[k] ?? null;
+  const crypto = new CryptoService();
+
+  // ── Comms hub ────────────────────────────────────────────────────────────
+  const users = await prisma.user.findMany({ where: { tenantId, status: { not: 'DISABLED' } }, select: { id: true, employee: { select: { id: true, status: true, departmentId: true } } } });
+  const active = users.filter((u) => u.employee?.status !== 'EXITED').map((u) => u.id);
+  const userOfEmp = new Map(users.filter((u) => u.employee).map((u) => [u.employee!.id, u.id]));
+  const deptUsers = (name: string) => users.filter((u) => !!dept[name] && u.employee?.departmentId === dept[name] && u.employee?.status !== 'EXITED').map((u) => u.id);
+  const atlasMembers = h.atlasId
+    ? (await prisma.projectMember.findMany({ where: { tenantId, projectId: h.atlasId }, select: { employeeId: true } }).catch(() => [] as { employeeId: string }[])).map((m) => userOfEmp.get(m.employeeId)).filter((x): x is string => !!x)
+    : [];
+  const atlasLead = h.atlasId ? ((await prisma.project.findFirst({ where: { id: h.atlasId }, select: { leadEmployeeId: true } }).catch(() => null))?.leadEmployeeId ?? null) : null;
+  if (atlasLead && userOfEmp.get(atlasLead)) atlasMembers.push(userOfEmp.get(atlasLead)!);
+
+  type Msg = { who: string | null; at: Date; body: string; kind?: 'USER' | 'SYSTEM' | 'CALL_SUMMARY'; mentions?: string[] };
+  type Chan = { name: string | null; kind: 'PUBLIC' | 'DM'; topic: string | null; linkedType: string | null; linkedId: string | null; posting: 'ALL_MEMBERS' | 'ADMINS_ONLY'; sort: number; audience: string[]; manual: string[]; owner: string | null; msgs: Msg[]; unreadFor?: Record<string, number>; dmKey?: string };
+  const P = U('priya');
+  const mention = (k: string) => (U(k) ? [U(k)!] : []);
+  const ids = (...keys: string[]) => keys.map(U).filter((x): x is string => !!x);
+  const chans: Chan[] = [
+    {
+      name: 'general', kind: 'PUBLIC', topic: 'Company-wide conversation', linkedType: 'COMPANY_GENERAL', linkedId: null, posting: 'ALL_MEMBERS', sort: 1, audience: active, manual: [], owner: null,
+      msgs: [
+        { who: 'kavya', at: at('2026-09-28', '09:30'), body: 'Good morning, everyone! Diwali potluck sign-ups are open on the notice board — add your dish by 1 Nov.' },
+        { who: 'rohit', at: at('2026-09-28', '09:41'), body: 'Great work on the Nimbus demo on Friday, team. The client loved the new billing flow.' },
+        { who: 'vikram', at: at('2026-09-28', '11:12'), body: 'The Pune studio gets its new standing desks on Thursday.' },
+        { who: 'neha', at: at(TODAY, '10:02'), body: 'Release freeze starts Thursday. Please merge by Wednesday EOD.' },
+        { who: 'rahul', at: at(TODAY, '10:05'), body: 'GST rounding fix is in QA now.' },
+        { who: 'sneha', at: at(TODAY, '10:09'), body: 'Picking it up, will update by lunch.' },
+      ],
+    },
+    {
+      name: 'atlas-crm', kind: 'PUBLIC', topic: 'Atlas CRM · Nimbus Retail', linkedType: h.atlasId ? 'PROJECT' : null, linkedId: h.atlasId, posting: 'ALL_MEMBERS', sort: 2,
+      audience: [...new Set(atlasMembers)], manual: ids('neha', 'arjun', 'priya', 'rahul', 'sneha', 'isha'), owner: U('arjun'),
+      msgs: [
+        { who: 'arjun', at: at('2026-09-28', '10:15'), body: 'Sprint 14 board is up. AT-104 and AT-107 are the priorities this week.' },
+        { who: null, kind: 'CALL_SUMMARY', at: at('2026-09-28', '11:53'), body: 'Call · 23 min · 4 participants' },
+        { who: 'priya', at: at('2026-09-28', '14:20'), body: 'AT-104 invoice PDF export is ready for review — the MR is linked on the card.' },
+        { who: 'arjun', at: at(TODAY, '09:20'), body: '@Priya Sharma can you pair with Rahul on the GST rounding edge cases today?', mentions: mention('priya') },
+        { who: 'rahul', at: at(TODAY, '09:34'), body: 'Pushed the fix for rounding on credit notes. Tests are green.' },
+        { who: 'neha', at: at(TODAY, '09:52'), body: 'Reminder: freeze on Thursday. Anything not merged by Wednesday EOD moves to the next release.' },
+      ],
+      unreadFor: P ? { [P]: 3 } : {},
+    },
+    {
+      name: 'qa-team', kind: 'PUBLIC', topic: 'QA · test plans, regressions and bug triage', linkedType: dept.QA ? 'DEPARTMENT' : null, linkedId: dept.QA ?? null, posting: 'ALL_MEMBERS', sort: 3,
+      audience: deptUsers('QA'), manual: ids('priya', 'rahul', 'neha'), owner: U('sneha'),
+      msgs: [
+        { who: 'sneha', at: at('2026-09-28', '16:05'), body: 'Regression run for Atlas CRM is scheduled for Thursday 10 am.' },
+        { who: 'karan', at: at('2026-09-28', '16:20'), body: 'I will take the invoice module test cases.' },
+        { who: 'sneha', at: at(TODAY, '09:45'), body: '@Priya Sharma the GST rounding fix is in my queue — I will update you by lunch.', mentions: mention('priya') },
+      ],
+      unreadFor: P ? { [P]: 1 } : {},
+    },
+    {
+      name: 'announcements', kind: 'PUBLIC', topic: 'Official announcements from HR and leadership', linkedType: 'COMPANY_ANNOUNCEMENTS', linkedId: null, posting: 'ADMINS_ONLY', sort: 4, audience: active, manual: [], owner: null,
+      msgs: [
+        { who: 'kavya', at: at('2026-09-25', '10:00'), body: 'The updated Leave & attendance policy is live. Please read and acknowledge it by 29 Sep.' },
+        { who: 'rohit', at: at('2026-09-28', '18:00'), body: 'Town hall this Saturday, 3 Oct at 5 pm in the cafeteria and on the call link — Q2 results and the roadmap.' },
+      ],
+    },
+  ];
+  const dm = (other: string, owner: string, msgs: Msg[]) => {
+    const o = U(other);
+    if (!P || !o) return;
+    chans.push({ name: null, kind: 'DM', topic: null, linkedType: null, linkedId: null, posting: 'ALL_MEMBERS', sort: 100, audience: [], manual: [P, o], owner: U(owner), dmKey: [P, o].sort().join(':'), msgs });
+  };
+  dm('neha', 'neha', [
+    { who: 'neha', at: at('2026-09-28', '17:10'), body: 'Priya, can you share the AT-104 demo notes before the client review?' },
+    { who: 'priya', at: at('2026-09-28', '17:25'), body: 'Sure — sending them over tonight.' },
+    { who: 'neha', at: at(TODAY, '09:15'), body: 'Thanks for the notes. Looks good for tomorrow’s review.' },
+  ]);
+  dm('rahul', 'rahul', [
+    { who: 'rahul', at: at(TODAY, '09:36'), body: 'Fix is pushed. Want to walk through the credit-note cases at 11?' },
+    { who: 'priya', at: at(TODAY, '09:40'), body: 'Yes, 11 works. I booked Huddle 1.' },
+  ]);
+  for (const c of chans) {
+    const msgs = c.msgs.filter((m) => !m.who || U(m.who));
+    const last = msgs[msgs.length - 1];
+    const ch = await prisma.chatChannel.create({
+      data: { tenantId, kind: c.kind, name: c.name, topic: c.topic, linkedType: c.linkedType, linkedId: c.linkedId, dmKey: c.dmKey ?? null, postingPolicy: c.posting, createdByUserId: c.owner ?? U('kavya'), lastMessageSeq: msgs.length, lastMessageAt: last?.at ?? null, sortOrder: c.sort, createdAt: at('2026-01-05', '10:00') },
+    });
+    const audience = new Set(c.audience);
+    const members = [...new Set([...c.audience, ...c.manual])];
+    await prisma.chatMember.createMany({
+      data: members.map((u) => ({ tenantId, channelId: ch.id, userId: u, role: u === c.owner ? 'OWNER' : 'MEMBER', managedBy: audience.has(u) ? 'AUDIENCE' : 'MANUAL', lastReadSeq: Math.max(0, msgs.length - (c.unreadFor?.[u] ?? 0)), joinedAt: at('2026-01-05', '10:00') })),
+      skipDuplicates: true,
+    });
+    if (msgs.length) {
+      await prisma.chatMessage.createMany({
+        data: msgs.map((m, i) => ({ tenantId, channelId: ch.id, seq: i + 1, senderUserId: m.who ? U(m.who) : null, kind: m.kind ?? 'USER', body: m.body, mentions: m.mentions ?? [], attachments: [], createdAt: m.at })),
+      });
+    }
+  }
+
+  // ── Learning ─────────────────────────────────────────────────────────────
+  const poshPdf = await h.file(
+    'kavya',
+    'POSH-awareness-handbook.pdf',
+    'lms',
+    true,
+    await pdf('Learning · POSH awareness', 'Prevention of Sexual Harassment (POSH) — what every employee should know', [
+      'The Sexual Harassment of Women at Workplace (Prevention, Prohibition and Redressal) Act, 2013 applies to every Lexisora office, client site and remote workspace.',
+      'Harassment includes unwelcome physical contact, demands or requests for sexual favours, sexually coloured remarks, showing pornography and any other unwelcome conduct of a sexual nature.',
+      'Our Internal Committee (IC) is chaired by Kavya Iyer. Complaints can be raised in writing within three months of the incident; the IC completes its inquiry within 90 days.',
+      'Retaliation against anyone who raises a concern in good faith is itself a serious violation of company policy.',
+    ]),
+    at('2026-04-01', '10:00'),
+  );
+  type L = [string, number, ('VIDEO' | 'DOCUMENT')?, string?];
+  const courseDefs: { key: string; title: string; category: 'REQUIRED' | 'OPTIONAL' | 'ONBOARDING'; description: string; lessons: L[]; assign: { audienceType: string; refId: string | null; label: string; required: boolean; dueInDays: number | null }[] }[] = [
+    {
+      key: 'secure', title: 'Secure coding guidelines', category: 'REQUIRED', description: 'OWASP Top 10 for our stack: input validation, authentication, secrets, dependency hygiene and the code review checklist.',
+      lessons: [['Why secure coding matters', 8], ['Input validation & output encoding', 8], ['Authentication & session handling', 8], ['Secrets, keys and configuration', 8], ['Dependency & supply-chain hygiene', 8]],
+      assign: dept.Development ? [{ audienceType: 'DEPARTMENT', refId: dept.Development, label: 'All developers', required: true, dueInDays: 14 }] : [],
+    },
+    {
+      key: 'git', title: 'Git workflow at Lexisora', category: 'ONBOARDING', description: 'Branch naming (AT-123-short-title), merge requests, reviews, releases and hotfixes.',
+      lessons: [['Branching & naming', 10], ['Merge requests & code review', 8], ['Releases, tags and hotfixes', 7]],
+      assign: [{ audienceType: 'NEW_JOINERS', refId: null, label: 'New joiners', required: true, dueInDays: 14 }],
+    },
+    {
+      key: 'tests', title: 'Writing good test cases', category: 'OPTIONAL', description: 'What makes a test useful, unit tests with Vitest, API tests, fixtures and test data.',
+      lessons: [['What makes a test useful', 15], ['Unit tests with Vitest', 20], ['Integration & API tests', 20], ['Test data and fixtures', 15]],
+      assign: [],
+    },
+    {
+      key: 'posh', title: 'POSH awareness', category: 'REQUIRED', description: 'The POSH Act 2013, what counts as harassment, and how to raise a concern with the Internal Committee.',
+      lessons: [['POSH Act 2013 — what it covers', 8, 'DOCUMENT', poshPdf.id], ['Raising a concern & the Internal Committee', 7]],
+      assign: [{ audienceType: 'ALL', refId: null, label: 'All employees', required: true, dueInDays: 30 }],
+    },
+  ];
+  const course: Record<string, { id: string; title: string; lessonIds: string[]; assignmentId: string | null }> = {};
+  for (const [i, c] of courseDefs.entries()) {
+    const created = await prisma.course.create({
+      data: { tenantId, title: c.title, description: c.description, category: c.category, certificateOnCompletion: true, status: 'PUBLISHED', totalDurationSec: c.lessons.reduce((a, l) => a + l[1] * 60, 0), createdByEmployeeId: E('kavya'), publishedAt: at('2026-06-01', '10:00'), createdAt: addMin(at('2026-05-20', '10:00'), i * 60) },
+    });
+    const lessonIds: string[] = [];
+    for (const [j, l] of c.lessons.entries()) {
+      const doc = l[2] === 'DOCUMENT';
+      const row = await prisma.lesson.create({
+        data: { tenantId, courseId: created.id, order: j + 1, title: l[0], type: l[2] ?? 'VIDEO', fileId: l[3] ?? null, durationSec: l[1] * 60, content: doc ? 'Read the handbook, then mark the lesson as read.' : `Lesson ${j + 1} of ${c.lessons.length}: ${l[0]}. The recording is being re-edited — read these notes and mark the lesson as done.` },
+      });
+      lessonIds.push(row.id);
+    }
+    let assignmentId: string | null = null;
+    for (const a of c.assign) {
+      const row = await prisma.courseAssignment.create({ data: { tenantId, courseId: created.id, audienceType: a.audienceType, refId: a.refId, label: a.label, required: a.required, dueInDays: a.dueInDays, createdAt: at('2026-06-01', '10:05') } });
+      assignmentId ??= row.id;
+    }
+    course[c.key] = { id: created.id, title: c.title, lessonIds, assignmentId };
+  }
+  const holder = new Map((await prisma.employee.findMany({ where: { tenantId }, select: { id: true, fullName: true } })).map((e) => [e.id, e.fullName]));
+  type En = { who: string; c: string; done: number; status: 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED'; due?: string; source?: 'ASSIGNED' | 'SELF'; completedOn?: string; downloaded?: boolean };
+  const enrollments: En[] = [
+    { who: 'priya', c: 'secure', done: 3, status: 'IN_PROGRESS', due: '2026-10-12' },
+    { who: 'priya', c: 'git', done: 3, status: 'COMPLETED', completedOn: '2026-09-24' },
+    { who: 'priya', c: 'tests', done: 0, status: 'NOT_STARTED', source: 'SELF' },
+    { who: 'priya', c: 'posh', done: 2, status: 'COMPLETED', completedOn: '2026-07-14', downloaded: true },
+    { who: 'rahul', c: 'secure', done: 5, status: 'COMPLETED', completedOn: '2026-09-18', downloaded: true },
+    { who: 'arjun', c: 'secure', done: 2, status: 'IN_PROGRESS', due: '2026-10-12' },
+    { who: 'neha', c: 'secure', done: 5, status: 'COMPLETED', completedOn: '2026-09-21', downloaded: true },
+    { who: 'isha', c: 'secure', done: 0, status: 'NOT_STARTED', due: '2026-10-12' },
+    { who: 'isha', c: 'git', done: 1, status: 'IN_PROGRESS', due: '2026-09-29' },
+    { who: 'karan', c: 'git', done: 3, status: 'COMPLETED', completedOn: '2026-09-25' },
+    { who: 'divya', c: 'git', done: 0, status: 'NOT_STARTED', due: '2026-09-29' },
+    { who: 'rahul', c: 'tests', done: 2, status: 'IN_PROGRESS', source: 'SELF' },
+    ...['rohit', 'kavya', 'neha', 'arjun', 'rahul', 'sneha', 'vikram', 'ananya'].map((who) => ({ who, c: 'posh', done: 2, status: 'COMPLETED' as const, completedOn: '2026-07-20', downloaded: true })),
+    { who: 'isha', c: 'posh', done: 1, status: 'IN_PROGRESS', due: '2026-10-15' },
+    { who: 'karan', c: 'posh', done: 0, status: 'NOT_STARTED', due: '2026-10-15' },
+    { who: 'divya', c: 'posh', done: 0, status: 'NOT_STARTED', due: '2026-10-15' },
+  ];
+  for (const e of enrollments) {
+    const employeeId = E(e.who);
+    const cr = course[e.c];
+    if (!employeeId || !cr) continue;
+    const total = cr.lessonIds.length;
+    const completedAt = e.completedOn ? at(e.completedOn, '16:30') : null;
+    const source = e.source ?? 'ASSIGNED';
+    const row = await prisma.enrollment.create({
+      data: {
+        tenantId, courseId: cr.id, employeeId, source, required: source === 'ASSIGNED', assignedAt: at('2026-09-14', '10:00'), dueAt: e.due ? new Date(at(e.due, '23:59').getTime() + 59_000) : null,
+        status: e.status, startedAt: e.done ? at('2026-09-16', '11:00') : null, completedAt, progressPct: e.status === 'COMPLETED' ? 100 : Math.round((100 * e.done) / total), lessonsDone: e.done,
+        assignmentId: source === 'ASSIGNED' ? cr.assignmentId : null, lastLessonId: e.done && e.done < total ? (cr.lessonIds[e.done] ?? null) : null, certificateDownloadedAt: e.downloaded && completedAt ? addMin(completedAt, 5) : null,
+      },
+    });
+    if (e.done) {
+      await prisma.lessonProgress.createMany({ data: cr.lessonIds.slice(0, e.done).map((lessonId, i) => ({ tenantId, enrollmentId: row.id, lessonId, positionSec: 0, watchedBuckets: [], completedAt: addMin(at('2026-09-16', '11:00'), (i + 1) * 30) })) });
+    }
+    if (e.status === 'COMPLETED' && completedAt) {
+      const ist = new Date(completedAt.getTime() + 330 * 60_000);
+      const cert = await prisma.certificate.create({
+        data: { tenantId, type: 'COURSE', recipientEmployeeId: employeeId, holderName: holder.get(employeeId) ?? e.who, title: cr.title, subtitle: `Completed on ${ist.getUTCDate()} ${MONTH_LONG[ist.getUTCMonth()]} ${ist.getUTCFullYear()}`, issuedAt: completedAt, verificationCode: verificationCode(), status: 'READY', sourceType: 'COURSE_ENROLLMENT', sourceId: row.id, metadata: { courseId: cr.id }, createdAt: completedAt },
+      });
+      await prisma.enrollment.update({ where: { id: row.id }, data: { certificateId: cert.id } });
+    }
+  }
+
+  // ── Rooms & visitors ─────────────────────────────────────────────────────
+  const rooms: Record<string, string> = {};
+  for (const r of [
+    { name: 'Board room', capacity: 12, amenities: ['Display', 'Video conferencing', 'Whiteboard'] },
+    { name: 'Huddle 1', capacity: 4, amenities: ['Display'] },
+    { name: 'Huddle 2', capacity: 4, amenities: ['Whiteboard'] },
+  ]) {
+    rooms[r.name] = (await prisma.room.create({ data: { tenantId, name: r.name, capacity: r.capacity, amenities: r.amenities, branchId: branch.Ahmedabad ?? null, createdAt: at('2026-01-05', '10:00') } })).id;
+  }
+  const bookings: { room: string; host: string; date: string; from: string; to: string; purpose: string; with: string[]; status?: 'BOOKED' | 'CANCELLED' | 'COMPLETED'; reason?: string }[] = [
+    { room: 'Board room', host: 'rohit', date: '2026-09-30', from: '11:00', to: '12:00', purpose: 'Nimbus Retail review', with: ['neha', 'arjun'] },
+    { room: 'Huddle 2', host: 'arjun', date: '2026-09-30', from: '15:00', to: '15:30', purpose: 'Sprint planning', with: ['priya', 'rahul', 'sneha', 'isha'] },
+    { room: 'Huddle 1', host: 'priya', date: TODAY, from: '11:00', to: '11:30', purpose: 'GST rounding walkthrough', with: ['rahul'] },
+    { room: 'Board room', host: 'kavya', date: '2026-10-01', from: '14:00', to: '15:30', purpose: 'Appraisal calibration', with: ['neha', 'rohit'] },
+    { room: 'Huddle 1', host: 'vikram', date: '2026-10-01', from: '16:00', to: '16:30', purpose: 'Design review', with: ['divya'], status: 'CANCELLED', reason: 'Moved to the Pune studio' },
+    { room: 'Board room', host: 'neha', date: '2026-09-28', from: '15:00', to: '16:00', purpose: 'Q2 engineering review prep', with: ['arjun'], status: 'COMPLETED' },
+  ];
+  for (const b of bookings) {
+    const host = E(b.host);
+    if (!host || !rooms[b.room]) continue;
+    await prisma.roomBooking.create({
+      data: { tenantId, roomId: rooms[b.room]!, hostEmployeeId: host, purpose: b.purpose, startAt: at(b.date, b.from), endAt: at(b.date, b.to), attendeeEmployeeIds: b.with.map(E).filter((x): x is string => !!x), status: b.status ?? 'BOOKED', cancelledByEmployeeId: b.status === 'CANCELLED' ? host : null, cancelReason: b.reason ?? null, createdAt: at('2026-09-25', '12:00') },
+    });
+  }
+  const visitors: { name: string; company: string | null; host: string; date: string; time: string; purpose: string; phone: string | null; email: string | null; status: 'PASS_SENT' | 'CHECKED_OUT'; code: string; inAt?: string; outAt?: string }[] = [
+    { name: 'Ritika Sen', company: null, host: 'kavya', date: '2026-09-25', time: '14:00', purpose: 'Interview — React developer', phone: '+919900112233', email: null, status: 'CHECKED_OUT', code: 'RS4K7P', inAt: '13:52', outAt: '15:10' },
+    { name: 'Amit Khanna', company: 'Nimbus', host: 'rohit', date: '2026-09-30', time: '10:45', purpose: 'Client visit', phone: '+919825012345', email: 'amit.khanna@nimbus.example', status: 'PASS_SENT', code: 'NK7Q4M' },
+  ];
+  for (const [i, v] of visitors.entries()) {
+    const host = E(v.host);
+    if (!host) continue;
+    const token = newPassToken();
+    const win = passWindow(v.date, v.time);
+    const link = `${(process.env.WEB_ORIGIN || 'http://localhost:5173').replace(/\/$/, '')}/api/v1/facility/pass/${token}`;
+    const day = new Date(`${v.date}T00:00:00Z`);
+    const text = `Hi ${v.name.split(' ')[0]}, your visitor pass for Lexisora Infotech on ${day.getUTCDate()} ${MONTH_LONG[day.getUTCMonth()]!.slice(0, 3)} at ${v.time}. Show this at reception: ${link} (pass code ${v.code}).`;
+    const sentAt = at(addDaysKey(v.date, -1), '17:30').toISOString();
+    const deliveries = [
+      ...(v.phone ? [{ channel: 'WHATSAPP', to: v.phone.replace('+', ''), status: 'LINK', link: waLink(v.phone, text), sentAt }] : []),
+      ...(v.email ? [{ channel: 'EMAIL', to: v.email, status: 'SENT', link: null, sentAt }] : []),
+    ];
+    await prisma.visitor.create({
+      data: {
+        tenantId, number: i + 1, name: v.name, company: v.company, phone: v.phone, email: v.email, hostEmployeeId: host, branchId: branch.Ahmedabad ?? null, visitDate: d(v.date), expectedTime: v.time, purpose: v.purpose, status: v.status,
+        checkedInAt: v.inAt ? at(v.date, v.inAt) : null, checkedOutAt: v.outAt ? at(v.date, v.outAt) : null, checkedInByEmployeeId: v.inAt ? E('kavya') : null,
+        passToken: token, shortCode: v.code, validFrom: win.validFrom, validUntil: win.validUntil, passRevokedAt: v.outAt ? at(v.date, v.outAt) : null, deliveries, createdAt: at(addDaysKey(v.date, -1), '17:25'),
+      },
+    });
+  }
+
+  // ── CCTV ─────────────────────────────────────────────────────────────────
+  const cams: { name: string; location: string; ip: string; online: boolean; branch: string }[] = [
+    { name: 'Main entrance', location: 'Ahmedabad HQ', ip: '10.0.0.21', online: true, branch: 'Ahmedabad' },
+    { name: 'Reception', location: 'Ahmedabad HQ', ip: '10.0.0.22', online: true, branch: 'Ahmedabad' },
+    { name: 'Dev floor', location: 'Ahmedabad HQ', ip: '10.0.0.23', online: true, branch: 'Ahmedabad' },
+    { name: 'Server room', location: 'Ahmedabad HQ', ip: '10.0.0.25', online: false, branch: 'Ahmedabad' },
+    { name: 'Parking', location: 'Ahmedabad HQ', ip: '10.0.0.26', online: true, branch: 'Ahmedabad' },
+    { name: 'Pune studio', location: 'Baner Road', ip: '10.1.0.21', online: true, branch: 'Pune' },
+  ];
+  const camIds: string[] = [];
+  for (const [i, c] of cams.entries()) {
+    const rtsp = `rtsp://nvr:Lx-Nvr-2026@${c.ip}:554/Streaming/Channels/101`;
+    const row = await prisma.camera.create({
+      data: { tenantId, branchId: branch[c.branch] ?? null, location: c.location, name: c.name, rtspUrlEnc: crypto.encrypt(rtsp), rtspMasked: maskRtsp(rtsp), gatewayPath: `t_${tenantId.slice(-6)}_cam${i + 1}`, status: c.online ? 'ONLINE' : 'OFFLINE', lastSeenAt: c.online ? at(TODAY, '09:39') : at(TODAY, '08:12'), lastError: c.online ? null : `No response from ${c.ip}:554`, sortOrder: i + 1, createdAt: at('2026-01-05', '10:00') },
+    });
+    camIds.push(row.id);
+  }
+  if (U('rohit') && camIds.length >= 4) {
+    await prisma.cameraViewSession.createMany({
+      data: [
+        { tenantId, cameraId: camIds[1]!, userId: U('rohit')!, startedAt: at('2026-09-28', '18:02'), lastBeatAt: at('2026-09-28', '18:06'), endedAt: at('2026-09-28', '18:06') },
+        { tenantId, cameraId: camIds[3]!, userId: U('rohit')!, startedAt: at(TODAY, '08:20'), lastBeatAt: at(TODAY, '08:22'), endedAt: at(TODAY, '08:22') },
+      ],
+    });
+  }
+
+  // ── Wellness ─────────────────────────────────────────────────────────────
+  type G = [who: string, date: string, game: GameKey, start: string, elapsedSec: number, hints?: number];
+  const plays: G[] = [
+    // Last week (21–27 Sep)
+    ['priya', '2026-09-25', 'queens', '13:10', 118], ['priya', '2026-09-26', 'sudoku6', '12:40', 205], ['priya', '2026-09-27', 'wordladder', '11:05', 64],
+    ['rahul', '2026-09-24', 'queens', '13:30', 96], ['rahul', '2026-09-25', 'sudoku6', '13:45', 240, 1], ['arjun', '2026-09-23', 'queens', '18:10', 150],
+    ['sneha', '2026-09-22', 'queens', '13:20', 88], ['sneha', '2026-09-24', 'sudoku6', '13:15', 170], ['karan', '2026-09-25', 'wordladder', '17:30', 52],
+    ['vikram', '2026-09-23', 'queens', '12:50', 101], ['kavya', '2026-09-24', 'wordladder', '14:00', 75],
+    // This week (28 Sep – 4 Oct; today is Tue 29 Sep)
+    ['priya', '2026-09-28', 'queens', '13:05', 95], ['priya', '2026-09-28', 'sudoku6', '13:12', 150],
+    ['rahul', '2026-09-28', 'queens', '13:40', 80], ['rahul', TODAY, 'queens', '09:05', 70], ['rahul', TODAY, 'wordladder', '09:12', 50],
+    ['arjun', '2026-09-28', 'sudoku6', '18:20', 200], ['isha', TODAY, 'queens', '09:20', 140], ['neha', '2026-09-28', 'wordladder', '19:00', 58],
+    ['sneha', '2026-09-28', 'queens', '13:25', 110], ['karan', TODAY, 'sudoku6', '09:30', 260, 1], ['vikram', '2026-09-28', 'queens', '12:55', 90], ['kavya', '2026-09-28', 'wordladder', '14:10', 66],
+  ];
+  const puzzles = new Map<string, { solution: unknown; par?: number; steps?: number }>();
+  const puzzleFor = (game: GameKey, date: string) => {
+    const k = `${game}:${date}`;
+    if (!puzzles.has(k)) {
+      if (game === 'queens') puzzles.set(k, { solution: generateQueens(tenantId, date).solution });
+      else if (game === 'sudoku6') puzzles.set(k, { solution: generateSudoku(tenantId, date).solution });
+      else {
+        const p = generateLadder(tenantId, date);
+        puzzles.set(k, { solution: p.example, par: p.par, steps: p.example.length - 1 });
+      }
+    }
+    return puzzles.get(k)!;
+  };
+  const sessions = plays
+    .filter(([who]) => E(who))
+    .map(([who, date, game, start, elapsedSec, hints = 0]) => {
+      const p = puzzleFor(game, date);
+      const startedAt = at(date, start);
+      return {
+        tenantId, employeeId: E(who)!, gameKey: game, puzzleDate: d(date), startedAt, startToken: randomBytes(18).toString('base64url'), completedAt: new Date(startedAt.getTime() + elapsedSec * 1000), elapsedSec, hintsUsed: hints,
+        moves: p.steps ?? null, revealed: false, points: scoreGame(game, { elapsedSec, hintsUsed: hints, revealed: false, steps: p.steps, par: p.par }), solution: p.solution as Prisma.InputJsonValue,
+      };
+    });
+  if (sessions.length) await prisma.gameSession.createMany({ data: sessions });
+}
+
+function addDaysKey(key: string, days: number): string {
+  return new Date(new Date(`${key}T00:00:00Z`).getTime() + days * 86_400_000).toISOString().slice(0, 10);
 }

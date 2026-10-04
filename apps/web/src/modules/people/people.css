@@ -34,3 +34,29 @@
   .pp-kv { grid-template-columns: minmax(0, 1fr); }
   .pp-kv > div:nth-child(odd) { border-bottom: 0; padding-bottom: 0; font-size: 12px; }
 }
+
+/* ID card designer */
+.pp-idc { display: grid; grid-template-columns: 200px minmax(0, 1fr) 220px; gap: 20px; align-items: start; }
+.pp-idc-kick { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--color-neutral-600); }
+.pp-idc-el { border: 1px solid var(--color-divider); border-radius: 4px; padding: 7px 10px; font: inherit; font-size: 13px; cursor: grab; background: var(--color-bg); color: inherit; text-align: left; display: flex; align-items: baseline; justify-content: space-between; }
+.pp-idc-el:hover, .pp-idc-tpl.on { border-color: var(--color-accent); }
+.pp-idc-stage { border: 1px solid var(--color-divider); border-radius: 4px; padding: 24px 16px; display: flex; flex-direction: column; align-items: center; gap: 14px; background: var(--color-neutral-100); min-width: 0; }
+.pp-idc-card { position: relative; flex: none; border: 1px solid var(--color-divider); background-color: #fff; background-size: cover; background-position: center; box-shadow: var(--shadow-md); overflow: hidden; color: #201f1d; outline: none; touch-action: none; }
+.pp-idc-card:focus-visible { box-shadow: var(--shadow-md), 0 0 0 2px var(--color-accent); }
+.pp-idc-node { position: absolute; cursor: move; user-select: none; touch-action: none; }
+.pp-idc-node:hover { outline: 1px dotted var(--color-neutral-500); }
+.pp-idc-node.sel { outline: 1px dashed var(--color-accent-700); outline-offset: 1px; }
+.pp-idc-handle { position: absolute; right: -4px; bottom: -4px; width: 9px; height: 9px; background: var(--color-accent); border: 1px solid #fff; cursor: nwse-resize; }
+.pp-idc-ph { width: 100%; height: 100%; border: 1px dashed #9a9696; display: grid; place-items: center; font-size: 11px; color: #9a9696; box-sizing: border-box; }
+.pp-idc-upload { border: 1px dashed var(--color-neutral-500); border-radius: 4px; height: 60px; display: grid; place-items: center; font-size: 12px; color: var(--color-neutral-600); cursor: pointer; }
+.pp-idc-upload:hover { border-color: var(--color-accent); color: var(--color-text); }
+@media (max-width: 1100px) { .pp-idc { grid-template-columns: minmax(0, 1fr); } }
+
+/* Visiting card */
+.pp-vc { display: flex; gap: 32px; flex-wrap: wrap; align-items: flex-start; }
+.pp-vc-card { width: 420px; max-width: 100%; aspect-ratio: 1.75; border: 1px solid var(--color-divider); border-radius: 8px; box-shadow: var(--shadow-md); padding: 26px; display: flex; flex-direction: column; justify-content: space-between; background: var(--color-bg); box-sizing: border-box; }
+.pp-vc-name { font-family: var(--font-heading); font-size: 28px; line-height: 1.1; }
+.pp-vc-title { font-size: 13px; color: var(--color-accent-700); margin-top: 2px; }
+.pp-vc-foot { font-size: 12.5px; border-top: 1px solid var(--color-divider); padding-top: 8px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px; }
+.pp-vc-actions { display: flex; flex-direction: column; gap: 8px; min-width: 220px; }
+@media (max-width: 480px) { .pp-vc-card { padding: 16px; } .pp-vc-name { font-size: 22px; } .pp-vc-actions { min-width: 0; width: 100%; } }

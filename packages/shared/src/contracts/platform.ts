@@ -834,6 +834,8 @@ export type SupportTicketRowDto = {
   assigneeName: string | null;
   slaDueAt: string;
   slaBreached: boolean;
+  /** When Lexisora first replied (the SLA clock stops); null while awaiting a first response. */
+  firstRespondedAt: string | null;
 };
 
 export type SupportListResponse = Paginated<SupportTicketRowDto> & {

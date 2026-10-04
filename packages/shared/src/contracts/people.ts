@@ -719,8 +719,8 @@ export const idCardElementSchema = z.object({
   text: z.string().max(200).optional().nullable(),
   xMm: z.number().min(-5).max(100),
   yMm: z.number().min(-5).max(100),
-  wMm: z.number().min(1).max(100),
-  hMm: z.number().min(1).max(100),
+  wMm: z.number().min(0.2).max(100),
+  hMm: z.number().min(0.2).max(100),
   font: z
     .object({
       size: z.number().min(4).max(40).default(10),

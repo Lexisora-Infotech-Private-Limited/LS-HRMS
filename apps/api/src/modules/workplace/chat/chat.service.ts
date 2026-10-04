@@ -20,7 +20,7 @@ import { PrismaService } from '../../../core/prisma/prisma.service';
 import { RealtimeGateway } from '../../../core/realtime/realtime.gateway';
 import { NotificationsService } from '../../../core/notifications/notifications.service';
 import { AuditService } from '../../../core/audit/audit.service';
-import { getContext, requireContext, type RequestContext } from '../../../core/context/request-context';
+import { currentTenantId, getContext, requireContext, type RequestContext } from '../../../core/context/request-context';
 import { hasPerm } from '../../../core/auth/decorators';
 import { AppError, badRequest, conflict, forbidden, notFound } from '../../../core/http/errors';
 import { SpineReader } from '../common/spine';
@@ -135,7 +135,7 @@ export class ChatService {
       const exists = await this.prisma.chatChannel.findFirst({ where: { linkedType: d.linkedType } });
       if (!exists) {
         await this.prisma.chatChannel
-          .create({ data: { kind: 'PUBLIC', name: d.name, topic: d.topic, linkedType: d.linkedType, postingPolicy: d.postingPolicy, sortOrder: d.sortOrder } })
+          .create({ data: { tenantId, kind: 'PUBLIC', name: d.name, topic: d.topic, linkedType: d.linkedType, postingPolicy: d.postingPolicy, sortOrder: d.sortOrder } })
           .catch(() => undefined);
       }
     }
@@ -167,7 +167,7 @@ export class ChatService {
       if (!should && m?.managedBy === 'AUDIENCE') remove.push(c.id);
     }
     if (add.length) {
-      await this.prisma.chatMember.createMany({ data: add.map((channelId) => ({ channelId, userId, managedBy: 'AUDIENCE' })), skipDuplicates: true });
+      await this.prisma.chatMember.createMany({ data: add.map((channelId) => ({ tenantId: currentTenantId(), channelId, userId, managedBy: 'AUDIENCE' })), skipDuplicates: true });
       for (const id of add) this.rooms([userId], id, true);
     }
     if (remove.length) {
@@ -270,15 +270,15 @@ export class ChatService {
     if (taken) throw conflict(`#${dto.name} already exists`, 'CHANNEL_EXISTS');
     if (dto.linkedType && !dto.linkedId) throw badRequest('Pick the department or project to link');
     const ch = await this.prisma.chatChannel.create({
-      data: { kind: dto.kind, name: dto.name, topic: dto.topic ?? null, createdByUserId: userId, linkedType: dto.linkedType ?? null, linkedId: dto.linkedType ? dto.linkedId : null },
+      data: { tenantId: currentTenantId(), kind: dto.kind, name: dto.name, topic: dto.topic ?? null, createdByUserId: userId, linkedType: dto.linkedType ?? null, linkedId: dto.linkedType ? dto.linkedId : null },
     });
     const audience = dto.linkedType ? await this.audienceUserIds(dto.linkedType, dto.linkedId ?? null) : [];
     const manual = [...new Set(dto.memberUserIds.filter((u) => u !== userId && !audience.includes(u)))];
     await this.prisma.chatMember.createMany({
       data: [
-        { channelId: ch.id, userId, role: 'OWNER', managedBy: 'MANUAL', lastReadSeq: 0 },
-        ...audience.filter((u) => u !== userId).map((u) => ({ channelId: ch.id, userId: u, managedBy: 'AUDIENCE' })),
-        ...manual.map((u) => ({ channelId: ch.id, userId: u, managedBy: 'MANUAL' })),
+        { tenantId: currentTenantId(), channelId: ch.id, userId, role: 'OWNER', managedBy: 'MANUAL', lastReadSeq: 0 },
+        ...audience.filter((u) => u !== userId).map((u) => ({ tenantId: currentTenantId(), channelId: ch.id, userId: u, managedBy: 'AUDIENCE' })),
+        ...manual.map((u) => ({ tenantId: currentTenantId(), channelId: ch.id, userId: u, managedBy: 'MANUAL' })),
       ],
       skipDuplicates: true,
     });
@@ -295,7 +295,7 @@ export class ChatService {
     const ch = await this.prisma.chatChannel.findFirst({ where: { id: channelId, archivedAt: null } });
     if (!ch) throw notFound('Channel');
     if (ch.kind !== 'PUBLIC') throw forbidden('This channel is private');
-    await this.prisma.chatMember.createMany({ data: [{ channelId, userId, managedBy: 'MANUAL', lastReadSeq: Math.max(0, ch.lastMessageSeq - 20) }], skipDuplicates: true });
+    await this.prisma.chatMember.createMany({ data: [{ tenantId: currentTenantId(), channelId, userId, managedBy: 'MANUAL', lastReadSeq: Math.max(0, ch.lastMessageSeq - 20) }], skipDuplicates: true });
     this.rooms([userId], channelId, true);
     return this.channelRow(channelId);
   }
@@ -334,7 +334,7 @@ export class ChatService {
     if (m.channel.kind === 'DM' || m.channel.kind === 'GROUP_DM') throw badRequest('Start a new group message to add people');
     if (!this.canManage(ctx, m)) throw forbidden('Only channel owners and HR/Admin can add members');
     const valid = await this.prisma.user.findMany({ where: { id: { in: userIds }, status: { not: 'DISABLED' } }, select: { id: true } });
-    await this.prisma.chatMember.createMany({ data: valid.map((u) => ({ channelId, userId: u.id, managedBy: 'MANUAL' })), skipDuplicates: true });
+    await this.prisma.chatMember.createMany({ data: valid.map((u) => ({ tenantId: currentTenantId(), channelId, userId: u.id, managedBy: 'MANUAL' })), skipDuplicates: true });
     this.rooms(valid.map((u) => u.id), channelId, true);
     this.realtime.toUsers(valid.map((u) => u.id), 'chat:channels', { reason: 'added', channelId });
     await this.audit.record({ action: 'chat.channel.member.add', entity: 'ChatChannel', entityId: channelId, meta: { userIds: valid.map((u) => u.id) } });
@@ -377,8 +377,8 @@ export class ChatService {
     let ch = await this.prisma.chatChannel.findFirst({ where: { dmKey: key } });
     if (!ch) {
       try {
-        ch = await this.prisma.chatChannel.create({ data: { kind: people.length > 2 ? 'GROUP_DM' : 'DM', dmKey: key, createdByUserId: userId } });
-        await this.prisma.chatMember.createMany({ data: people.map((u) => ({ channelId: ch!.id, userId: u, role: u === userId ? 'OWNER' : 'MEMBER' })), skipDuplicates: true });
+        ch = await this.prisma.chatChannel.create({ data: { tenantId: currentTenantId(), kind: people.length > 2 ? 'GROUP_DM' : 'DM', dmKey: key, createdByUserId: userId } });
+        await this.prisma.chatMember.createMany({ data: people.map((u) => ({ tenantId: currentTenantId(), channelId: ch!.id, userId: u, role: u === userId ? 'OWNER' : 'MEMBER' })), skipDuplicates: true });
       } catch (e) {
         if (!(e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002')) throw e;
         ch = await this.prisma.chatChannel.findFirst({ where: { dmKey: key } });
@@ -659,7 +659,7 @@ export class ChatService {
     const live = await this.prisma.chatCall.findFirst({ where: { channelId, endedAt: null } });
     if (live) return this.joinCall(live.id);
     const call = await this.prisma.chatCall.create({
-      data: { channelId, kind, roomName: `lx-${ctx.tenantId.slice(-6)}-${channelId.slice(-8)}-${Date.now().toString(36)}`, startedByUserId: userId, participantIds: [userId], maxParticipants: 1 },
+      data: { tenantId: currentTenantId(), channelId, kind, roomName: `lx-${ctx.tenantId.slice(-6)}-${channelId.slice(-8)}-${Date.now().toString(36)}`, startedByUserId: userId, participantIds: [userId], maxParticipants: 1 },
     });
     this.realtime.toRoom(`ch:${channelId}`, 'call:ring', { callId: call.id, channelId, channelLabel: row.label, kind, from: ctx.userName ?? 'Someone', fromUserId: userId });
     await this.audit.record({ action: 'chat.call.start', entity: 'ChatCall', entityId: call.id, meta: { channelId, kind, provider: this.rtc.name } });

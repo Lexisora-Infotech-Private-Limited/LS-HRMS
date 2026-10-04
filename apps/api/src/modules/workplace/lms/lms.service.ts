@@ -19,7 +19,7 @@ import { PrismaService } from '../../../core/prisma/prisma.service';
 import { NotificationsService } from '../../../core/notifications/notifications.service';
 import { AuditService } from '../../../core/audit/audit.service';
 import { EventsService } from '../../../core/registry/events.service';
-import { getContext, requireContext } from '../../../core/context/request-context';
+import { currentTenantId, getContext, requireContext } from '../../../core/context/request-context';
 import { hasPerm } from '../../../core/auth/decorators';
 import { AppError, badRequest, forbidden, notFound } from '../../../core/http/errors';
 import { AudienceService } from '../common/audience';
@@ -147,7 +147,7 @@ export class LmsService {
     const me = this.meEmployee();
     const course = await this.prisma.course.findFirst({ where: { id: courseId, status: 'PUBLISHED' } });
     if (!course) throw notFound('Course');
-    await this.prisma.enrollment.createMany({ data: [{ courseId, employeeId: me, source: 'SELF', required: false }], skipDuplicates: true });
+    await this.prisma.enrollment.createMany({ data: [{ tenantId: currentTenantId(), courseId, employeeId: me, source: 'SELF', required: false }], skipDuplicates: true });
     await this.audit.record({ action: 'lms.enroll', entity: 'Course', entityId: courseId });
     return this.detail(courseId);
   }
@@ -159,7 +159,7 @@ export class LmsService {
     let enr = await this.prisma.enrollment.findFirst({ where: { courseId: lesson.courseId, employeeId: me } });
     if (!enr) {
       if (lesson.course.status !== 'PUBLISHED') throw forbidden('Enroll in this course first');
-      enr = await this.prisma.enrollment.create({ data: { courseId: lesson.courseId, employeeId: me, source: 'SELF', required: false } });
+      enr = await this.prisma.enrollment.create({ data: { tenantId: currentTenantId(), courseId: lesson.courseId, employeeId: me, source: 'SELF', required: false } });
     }
     return { lesson, course: lesson.course as CourseFull, enr };
   }
@@ -290,14 +290,14 @@ export class LmsService {
     const ctx = requireContext();
     if (!this.canManage()) throw forbidden();
     const course = await this.prisma.course.create({
-      data: { title: dto.title, description: dto.description ?? null, category: dto.category, certificateOnCompletion: dto.certificateOnCompletion, createdByEmployeeId: ctx.employeeId ?? null, status: 'DRAFT' },
+      data: { tenantId: currentTenantId(), title: dto.title, description: dto.description ?? null, category: dto.category, certificateOnCompletion: dto.certificateOnCompletion, createdByEmployeeId: ctx.employeeId ?? null, status: 'DRAFT' },
     });
     if (dto.videoFileId || dto.lessonTitle) {
       const file = dto.videoFileId ? await this.prisma.fileObject.findFirst({ where: { id: dto.videoFileId }, select: { mime: true, filename: true } }) : null;
       if (dto.videoFileId && !file) throw badRequest('Upload the video again');
       const isDoc = file?.mime === 'application/pdf';
       await this.prisma.lesson.create({
-        data: { courseId: course.id, order: 1, title: dto.lessonTitle ?? (file ? file.filename.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ') : 'Lesson 1'), type: isDoc ? 'DOCUMENT' : 'VIDEO', fileId: dto.videoFileId ?? null, durationSec: dto.durationMin * 60 },
+        data: { tenantId: currentTenantId(), courseId: course.id, order: 1, title: dto.lessonTitle ?? (file ? file.filename.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ') : 'Lesson 1'), type: isDoc ? 'DOCUMENT' : 'VIDEO', fileId: dto.videoFileId ?? null, durationSec: dto.durationMin * 60 },
       });
       await this.refreshDuration(course.id);
     }
@@ -326,7 +326,7 @@ export class LmsService {
     const c = await this.assertManage(courseId);
     if (dto.type === 'VIDEO' && !dto.fileId && !dto.content) throw badRequest('Upload a video or add the lesson notes');
     const order = (c.lessons.reduce((m, l) => Math.max(m, l.order), 0) || 0) + 1;
-    await this.prisma.lesson.create({ data: { courseId, order, title: dto.title, type: dto.type, fileId: dto.fileId ?? null, durationSec: dto.durationMin * 60, content: dto.content ?? null } });
+    await this.prisma.lesson.create({ data: { tenantId: currentTenantId(), courseId, order, title: dto.title, type: dto.type, fileId: dto.fileId ?? null, durationSec: dto.durationMin * 60, content: dto.content ?? null } });
     await this.refreshDuration(courseId);
     // In-progress learners see the new lesson; their percentage is recomputed on the next heartbeat.
     await this.audit.record({ action: 'lms.lesson.add', entity: 'Course', entityId: courseId, meta: { title: dto.title } });
@@ -387,7 +387,7 @@ export class LmsService {
     const c = await this.assertManage(courseId);
     const [rule] = await this.audience.withLabels([{ type: dto.audienceType === 'NEW_JOINERS' ? 'ALL' : dto.audienceType, refId: dto.refId ?? null, label: dto.label ?? null }]);
     const label = dto.audienceType === 'NEW_JOINERS' ? 'New joiners' : dto.audienceType === 'ALL' ? 'All employees' : dto.audienceType === 'EMPLOYMENT_TYPE' ? (dto.label ?? (dto.refId === 'INTERN' ? 'Interns' : (dto.refId ?? 'Employment type'))) : (rule?.label ?? dto.label ?? null);
-    const a = await this.prisma.courseAssignment.create({ data: { courseId, audienceType: dto.audienceType, refId: dto.refId ?? null, label, required: dto.required, dueInDays: dto.dueInDays ?? null } });
+    const a = await this.prisma.courseAssignment.create({ data: { tenantId: currentTenantId(), courseId, audienceType: dto.audienceType, refId: dto.refId ?? null, label, required: dto.required, dueInDays: dto.dueInDays ?? null } });
     if (record) await this.audit.record({ action: 'lms.assignment.create', entity: 'Course', entityId: courseId, meta: { audienceType: dto.audienceType, label } });
     if (c.status === 'PUBLISHED') await this.materialize(a, true);
     return this.detail(courseId);
@@ -425,7 +425,7 @@ export class LmsService {
       const dueAt = days ? dueAtFor(base, days) : null;
       const e = have.get(empId);
       if (!e) {
-        await this.prisma.enrollment.create({ data: { courseId: a.courseId, employeeId: empId, source: 'ASSIGNED', required: a.required, dueAt, assignmentId: a.id } }).catch(() => undefined);
+        await this.prisma.enrollment.create({ data: { tenantId: currentTenantId(), courseId: a.courseId, employeeId: empId, source: 'ASSIGNED', required: a.required, dueAt, assignmentId: a.id } }).catch(() => undefined);
         fresh.push(empId);
       } else if (e.source === 'SELF' && e.status !== 'COMPLETED') {
         await this.prisma.enrollment.update({ where: { id: e.id }, data: { source: 'ASSIGNED', required: a.required || e.required, dueAt: e.dueAt ?? dueAt, assignmentId: a.id } });
@@ -449,7 +449,7 @@ export class LmsService {
       if (!match) continue;
       const days = a.dueInDays ?? (a.course.category === 'ONBOARDING' ? 14 : null);
       const dueAt = days ? dueAtFor(a.audienceType === 'NEW_JOINERS' ? (emp.joiningDate ?? new Date()) : new Date(), days) : null;
-      const r = await this.prisma.enrollment.createMany({ data: [{ courseId: a.courseId, employeeId, source: 'ASSIGNED', required: a.required, dueAt, assignmentId: a.id }], skipDuplicates: true });
+      const r = await this.prisma.enrollment.createMany({ data: [{ tenantId: currentTenantId(), courseId: a.courseId, employeeId, source: 'ASSIGNED', required: a.required, dueAt, assignmentId: a.id }], skipDuplicates: true });
       n += r.count;
     }
     return n;

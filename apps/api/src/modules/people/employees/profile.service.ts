@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import {
+  formatMonthYear,
   type ProfileAssetRow,
   type ProfileAttendanceRow,
   type ProfileDocumentRow,
@@ -216,7 +217,7 @@ export class ProfileService {
     const by = new Map<string, ProfileAttendanceRow>();
     for (const d of days) {
       const key = d.date.toISOString().slice(0, 7);
-      const r = by.get(key) ?? { month: new Intl.DateTimeFormat('en-IN', { month: 'short', year: 'numeric', timeZone: 'UTC' }).format(d.date), present: 0, leave: 0, idleMinutes: 0, late: 0 };
+      const r = by.get(key) ?? { month: formatMonthYear(d.date), present: 0, leave: 0, idleMinutes: 0, late: 0 };
       r.present += d.presentFraction ?? 0;
       r.leave += d.leaveFraction ?? 0;
       r.idleMinutes += d.idleMinutes ?? 0;

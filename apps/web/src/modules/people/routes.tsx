@@ -1,7 +1,6 @@
 import { lazy, Suspense, type ReactNode } from 'react';
 import type { RouteObject } from 'react-router-dom';
 import { guard } from '@/layout/Guard';
-import { Placeholder } from '@/components/Placeholder';
 import { Loading } from '@/components/ui';
 
 const EmployeesPage = lazy(() => import('./pages/EmployeesPage'));
@@ -9,6 +8,15 @@ const MastersPage = lazy(() => import('./pages/MastersPage'));
 const ProfilePage = lazy(() => import('./pages/ProfilePage'));
 const OnboardingPage = lazy(() => import('./pages/OnboardingPage'));
 const VaultPage = lazy(() => import('./pages/VaultPage'));
+const JobsPage = lazy(() => import('./pages/JobsPage'));
+const CandidatesPage = lazy(() => import('./pages/CandidatesPage'));
+const InterviewsPage = lazy(() => import('./pages/InterviewsPage'));
+const AppraisalsPage = lazy(() => import('./pages/AppraisalsPage'));
+const ReviewPage = lazy(() => import('./pages/ReviewPage'));
+const AssetsPage = lazy(() => import('./pages/AssetsPage'));
+const WelcomeKitsPage = lazy(() => import('./pages/WelcomeKitsPage'));
+const IdCardPage = lazy(() => import('./pages/IdCardPage'));
+const VisitingCardPage = lazy(() => import('./pages/VisitingCardPage'));
 
 const s = (el: ReactNode) => <Suspense fallback={<Loading />}>{el}</Suspense>;
 
@@ -21,13 +29,17 @@ export const routes: RouteObject[] = [
   { path: 'masters', element: guard('masters.manage', s(<MastersPage />)) },
   { path: 'onboarding', element: guard(['onboarding.self', 'onboarding.manage'], s(<OnboardingPage />)) },
   { path: 'vault', element: guard('vault.self', s(<VaultPage />)) },
-  // Deferred to the next release (see people spec): still reachable, clearly labelled.
-  { path: 'appraisals', element: guard('appraisal.view', <Placeholder title='Appraisals' screen='appraisal' />) },
-  { path: 'jobs', element: guard('jobs.manage', <Placeholder title='Jobs' screen='jobs' />) },
-  { path: 'candidates', element: guard('candidates.view', <Placeholder title='Candidates & interview vault' screen='candidates' />) },
-  { path: 'interviews', element: guard('interviews.view', <Placeholder title='Interviews' screen='interviews' />) },
-  { path: 'id-card', element: guard('idcard.manage', <Placeholder title='ID card designer' screen='idcard' />) },
-  { path: 'visiting-card', element: guard('vcard.self', <Placeholder title='Digital visiting card' screen='vcard' />) },
-  { path: 'assets', element: guard('assets.manage', <Placeholder title='Assets & inventory' screen='assets' />) },
-  { path: 'welcome-kits', element: guard('welcomekit.manage', <Placeholder title='Welcome kits' screen='welcomekit' />) },
+  // Recruitment
+  { path: 'jobs', element: guard('jobs.manage', s(<JobsPage />)) },
+  { path: 'candidates', element: guard(['candidates.view', 'candidates.manage'], s(<CandidatesPage />)) },
+  // Panelists see their own interviews even without the nav entry (audit G2); the API scopes the list.
+  { path: 'interviews', element: guard(['interviews.view', 'dashboard.view'], s(<InterviewsPage />)) },
+  // Everyone has "My reviews" (self review / reviews owed as a manager); cycles & templates need appraisal.view.
+  { path: 'appraisals', element: guard(['appraisal.view', 'dashboard.view'], s(<AppraisalsPage />)) },
+  { path: 'appraisals/review/:id', element: guard(['appraisal.view', 'dashboard.view'], s(<ReviewPage />)) },
+  // Workplace (people-owned)
+  { path: 'assets', element: guard('assets.manage', s(<AssetsPage />)) },
+  { path: 'welcome-kits', element: guard('welcomekit.manage', s(<WelcomeKitsPage />)) },
+  { path: 'id-card', element: guard('idcard.manage', s(<IdCardPage />)) },
+  { path: 'visiting-card', element: guard('vcard.self', s(<VisitingCardPage />)) },
 ];
