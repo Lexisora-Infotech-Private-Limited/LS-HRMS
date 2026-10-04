@@ -5,7 +5,9 @@ function nextWeekday(offsetDays: number) {
   const d = new Date();
   d.setDate(d.getDate() + offsetDays);
   while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1);
-  return d.toISOString().slice(0, 10);
+  // Local (IST) calendar date — toISOString() would shift to the previous day after midnight IST.
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 /** Flow 04 — Time off: check balance, apply, manager approves. */
