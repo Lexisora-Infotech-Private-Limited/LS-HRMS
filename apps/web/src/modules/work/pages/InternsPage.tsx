@@ -28,7 +28,13 @@ export default function InternsPage() {
       {mentorView && c.isIntern && (
         <Tabs<Tab> value={current} onChange={setTab} tabs={[{ value: 'sheets', label: 'Intern task sheets' }, { value: 'mine', label: 'My task sheet' }]} />
       )}
-      {current === 'sheets' && mentorView ? <MentorView today={c.today} canAssign={c.canAssign} mentees={c.mentees} canViewAll={c.canViewAll} /> : c.isIntern ? <MySheet today={c.today} /> : <NotIntern />}
+      {current === 'sheets' && mentorView ? (
+        <MentorView today={c.today} lastSheetDate={c.lastSheetDate} canAssign={c.canAssign} mentees={c.mentees} canViewAll={c.canViewAll} />
+      ) : c.isIntern ? (
+        <MySheet today={c.today} lastSheetDate={c.lastSheetDate} />
+      ) : (
+        <NotIntern />
+      )}
     </div>
   );
 }
@@ -42,7 +48,7 @@ function NotIntern() {
   );
 }
 
-function MentorView({ today, canAssign, mentees, canViewAll }: { today: string; canAssign: boolean; mentees: { value: string; label: string }[]; canViewAll: boolean }) {
+function MentorView({ today, lastSheetDate, canAssign, mentees, canViewAll }: { today: string; lastSheetDate: string | null; canAssign: boolean; mentees: { value: string; label: string }[]; canViewAll: boolean }) {
   const [date, setDate] = useState(today);
   const [assigning, setAssigning] = useState(false);
   const [openIntern, setOpenIntern] = useState<string | null>(null);
@@ -67,6 +73,11 @@ function MentorView({ today, canAssign, mentees, canViewAll }: { today: string; 
         <span style={{ fontSize: 13 }}>Day:</span>
         <input className="input" type="date" value={date} onChange={(e) => e.target.value && setDate(e.target.value)} style={{ width: 'auto' }} />
         {date !== today && <button className="btn btn-ghost btn-sm" onClick={() => setDate(today)}>Today</button>}
+        {date === today && lastSheetDate && (
+          <button className="btn btn-ghost btn-sm" onClick={() => setDate(lastSheetDate)} title="No tasks assigned for today yet">
+            Last sheet · {new Date(`${lastSheetDate}T00:00:00Z`).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })}
+          </button>
+        )}
         <span className="spacer" />
         <span className="faint" style={{ fontSize: 12.5 }}>{canViewAll ? 'All interns' : 'Your mentees'} · open a row for the week sheet and scoring</span>
       </div>
@@ -85,7 +96,7 @@ function MentorView({ today, canAssign, mentees, canViewAll }: { today: string; 
             { name: 'title', label: 'Task', type: 'area', span: 2, required: true },
             { name: 'estimatedHours', label: 'Estimated hours', type: 'number' },
           ]}
-          initial={{ date }}
+          initial={{ date: date < today ? today : date }}
           onSubmit={(v) => assign.mutateAsync({ internEmployeeId: v.internEmployeeId, date: v.date, title: v.title, estimatedHours: v.estimatedHours ?? null })}
           onClose={() => setAssigning(false)}
         />
@@ -96,7 +107,7 @@ function MentorView({ today, canAssign, mentees, canViewAll }: { today: string; 
 }
 
 /** The intern's own dashboard section: today's tasks + this week. */
-function MySheet({ today }: { today: string }) {
+function MySheet({ today, lastSheetDate }: { today: string; lastSheetDate: string | null }) {
   const sheet = useQuery({ queryKey: [...workKeys.interns, 'mine', today], queryFn: () => workApi.internSheet({ date: today }) });
   const me = sheet.data?.[0];
   return (
@@ -109,7 +120,7 @@ function MySheet({ today }: { today: string }) {
       ) : !me ? (
         <Empty>No task sheet found.</Empty>
       ) : (
-        <WeekView internId={me.internEmployeeId} startDate={today} />
+        <WeekView internId={me.internEmployeeId} startDate={lastSheetDate ?? today} />
       )}
     </>
   );

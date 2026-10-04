@@ -96,10 +96,11 @@ export function finSplitInputGst(totalPaise: number, supply: FinSupplyKind): { c
 /** Minutes → "320" or "186.5" hours for the invoice table. */
 export const finHoursLabel = (minutes: number): string => String(+(minutes / 60).toFixed(2));
 
-/** "2026-09" → "Sep 2026". */
+const FIN_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** "2026-09" → "Sep 2026" (fixed names: newer ICU builds print "Sept" for en-GB). */
 export function finMonthLabel(month: string): string {
   const [y, m] = month.split('-').map(Number);
-  return new Date(Date.UTC(y!, (m ?? 1) - 1, 1)).toLocaleString('en-GB', { month: 'short', year: 'numeric', timeZone: 'UTC' });
+  return `${FIN_MONTHS[((m ?? 1) - 1 + 12) % 12]} ${y}`;
 }
 
 /** KPI money: ₹ 42.6 L / ₹ 1.84 L / ₹ 28,140. */
@@ -396,7 +397,8 @@ export type FinInvoicePreview = {
 export type FinInvoiceFormOptions = {
   sellerStateCode: string | null;
   clients: { id: string; name: string; stateCode: string | null; gstin: string | null; billingEmails: string[]; defaultRatePaise: number | null; paymentTermsDays: number }[];
-  projects: { id: string; clientId: string; name: string; ratePaise: number | null; status: string }[];
+  /** `unbilled`: months (newest first, last 6) with approved billable hours not yet on an invoice. */
+  projects: { id: string; clientId: string; name: string; ratePaise: number | null; status: string; unbilled: { period: string; minutes: number }[] }[];
   periods: { value: string; label: string }[];
 };
 export const finCreateCategorySchema = z.object({

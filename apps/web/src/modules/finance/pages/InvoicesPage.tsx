@@ -152,26 +152,34 @@ function InvoiceForm({ edit, onClose, onSaved }: { edit?: FinInvoiceDetail; onCl
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState<'draft' | 'issue_and_email' | null>(null);
+  const [periodTouched, setPeriodTouched] = useState(!!edit);
 
   const projectsOf = (cid: string) => o?.projects.filter((p) => p.clientId === cid) ?? [];
+  /** Default period = the newest month with approved, unbilled hours (spec: "months that have unbilled approved hours"). */
+  const pickProject = (pid: string) => {
+    setProjectId(pid);
+    if (!periodTouched) setPeriod(o?.projects.find((p) => p.id === pid)?.unbilled[0]?.period ?? monthKeyNow());
+  };
   const pickClient = (c: Client | undefined) => {
     if (!c) return;
     setClientId(c.id);
-    setProjectId(projectsOf(c.id)[0]?.id ?? '');
+    const withHours = projectsOf(c.id).find((p) => p.unbilled.length) ?? projectsOf(c.id)[0];
+    pickProject(withHours?.id ?? '');
     setEmailTo(c.billingEmails);
     setTouched({ hours: false, rate: false });
     setOverride(null);
     setOverrideReason('');
   };
-  // First open: default to the first client with a billable project.
+  // First open: default to the first client with unbilled hours (else with a billable project).
   useEffect(() => {
     if (!o || clientId) return;
-    pickClient(o.clients.find((c) => o.projects.some((p) => p.clientId === c.id)) ?? o.clients[0]);
+    pickClient(o.clients.find((c) => o.projects.some((p) => p.clientId === c.id && p.unbilled.length)) ?? o.clients.find((c) => o.projects.some((p) => p.clientId === c.id)) ?? o.clients[0]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [o]);
 
   const client = o?.clients.find((c) => c.id === clientId);
   const projects = projectsOf(clientId);
+  const unbilledOf = (period: string) => projects.find((p) => p.id === projectId)?.unbilled.find((u) => u.period === period)?.minutes ?? 0;
   const previewQuery = { clientId, projectId, period, ...(edit ? { excludeInvoiceId: edit.id } : {}) };
   const preview = useQuery({
     queryKey: finKeys.invoicePreview(previewQuery),
@@ -295,7 +303,7 @@ function InvoiceForm({ edit, onClose, onSaved }: { edit?: FinInvoiceDetail; onCl
               className="input"
               value={projectId}
               onChange={(e) => {
-                setProjectId(e.target.value);
+                pickProject(e.target.value);
                 setTouched({ hours: false, rate: false });
               }}
             >
@@ -312,11 +320,15 @@ function InvoiceForm({ edit, onClose, onSaved }: { edit?: FinInvoiceDetail; onCl
               value={period}
               onChange={(e) => {
                 setPeriod(e.target.value);
+                setPeriodTouched(true);
                 setTouched((t) => ({ ...t, hours: false }));
               }}
             >
               {(o.periods.some((p) => p.value === period) ? o.periods : [{ value: period, label: finMonthLabel(period) }, ...o.periods]).map((p) => (
-                <option key={p.value} value={p.value}>{p.label}</option>
+                <option key={p.value} value={p.value}>
+                  {p.label}
+                  {projectId && unbilledOf(p.value) ? ` · ${finHoursLabel(unbilledOf(p.value))} h unbilled` : ''}
+                </option>
               ))}
             </select>
           </Field>

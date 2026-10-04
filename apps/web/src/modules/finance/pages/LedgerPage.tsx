@@ -23,7 +23,7 @@ import { useCan } from '@/lib/auth';
 import { useAction } from '@/lib/query';
 import { useToast } from '@/lib/toast';
 import { FIN_ALL, finApi, finKeys, fyStartKey, monthKeyNow, rupeesToPaise, todayKey } from '../api';
-import { amt, drCr, errorText, Field, fieldErrors, inr2, MonthSelect, ReasonDialog, useParamState } from '../components';
+import { amt, drCr, errorText, Field, fieldErrors, inr2, MonthSelect, ReasonDialog, useFallbackMonth, useParamState, useReportEmpty } from '../components';
 import '../finance.css';
 
 type Tab = 'daybook' | 'income' | 'expenses' | 'hr' | 'trial';
@@ -37,7 +37,7 @@ export default function LedgerPage() {
   const full = can('ledger.manage');
   const tabs: Tab[] = full ? ['daybook', 'income', 'expenses', 'hr', 'trial'] : ['hr'];
   const [tab, setTab] = useState<Tab>(full ? 'daybook' : 'hr');
-  const [month, setMonth] = useState(monthKeyNow());
+  const [month, setMonth, reportEmpty] = useFallbackMonth();
   const [voucherId, setVoucherId] = useParamState('voucher');
   const [statementId, setStatementId] = useState<string | null>(null);
   const [newVoucher, setNewVoucher] = useState(false);
@@ -47,6 +47,7 @@ export default function LedgerPage() {
   const kpis = useQuery({ queryKey: finKeys.ledgerKpis(month), queryFn: () => finApi.ledgerKpis(month), enabled: full });
   const exportCsv = useAction(() => (tab === 'trial' ? finApi.exportLedger('trial', range.from || fyStartKey(todayKey()), range.to || todayKey()) : finApi.exportLedger('daybook', range.from || undefined, range.to || undefined)), {});
   const k = kpis.data;
+  useReportEmpty(reportEmpty, full ? (k ? k.incomePaise === 0 && k.expensesPaise === 0 : undefined) : false);
   const short = (k?.monthLabel ?? '').slice(0, 3);
   const current = month === monthKeyNow();
 

@@ -17,6 +17,7 @@ import {
   formatEmpCode,
   idCardMissing,
   incompleteSteps,
+  interviewStatusAfterResult,
   isValidAadhaar,
   isValidIfsc,
   isValidPan,
@@ -31,6 +32,7 @@ import {
   parseFlexibleDate,
   resultFromRecommendation,
   slugify,
+  stockKey,
   suggestCycleName,
   suggestResult,
   templateWeightsValid,
@@ -300,6 +302,24 @@ describe('recruitment', () => {
     expect(canMoveStage('SCREENING', 'INTERVIEW')).toBe(true);
     expect(canMoveStage('HIRED', 'REJECTED')).toBe(false);
     expect(canMoveStage('REJECTED', 'SCREENING')).toBe(true);
+    // Hiring is only reachable from an offer; a declined offer can be re-screened, never hired directly.
+    expect(canMoveStage('OFFERED', 'HIRED')).toBe(true);
+    expect(canMoveStage('SCREENING', 'HIRED')).toBe(false);
+    expect(canMoveStage('OFFER_DECLINED', 'HIRED')).toBe(false);
+    expect(canMoveStage('OFFER_DECLINED', 'SCREENING')).toBe(true);
+  });
+  it('recording a result completes the interview; reset re-opens it', () => {
+    expect(interviewStatusAfterResult('SCHEDULED', 'SELECTED')).toBe('COMPLETED');
+    expect(interviewStatusAfterResult('SCHEDULED', 'ON_HOLD')).toBe('COMPLETED');
+    expect(interviewStatusAfterResult('COMPLETED', 'PENDING')).toBe('SCHEDULED');
+    expect(interviewStatusAfterResult('SCHEDULED', 'PENDING')).toBe('SCHEDULED');
+    expect(interviewStatusAfterResult('NO_SHOW', 'PENDING')).toBe('NO_SHOW');
+  });
+  it('scores: overall from 1–5 ratings is out of 10; application score averages panel overalls', () => {
+    expect(overallFromRatings([4, 4, 4])).toBe(8);
+    expect(overallFromRatings([null, undefined])).toBeNull();
+    expect(applicationScore([8.2, 7.0])).toBe(7.6);
+    expect(suggestResult([null, undefined])).toBeNull();
   });
   it('builds an RFC 5545 invite in IST', () => {
     const start = istDateTime('2026-09-30', '11:00');
@@ -338,11 +358,23 @@ describe('assets, kits, cards', () => {
     expect(canAssetMove('ASSIGNED', 'ASSIGNED')).toBe(false);
     expect(canAssetMove('RETURNED', 'UNDER_REPAIR')).toBe(true);
     expect(canAssetMove('LOST', 'IN_STOCK')).toBe(false);
+    // add → assign → return (damaged) → repair → back in stock → re-assign
+    const path = ['IN_STOCK', 'ASSIGNED', 'RETURNED', 'UNDER_REPAIR', 'IN_STOCK', 'ASSIGNED'];
+    for (let i = 1; i < path.length; i++) expect(canAssetMove(path[i - 1]!, path[i]!)).toBe(true);
+    // an assigned asset must be returned before it can be retired
+    expect(canAssetMove('ASSIGNED', 'RETIRED')).toBe(false);
+    expect(canAssetMove('RETIRED', 'ASSIGNED')).toBe(false);
   });
   it('kit status from lines', () => {
     expect(kitStatus([{ issued: false }, { issued: false }])).toBe('PENDING');
     expect(kitStatus([{ issued: true }, { issued: false }])).toBe('PARTIAL');
     expect(kitStatus([{ issued: true }, { issued: true }])).toBe('ISSUED');
+    expect(kitStatus([])).toBe('PENDING');
+  });
+  it('kit stock is kept per size for sized items', () => {
+    expect(stockKey(['S', 'M', 'L'], 'M')).toBe('M');
+    expect(stockKey([], null)).toBe('_');
+    expect(stockKey(['S', 'M'], null)).toBe('');
   });
   it('ID card completeness', () => {
     expect(idCardMissing({ fullName: 'Meera Iyer', designation: 'QA Engineer' }, true)).toEqual(['employee.photo', 'employee.blood_group']);

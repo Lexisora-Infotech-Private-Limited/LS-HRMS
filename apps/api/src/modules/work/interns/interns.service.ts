@@ -10,7 +10,7 @@ import { currentTenantId, requireContext, runAsTenant } from '../../../core/cont
 import { hasPerm } from '../../../core/auth/decorators';
 import { AppError, forbidden, notFound } from '../../../core/http/errors';
 import { WorkMetricsService } from '../projects/work-metrics.service';
-import { addDays, internDayStatus, meanScore, nextWorkingDay, weekStartOf, type InternStatus } from '../work.rules';
+import { addDays, internAccess, internDayStatus, internForbiddenFields, meanScore, nextWorkingDay, weekStartOf, type InternStatus } from '../work.rules';
 import { dateKey, dateOnly, hoursOf, istMinuteOfDay, todayKey } from '../work.util';
 
 type Me = { employeeId: string | null; name: string; userId: string | null; viewAll: boolean; canAssign: boolean };
@@ -63,10 +63,9 @@ export class InternsService {
   private async requireIntern(m: Me, internId: string): Promise<Intern & { isSelf: boolean; isMentor: boolean }> {
     const e = await this.prisma.employee.findFirst({ where: { id: internId }, select: this.internSelect });
     if (!e) throw notFound('Intern');
-    const isSelf = e.id === m.employeeId;
-    const isMentor = !!m.employeeId && e.managerId === m.employeeId;
-    if (!isSelf && !isMentor && !m.viewAll) throw notFound('Intern');
-    return { ...e, isSelf, isMentor };
+    const a = internAccess({ viewerEmployeeId: m.employeeId, internId: e.id, internManagerId: e.managerId, viewAll: m.viewAll });
+    if (!a.canView) throw notFound('Intern');
+    return { ...e, isSelf: a.isSelf, isMentor: a.isMentor };
   }
 
   /** Linked-task hours: tracked minutes on the board task for that intern and date. */
@@ -132,13 +131,19 @@ export class InternsService {
     const self = m.employeeId ? await this.prisma.employee.findFirst({ where: { id: m.employeeId }, select: { employmentType: true } }) : null;
     const interns = await this.visibleInterns(m);
     const mentees = interns.filter((i) => i.id !== m.employeeId && (m.viewAll || i.managerId === m.employeeId));
+    // Demo/after-hours convenience: when today's sheet is empty, offer the most recent day with tasks.
+    const today = todayKey();
+    const ids = interns.map((i) => i.id);
+    const hasToday = ids.length ? await this.prisma.internTask.count({ where: { internEmployeeId: { in: ids }, date: dateOnly(today) } }) : 0;
+    const last = ids.length && !hasToday ? await this.prisma.internTask.findFirst({ where: { internEmployeeId: { in: ids }, date: { lt: dateOnly(today) } }, orderBy: { date: 'desc' }, select: { date: true } }) : null;
     return {
+      lastSheetDate: last ? dateKey(last.date) : null,
       isIntern: self?.employmentType === 'INTERN',
       isMentor: mentees.some((i) => i.managerId === m.employeeId),
       canAssign: mentees.length > 0,
       canViewAll: m.viewAll,
       mentees: mentees.map((i) => ({ value: i.id, label: i.fullName })),
-      today: todayKey(),
+      today,
     };
   }
 
@@ -218,11 +223,10 @@ export class InternsService {
   async update(id: string, input: InternTaskUpdateInput) {
     const { m, t, intern } = await this.requireTask(id);
     const mentorSide = intern.isMentor || m.viewAll;
-    const selfFields = ['status', 'hours', 'internNote'];
     const keys = Object.keys(input).filter((k) => (input as any)[k] !== undefined);
     if (!mentorSide) {
       if (!intern.isSelf) throw forbidden();
-      const bad = keys.filter((k) => !selfFields.includes(k));
+      const bad = internForbiddenFields(keys);
       if (bad.length) throw forbidden('Only your mentor can change the task, date or score');
       if (dateKey(t.date)! < addDays(todayKey(), -7)) throw new AppError(423, 'SHEET_LOCKED', 'Tasks older than a week are read-only');
     }

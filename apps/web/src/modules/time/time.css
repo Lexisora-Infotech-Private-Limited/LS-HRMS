@@ -59,3 +59,23 @@
   .time-appr { grid-template-columns: 1fr; }
   .time-shots { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ID card compliance: check mode */
+.time-idc { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 22px; align-items: start; }
+.time-idc-pending { max-height: 460px; overflow-y: auto; }
+.time-idc .field { display: flex; flex-direction: column; gap: 4px; }
+
+/* Admin panels (corrections, period locks, biometric) */
+.time-panel { display: flex; flex-direction: column; gap: 16px; }
+.time-check-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+.time-check-list .it { border: 1px solid var(--color-divider); border-radius: 4px; padding: 10px 12px; font-size: 13px; }
+.time-check-list .it .n { font-family: var(--font-heading); font-size: 24px; font-feature-settings: 'tnum'; }
+.time-check-list .it.warn { border-color: var(--color-accent); }
+.time-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; background: var(--color-neutral-100); border: 1px solid var(--color-divider); border-radius: 3px; padding: 8px 10px; white-space: pre-wrap; word-break: break-all; }
+.time-reg-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 14px; padding: 12px 0; border-bottom: 1px solid var(--color-divider); font-size: 13px; }
+.time-reg-row .nm { font-family: var(--font-heading); font-size: 17px; }
+
+@media (max-width: 820px) {
+  .time-idc { grid-template-columns: 1fr; }
+  .time-reg-row { grid-template-columns: 1fr; }
+}

@@ -222,7 +222,11 @@ export class AssetsService {
     const a = await this.load(id);
     await this.move(a, 'RETURNED');
     if (a.currentAssignmentId) {
-      await this.prisma.assetAssignment.update({ where: { id: a.currentAssignmentId }, data: { returnedOn: toDbDate(returnedOn ?? todayKey()), returnCondition: condition, returnNotes: notes ?? null } });
+      const on = returnedOn ?? todayKey();
+      const asg = await this.prisma.assetAssignment.findUnique({ where: { id: a.currentAssignmentId }, select: { assignedOn: true } });
+      const from = dbDateKey(asg?.assignedOn ?? null);
+      if (from && on < from) throw badRequest(`The return date can't be before the item was assigned (${fmt(asg!.assignedOn)})`);
+      await this.prisma.assetAssignment.update({ where: { id: a.currentAssignmentId }, data: { returnedOn: toDbDate(on), returnCondition: condition, returnNotes: notes ?? null } });
     }
     await this.prisma.asset.update({ where: { id }, data: { status: 'RETURNED', condition, currentAssigneeId: null, currentAssignmentId: null } });
     await this.audit.record({ action: 'asset.returned', entity: 'Asset', entityId: id, meta: { condition, employeeId: a.currentAssigneeId } });

@@ -18,7 +18,8 @@ export const routes: RouteObject[] = [
   { path: 'projects/:id', element: guard(['projects.view', 'tasks.board'], s(<ProjectDetailPage />)) },
   { path: 'clients', element: guard('clients.manage', s(<ClientsPage />)) },
   { path: 'board', element: guard(['tasks.board', 'tasks.viewAllBoards'], s(<BoardPage />)) },
-  { path: 'archive', element: guard(['archive.view', 'archive.manage'], s(<ArchivePage />)) },
+  // Leads/managers see the whole vault; other employees only items shared with "All developers" (API-scoped).
+  { path: 'archive', element: guard(['archive.view', 'archive.manage', 'projects.view'], s(<ArchivePage />)) },
   // Interns reach their own sheet here without a nav item; the API scopes what each user sees.
   { path: 'interns', element: guard(['interns.manage', 'interns.viewAll', 'tasks.board'], s(<InternsPage />)) },
 ];

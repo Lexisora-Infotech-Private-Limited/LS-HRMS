@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { PeriodLockRow } from '@lexisora/shared';
+import type { PeriodLockReadiness, PeriodLockRow } from '@lexisora/shared';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { AuditService } from '../../../core/audit/audit.service';
 import { EventsService } from '../../../core/registry/events.service';
@@ -60,6 +60,32 @@ export class PeriodLockService {
   async list(): Promise<PeriodLockRow[]> {
     const rows = await this.prisma.periodLock.findMany({ orderBy: { month: 'desc' }, take: 24 });
     return rows.map(toRow);
+  }
+
+  /** "Before you lock" checklist for a month: open items that would be frozen by the lock. */
+  async readiness(month: string): Promise<PeriodLockReadiness> {
+    const { from, to } = monthRange(month);
+    const range = { gte: dateOf(from), lte: dateOf(to) };
+    const [lock, pendingCorrections, missedPunchDays, openSessions, sheets, days] = await Promise.all([
+      this.prisma.periodLock.findFirst({ where: { month } }),
+      this.prisma.attendanceRegularization.count({ where: { date: range, status: 'PENDING' } }),
+      this.prisma.attendanceDay.count({ where: { date: range, status: 'MISSED_PUNCH' } }),
+      this.prisma.workSession.count({ where: { attendanceDate: range, endedAt: null } }),
+      // Weeks overlapping the month (Mon start can fall in the previous month).
+      this.prisma.timesheet.groupBy({ by: ['status'], where: { weekEnd: { gte: dateOf(from) }, weekStart: { lte: dateOf(to) } }, _count: { _all: true } }),
+      this.prisma.attendanceDay.count({ where: { date: range } }),
+    ]);
+    const count = (s: string[]) => sheets.filter((x) => s.includes(x.status)).reduce((n, x) => n + x._count._all, 0);
+    return {
+      month,
+      lock: lock ? toRow(lock) : null,
+      attendanceDays: days,
+      pendingCorrections,
+      missedPunchDays,
+      openSessions,
+      timesheetsPending: count(['DRAFT', 'SUBMITTED', 'PENDING_RM', 'RETURNED']),
+      timesheetsApproved: count(['APPROVED', 'LOCKED']),
+    };
   }
 }
 

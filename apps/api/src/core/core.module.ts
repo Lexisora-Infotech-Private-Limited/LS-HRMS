@@ -25,6 +25,7 @@ import { LookupsController, LookupsService } from './lookups/lookups';
 import { SequenceService } from './registry/sequence.service';
 import { EventsService } from './registry/events.service';
 import { ApprovalCountsService, RegistriesController, SearchService } from './registry/registries';
+import { PermissionSyncService } from './registry/permission-sync.service';
 
 const SHARED = [
   LookupsService,
@@ -32,6 +33,7 @@ const SHARED = [
   EventsService,
   ApprovalCountsService,
   SearchService,
+  PermissionSyncService,
   AuthService,
   TokenService,
   MailService,

@@ -223,8 +223,8 @@ describe('Plan cards', () => {
 
 describe('Billing details', () => {
   it('validates the GSTIN and its state code', () => {
-    expect(billingProfileSchema.safeParse({ legalName: 'Lexisora Infotech Pvt Ltd', gstin: '24AAECL1234F1Z5', stateCode: '24' }).success).toBe(true);
-    expect(billingProfileSchema.safeParse({ legalName: 'Lexisora', gstin: '24AAECL1234F1Z5', stateCode: '27' }).success).toBe(false);
+    expect(billingProfileSchema.safeParse({ legalName: 'Lexisora Infotech Pvt Ltd', gstin: '24AAECL1234F1Z1', stateCode: '24' }).success).toBe(true);
+    expect(billingProfileSchema.safeParse({ legalName: 'Lexisora', gstin: '24AAECL1234F1Z1', stateCode: '27' }).success).toBe(false);
     expect(billingProfileSchema.safeParse({ legalName: 'Lexisora', gstin: 'NOT-A-GSTIN', stateCode: '24' }).success).toBe(false);
     expect(billingProfileSchema.parse({ legalName: 'Bluepeak', gstin: '', stateCode: '27' }).gstin).toBeNull();
   });

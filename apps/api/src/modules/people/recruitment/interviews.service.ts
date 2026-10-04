@@ -16,7 +16,7 @@ import { AppError, badRequest, forbidden, notFound } from '../../../core/http/er
 import { MailService } from '../../../core/mail/mail.service';
 import { NotificationsService } from '../../../core/notifications/notifications.service';
 import { PrismaService } from '../../../core/prisma/prisma.service';
-import { buildIcs, istDateTime, overallFromRatings, suggestResult } from '../people.rules';
+import { buildIcs, interviewStatusAfterResult, istDateTime, overallFromRatings, suggestResult } from '../people.rules';
 import { fmtWhen, todayKey } from '../people.util';
 import { CandidatesService } from './candidates.service';
 
@@ -335,7 +335,8 @@ export class InterviewsService {
     const isLead = !!me && i.panelists.some((p) => p.employeeId === me && p.role === 'LEAD');
     if (!this.isRecruiter() && !isLead) throw forbidden('Only recruiters or the lead interviewer can record the result');
     if (i.status === 'CANCELLED') throw new AppError(409, 'CANCELLED', 'This interview was cancelled');
-    await this.prisma.interview.update({ where: { id }, data: { result, status: result === 'PENDING' ? i.status : 'COMPLETED' } });
+    // Recording a result completes the interview; "Reset" puts a completed one back to scheduled.
+    await this.prisma.interview.update({ where: { id }, data: { result, status: interviewStatusAfterResult(i.status, result) } });
     await this.candidates.recomputeScore(i.applicationId);
     await this.audit.record({ action: 'interview.result', entity: 'Interview', entityId: id, meta: { result } });
     return this.detail(id);

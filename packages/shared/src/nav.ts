@@ -31,7 +31,7 @@ export const NAV: NavGroup[] = [
     items: [
       { id: 'attendance', label: 'Attendance', path: '/attendance', permission: 'attendance.self' },
       { id: 'timesheet', label: 'My timesheet', path: '/timesheet', permission: 'timesheet.self' },
-      { id: 'approvals', label: 'Timesheet approvals', path: '/approvals', permission: ['timesheet.approve.l1', 'timesheet.approve.l2'] },
+      { id: 'approvals', label: 'Timesheet approvals', path: '/approvals', permission: ['timesheet.approve.l1', 'timesheet.approve.l2', 'attendance.regularize.approve'] },
       { id: 'leave', label: 'Time off', path: '/leave', permission: 'leave.self' },
       { id: 'leaveAdmin', label: 'Leave setup', path: '/leave-setup', permission: 'leave.manage' },
       { id: 'idcompliance', label: 'ID card compliance', path: '/id-compliance', permission: 'idcompliance.manage' },
@@ -43,7 +43,7 @@ export const NAV: NavGroup[] = [
       { id: 'projects', label: 'Projects', path: '/projects', permission: 'projects.view' },
       { id: 'clients', label: 'Clients', path: '/clients', permission: 'clients.manage' },
       { id: 'kanban', label: 'Task board', path: '/board', permission: 'tasks.board' },
-      { id: 'archive', label: 'Project archive', path: '/archive', permission: 'archive.view' },
+      { id: 'archive', label: 'Project archive', path: '/archive', permission: ['archive.view', 'projects.view'] },
       { id: 'interns', label: 'Intern task sheets', path: '/interns', permission: 'interns.manage' },
     ],
   },
@@ -65,7 +65,7 @@ export const NAV: NavGroup[] = [
     items: [
       { id: 'payslips', label: 'My payslips', path: '/payslips', permission: 'payslips.self' },
       { id: 'payroll', label: 'Payroll run', path: '/payroll', permission: 'payroll.manage' },
-      { id: 'ledger', label: 'Ledger', path: '/ledger', permission: 'ledger.manage' },
+      { id: 'ledger', label: 'Ledger', path: '/ledger', permission: ['ledger.manage', 'ledger.hrvoucher'] },
       { id: 'invoices', label: 'GST invoices', path: '/invoices', permission: 'invoices.manage' },
       { id: 'purchases', label: 'Purchases & input GST', path: '/purchases', permission: 'purchases.manage' },
       { id: 'filing', label: 'Filing cabinet', path: '/filing', permission: 'filing.manage' },

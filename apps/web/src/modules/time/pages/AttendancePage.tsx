@@ -1,47 +1,53 @@
 import { useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { DAY_STATUS_LABEL, REGULARIZATION_TYPES, REGULARIZATION_TYPE_LABEL, type AttendanceDayRow, type AttendanceTimeline, type TeamTodayRow } from '@lexisora/shared';
 import { FormModal, type FieldDef } from '@/components/form';
 import { DataTable } from '@/components/table';
-import { ErrorBlock, Kpis, Loading, PageHeader, Seg, Tag, toneFor } from '@/components/ui';
+import { ErrorBlock, Kpis, Loading, PageHeader, Seg, Tabs, Tag, toneFor } from '@/components/ui';
 import { post } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { useAction } from '@/lib/query';
 import { dur, istToday, monthLabel, shiftMonth, timeOf, tk, useMonth, useMyIdCheck, useTeam, useTimeline } from '../api';
 import { usePunch } from '../punch';
 import '../time.css';
+import { BiometricPanel } from './BiometricPanel';
+import { CorrectionsPanel, MyCorrections } from './CorrectionsPanel';
+import { PeriodLocksPanel } from './PeriodLocksPanel';
 
-type View = 'mine' | 'team';
+type View = 'mine' | 'team' | 'corrections' | 'locks' | 'devices';
 
 export default function AttendancePage() {
   const can = useCan();
-  const canTeam = can(['attendance.team', 'attendance.manage']);
-  const [view, setView] = useState<View>('mine');
+  const [params, setParams] = useSearchParams();
   const [who, setWho] = useState<{ id: string; name: string } | null>(null);
+  const options: { value: View; label: string }[] = [
+    { value: 'mine', label: 'My attendance' },
+    ...(can(['attendance.team', 'attendance.manage']) ? [{ value: 'team' as View, label: 'Team' }] : []),
+    ...(can(['attendance.regularize.approve', 'attendance.manage']) ? [{ value: 'corrections' as View, label: 'Corrections' }] : []),
+    ...(can('attendance.lock') ? [{ value: 'locks' as View, label: 'Period locks' }] : []),
+    ...(can('attendance.manage') ? [{ value: 'devices' as View, label: 'Biometric devices' }] : []),
+  ];
+  const asked = params.get('view') as View | null;
+  const view: View = asked && options.some((o) => o.value === asked) ? asked : 'mine';
+  const setView = (v: View) => {
+    setWho(null);
+    setParams(v === 'mine' ? {} : { view: v }, { replace: true });
+  };
 
   return (
     <div data-screen-label="Attendance" className="stack" style={{ gap: 22 }}>
       <PageHeader
         title="Attendance"
         sub="Punch source follows HR policy: office staff punch by biometric, remote staff punch on web or desktop."
-        actions={
-          canTeam ? (
-            <Seg
-              options={[
-                { value: 'mine', label: 'My attendance' },
-                { value: 'team', label: 'Team' },
-              ]}
-              value={view}
-              onChange={(v) => {
-                setView(v);
-                setWho(null);
-              }}
-            />
-          ) : undefined
-        }
+        actions={options.length === 2 ? <Seg options={options} value={view} onChange={setView} /> : undefined}
       />
+      {options.length > 2 && <Tabs<View> tabs={options} value={view} onChange={setView} />}
       {view === 'mine' && <MyAttendance />}
       {view === 'team' && !who && <TeamView onOpen={(r) => setWho({ id: r.employeeId, name: r.name })} />}
       {view === 'team' && who && <EmployeeAttendance id={who.id} name={who.name} onBack={() => setWho(null)} />}
+      {view === 'corrections' && <CorrectionsPanel />}
+      {view === 'locks' && <PeriodLocksPanel />}
+      {view === 'devices' && <BiometricPanel focusDevice={params.get('device')} />}
     </div>
   );
 }
@@ -96,6 +102,7 @@ function MyAttendance() {
       </div>
       <TimelineBlock employeeId={null} />
       <DaysTable employeeId={null} month={month} setMonth={setMonth} onRegularize={setReg} />
+      <MyCorrections />
       {reg && <RegularizeForm day={reg} onClose={() => setReg(null)} />}
     </>
   );

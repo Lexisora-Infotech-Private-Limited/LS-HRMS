@@ -8,7 +8,8 @@ import { RealtimeGateway } from '../../../core/realtime/realtime.gateway';
 import { requireContext } from '../../../core/context/request-context';
 import { AppError, badRequest, forbidden, notFound } from '../../../core/http/errors';
 import { CrossReader } from '../cross';
-import { dateOf, istHm, istKeyOf, keyOf, monthOf, monthRange, prevMonth } from '../lib/time-utils';
+import { complianceDelta, idDayFigures, pctOf } from '../lib/compliance';
+import { addDays, dateOf, istHm, istKeyOf, keyOf, monthOf, monthRange, prevMonth } from '../lib/time-utils';
 
 const ACTIVE = ['ACTIVE', 'NOTICE_PERIOD'] as const;
 
@@ -35,48 +36,54 @@ export class IdCheckService {
       this.prisma.employee.count({ where: { status: { in: [...ACTIVE] } } }),
       this.prisma.idCardCheck.findMany({ where: { date: dateOf(date) } }),
     ]);
-    const wearing = checks.filter((c) => c.wearing).length;
-    const missing = checks.length - wearing;
+    const f = idDayFigures(
+      inOffice.map((d) => d.employeeId),
+      checks.map((c) => ({ employeeId: c.employeeId, wearing: c.wearing })),
+    );
     const month = monthOf(date);
     const monthPct = await this.monthPct(month, date);
     const prev = await this.monthPct(prevMonth(month));
-    const reminded = missing > 0 && (await this.prisma.notification.count({ where: { type: 'idcheck.missing', createdAt: { gte: dateOf(date) } } })) > 0;
-    const inOfficeIds = new Set(inOffice.map((d) => d.employeeId));
-    const checkedIds = new Set(checks.map((c) => c.employeeId));
-    const unchecked = [...inOfficeIds].filter((id) => !checkedIds.has(id)).length;
+    const missingIds = checks.filter((c) => !c.wearing).map((c) => c.employeeId);
+    const reminded = f.missing > 0 && (await this.remindedCount(missingIds, date)) > 0;
+    // When the chosen day has no checks yet, point the screen at the most recent check day.
+    const last = checks.length ? null : await this.prisma.idCardCheck.findFirst({ where: { date: { lt: dateOf(date) } }, orderBy: { date: 'desc' }, select: { date: true } });
     return {
       date,
-      inOffice: new Set([...inOfficeIds, ...checkedIds]).size,
+      ...f,
       headcount,
-      checked: checks.length,
-      wearing,
-      wearingPct: checks.length ? Math.round((wearing / checks.length) * 100) : 0,
-      missing,
-      unchecked,
       remindersSent: reminded,
       monthCompliancePct: monthPct ?? 0,
       prevMonthCompliancePct: prev,
-      deltaPct: monthPct != null && prev != null ? monthPct - prev : null,
+      deltaPct: complianceDelta(monthPct, prev),
+      lastCheckDate: last ? keyOf(last.date) : null,
     };
+  }
+
+  /** Reminders sent on the day to the given employees (notification rows of type idcheck.missing). */
+  private async remindedCount(employeeIds: string[], date: string): Promise<number> {
+    if (!employeeIds.length) return 0;
+    const users = await this.prisma.employee.findMany({ where: { id: { in: employeeIds } }, select: { userId: true } });
+    const userIds = users.map((u) => u.userId).filter((x): x is string => !!x);
+    if (!userIds.length) return 0;
+    return this.prisma.notification.count({ where: { userId: { in: userIds }, type: 'idcheck.missing', createdAt: { gte: dateOf(date), lt: dateOf(addDays(date, 1)) } } });
   }
 
   private async monthPct(month: string, upTo?: string): Promise<number | null> {
     const { from, to } = monthRange(month);
     const rows = await this.prisma.idCardCheck.groupBy({ by: ['wearing'], where: { date: { gte: dateOf(from), lte: dateOf(upTo && upTo < to ? upTo : to) } }, _count: { _all: true } });
     const total = rows.reduce((s, r) => s + r._count._all, 0);
-    if (!total) return null;
     const yes = rows.find((r) => r.wearing)?._count._all ?? 0;
-    return Math.round((yes / total) * 100);
+    return pctOf(yes, total);
   }
 
-  async list(q: { date?: string; wearing?: string; departmentId?: string }): Promise<IdCheckRow[]> {
+  async list(q: { date?: string; wearing?: string; department?: string }): Promise<IdCheckRow[]> {
     const date = q.date ?? istKeyOf(new Date());
     const rows = await this.prisma.idCardCheck.findMany({
       where: { date: dateOf(date), ...(q.wearing === 'yes' ? { wearing: true } : q.wearing === 'no' ? { wearing: false } : {}) },
       orderBy: { checkedAt: 'asc' },
     });
     const out = await this.toRows(rows);
-    return q.departmentId ? out.filter((r) => r.department === q.departmentId || r.department === null) : out;
+    return q.department ? out.filter((r) => r.department === q.department) : out;
   }
 
   async pending(date = istKeyOf(new Date())): Promise<IdPendingRow[]> {
@@ -152,7 +159,8 @@ export class IdCheckService {
         n++;
       }
     }
-    return { ok: true, count: n };
+    await this.audit.record({ action: 'idcheck.reminders_sent', entity: 'IdCardCheck', entityId: date, meta: { date, count: n } });
+    return { ok: true, count: n, message: n ? `Reminder sent to ${n} ${n === 1 ? 'employee' : 'employees'}` : 'Everyone checked is wearing their ID' };
   }
 
   private async remindOne(c: IdCardCheck, emp: { id: string; fullName: string; userId: string | null; managerId: string | null }, force = false) {

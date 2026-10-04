@@ -330,6 +330,8 @@ export type IdComplianceSummary = {
   monthCompliancePct: number;
   prevMonthCompliancePct: number | null;
   deltaPct: number | null;
+  /** Most recent earlier day with checks, when the chosen day has none yet. */
+  lastCheckDate: string | null;
 };
 export type IdPendingRow = { employeeId: string; name: string; department: string | null; firstIn: string | null };
 export type MyIdCheckCard = { title: string; body: string; meta: string; checkedToday: boolean };
@@ -360,6 +362,16 @@ export type RawLogRow = { id: string; pin: string; employeeName: string | null; 
 export const periodLockSchema = z.object({ month: monthKey, upTo: dateKey.optional() });
 export const periodUnlockSchema = z.object({ reason: z.string().trim().min(5, 'Give a reason (at least 5 characters)').max(500) });
 export type PeriodLockRow = { month: string; lockedUpTo: string; lockedBy: string | null; lockedAt: string; unlockedAt: string | null; unlockReason: string | null; active: boolean };
+export type PeriodLockReadiness = {
+  month: string;
+  lock: PeriodLockRow | null;
+  attendanceDays: number;
+  pendingCorrections: number;
+  missedPunchDays: number;
+  openSessions: number;
+  timesheetsPending: number;
+  timesheetsApproved: number;
+};
 
 // ── Timesheets ────────────────────────────────────────────────────────────────
 export const timesheetWeekQuery = z.object({ weekStart: dateKey.optional(), employeeId: z.string().optional() });

@@ -18,3 +18,5 @@ apps/api/prisma/*.db
 e2e/.storage/
 .env.prod
 backups/
+apps/api/.*dist/
+**/*.tmp.ts

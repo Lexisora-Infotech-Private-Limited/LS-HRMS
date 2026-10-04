@@ -52,7 +52,8 @@ import type { RequestContext } from '../../core/context/request-context';
 import { AppError, badRequest } from '../../core/http/errors';
 import { ZodPipe } from '../../core/http/zod.pipe';
 import { OrgService } from '../../core/org/org.service';
-import { istHm, istKeyOf, monthOf } from './lib/time-utils';
+import { defaultLockUpTo, lockRangeError } from './lib/compliance';
+import { istHm, istKeyOf, monthOf, monthRange } from './lib/time-utils';
 import { ApprovalService } from './services/approval.service';
 import { AttendanceService } from './services/attendance.service';
 import { BiometricService } from './services/biometric.service';
@@ -228,6 +229,11 @@ export class BiometricController {
     return this.bio.logs(deviceId || undefined);
   }
 
+  @Post('logs/reprocess')
+  reprocess(@Body(new ZodPipe(z.object({ deviceId: z.string().optional().nullable() }))) body: { deviceId?: string | null }) {
+    return this.bio.reprocess(body.deviceId || undefined);
+  }
+
   @Post('simulate')
   simulate(@Body(new ZodPipe(biometricSimulateSchema)) body: BiometricSimulateInput) {
     return this.bio.simulate(body);
@@ -242,8 +248,9 @@ export class IclockController {
 
   @Get('cdata')
   @Header('Content-Type', 'text/plain')
-  async handshake(@Query('SN') sn: string, @Req() req: Request) {
-    const d = await this.bio.deviceBySn(sn, req.ip);
+  async handshake(@Query('SN') sn: string, @Query('probe') probe: string | undefined, @Req() req: Request) {
+    // `probe=1` (HR "Check endpoint"): answer like a real handshake without touching device health.
+    const d = await this.bio.deviceBySn(sn, req.ip, probe !== '1');
     if (!d) return 'OK';
     return this.bio.handshake(d);
   }
@@ -458,8 +465,8 @@ export class IdComplianceController {
   }
 
   @Get('checks')
-  checks(@Query('date') date?: string, @Query('wearing') wearing?: string) {
-    return this.ids.list({ date: optDate(date), wearing });
+  checks(@Query('date') date?: string, @Query('wearing') wearing?: string, @Query('department') department?: string) {
+    return this.ids.list({ date: optDate(date), wearing, department: department || undefined });
   }
 
   @Get('pending')
@@ -478,8 +485,8 @@ export class IdComplianceController {
   }
 
   @Post('remind')
-  remind() {
-    return this.ids.remindMissing();
+  remind(@Body(new ZodPipe(z.object({ date: dateKey.optional() }))) body: { date?: string }) {
+    return this.ids.remindMissing(body.date && body.date <= istKeyOf(new Date()) ? body.date : undefined);
   }
 }
 
@@ -536,10 +543,18 @@ export class PeriodLocksController {
     return this.locks.list();
   }
 
+  @Get('readiness')
+  readiness(@Query('month') month?: string) {
+    const m = month && monthKey.safeParse(month).success ? month : monthOf(istKeyOf(new Date()));
+    return this.locks.readiness(m);
+  }
+
   @Post()
   lock(@Body(new ZodPipe(periodLockSchema)) body: { month: string; upTo?: string }) {
-    if (body.month > monthOf(istKeyOf(new Date()))) throw new AppError(422, 'LOCK_FUTURE', "You can't lock a future month");
-    return this.locks.lock(body.month, body.upTo);
+    const today = istKeyOf(new Date());
+    const err = lockRangeError(body.month, body.upTo, today);
+    if (err) throw new AppError(422, 'LOCK_RANGE', err);
+    return this.locks.lock(body.month, body.upTo ?? defaultLockUpTo(body.month, monthRange(body.month).to, today));
   }
 
   @Post(':month/unlock')

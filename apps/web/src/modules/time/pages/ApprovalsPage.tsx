@@ -1,72 +1,93 @@
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import type { ApprovalDetail, ReviewItem } from '@lexisora/shared';
 import { ErrorBlock, Loading, PageHeader, Pills, Seg, Tag, toneFor } from '@/components/ui';
 import { Pager } from '@/components/table';
 import { fileUrl, post } from '@/lib/api';
+import { useCan } from '@/lib/auth';
 import { useAction } from '@/lib/query';
 import { onRealtime } from '@/lib/socket';
-import { hmm, tk, useApproval, useApprovals } from '../api';
+import { hmm, tk, useApproval, useApprovals, useRegs } from '../api';
 import '../time.css';
+import { CorrectionsPanel } from './CorrectionsPanel';
 
-type Level = '1' | '2';
+type Level = '1' | '2' | 'c';
 type Status = 'PENDING' | 'APPROVED' | 'RETURNED' | 'ALL';
 
 export default function ApprovalsPage() {
-  const [level, setLevel] = useState<Level>('1');
+  const can = useCan();
+  const canTs = can(['timesheet.approve.l1', 'timesheet.approve.l2']);
+  const canCorr = can(['attendance.regularize.approve', 'attendance.manage']);
+  const [params, setParams] = useSearchParams();
+  const [level, setLevelState] = useState<Level>(() => (params.get('tab') === 'corrections' && canCorr) || !canTs ? 'c' : '1');
   const [status, setStatus] = useState<Status>('PENDING');
   const [sel, setSel] = useState<string | null>(null);
-  const q = useApprovals(Number(level), status);
+  const q = useApprovals(level === 'c' ? 1 : Number(level), status, canTs);
+  const regs = useRegs('PENDING', canCorr && !canTs);
   const qc = useQueryClient();
   const data = q.data;
+  const setLevel = (v: Level) => {
+    setLevelState(v);
+    setSel(null);
+    setParams(v === 'c' ? { tab: 'corrections' } : {}, { replace: true });
+  };
 
-  useEffect(() => onRealtime('approvals.counts', () => void qc.invalidateQueries({ queryKey: ['time', 'approvals'] })), [qc]);
+  useEffect(() => onRealtime('approvals.counts', () => void qc.invalidateQueries({ queryKey: ['time'] })), [qc]);
   // First load: open the level the viewer can act on.
   useEffect(() => {
-    if (data && !data.canL1 && data.canL2 && level === '1') setLevel('2');
+    if (data && !data.canL1 && data.canL2 && level === '1') setLevelState('2');
   }, [data, level]);
 
+  const corrections = data?.counts.corrections ?? regs.data?.length ?? 0;
   const tabs = [
-    ...(data?.canL1 !== false ? [{ value: '1' as Level, label: `Level 1 · Project Lead · ${data?.counts.l1 ?? 0}` }] : []),
-    ...(data?.canL2 !== false ? [{ value: '2' as Level, label: `Level 2 · Reporting Manager · ${data?.counts.l2 ?? 0}` }] : []),
+    ...(canTs && data?.canL1 !== false ? [{ value: '1' as Level, label: `Level 1 · Project Lead · ${data?.counts.l1 ?? 0}` }] : []),
+    ...(canTs && data?.canL2 !== false ? [{ value: '2' as Level, label: `Level 2 · Reporting Manager · ${data?.counts.l2 ?? 0}` }] : []),
+    ...(canCorr ? [{ value: 'c' as Level, label: `Attendance corrections · ${corrections}` }] : []),
   ];
 
   return (
     <div data-screen-label="Timesheet approvals" className="stack" style={{ gap: 18 }}>
       <PageHeader title="Timesheet approvals" sub="Level 1: Project Lead reviews task hours and screenshots. Level 2: Reporting Manager signs off before payroll." />
       <div className="row-between" style={{ flexWrap: 'wrap', gap: 10 }}>
-        <Seg options={tabs} value={level} onChange={(v) => { setLevel(v); setSel(null); }} />
-        <Pills
-          options={[
-            { value: 'PENDING', label: 'Waiting' },
-            { value: 'APPROVED', label: 'Approved' },
-            { value: 'RETURNED', label: 'Sent back' },
-            { value: 'ALL', label: 'All' },
-          ]}
-          value={status}
-          onChange={(v) => { setStatus(v); setSel(null); }}
-        />
+        {tabs.length > 1 ? <Seg options={tabs} value={level} onChange={setLevel} /> : <span />}
+        {level !== 'c' && (
+          <Pills
+            options={[
+              { value: 'PENDING', label: 'Waiting' },
+              { value: 'APPROVED', label: 'Approved' },
+              { value: 'RETURNED', label: 'Sent back' },
+              { value: 'ALL', label: 'All' },
+            ]}
+            value={status}
+            onChange={(v) => { setStatus(v); setSel(null); }}
+          />
+        )}
       </div>
-      <div className="time-appr">
-        <div className="stack" style={{ gap: 0 }}>
-          {q.isLoading && <Loading />}
-          {q.isError && <ErrorBlock error={q.error} retry={() => void q.refetch()} />}
-          {data?.items.map((r) => (
-            <button key={r.stepId} className={`time-appr-row${sel === r.stepId ? ' sel' : ''}`} onClick={() => setSel(r.stepId)}>
-              <span className="nm">{r.name}</span>
-              <Tag tone={toneFor(r.statusLabel)}>{r.statusLabel}</Tag>
-              <span style={{ fontSize: 12.5, color: 'var(--color-neutral-700)' }}>
-                {r.week} · {r.hours} worked · {r.idle} idle{r.projectName && level === '1' ? ` · ${r.projectName}` : ''}
-              </span>
-              <span style={{ fontSize: 12, color: 'var(--color-neutral-600)' }}>
-                {r.shots} shots{r.flags ? ` · ${r.flags} to review` : ''}
-              </span>
-            </button>
-          ))}
-          {data && data.items.length === 0 && <div style={{ padding: '24px 10px', fontSize: 14, color: 'var(--color-neutral-600)' }}>Nothing waiting at this level.</div>}
+      {level === 'c' ? (
+        <CorrectionsPanel />
+      ) : (
+        <div className="time-appr">
+          <div className="stack" style={{ gap: 0 }}>
+            {q.isLoading && <Loading />}
+            {q.isError && <ErrorBlock error={q.error} retry={() => void q.refetch()} />}
+            {data?.items.map((r) => (
+              <button key={r.stepId} className={`time-appr-row${sel === r.stepId ? ' sel' : ''}`} onClick={() => setSel(r.stepId)}>
+                <span className="nm">{r.name}</span>
+                <Tag tone={toneFor(r.statusLabel)}>{r.statusLabel}</Tag>
+                <span style={{ fontSize: 12.5, color: 'var(--color-neutral-700)' }}>
+                  {r.week} · {r.hours} worked · {r.idle} idle{r.projectName && level === '1' ? ` · ${r.projectName}` : ''}
+                </span>
+                <span style={{ fontSize: 12, color: 'var(--color-neutral-600)' }}>
+                  {r.shots} shots{r.flags ? ` · ${r.flags} to review` : ''}
+                </span>
+              </button>
+            ))}
+            {data && data.items.length === 0 && <div style={{ padding: '24px 10px', fontSize: 14, color: 'var(--color-neutral-600)' }}>Nothing waiting at this level.</div>}
+          </div>
+          {sel && <Detail key={sel} stepId={sel} onDone={() => setSel(null)} />}
         </div>
-        {sel && <Detail key={sel} stepId={sel} onDone={() => setSel(null)} />}
-      </div>
+      )}
     </div>
   );
 }

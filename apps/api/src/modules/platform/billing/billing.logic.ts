@@ -15,7 +15,7 @@ import {
  */
 
 export const SUPPLIER_STATE = '24';
-export const SUPPLIER_GSTIN = '24AAECL1234F1Z5';
+export const SUPPLIER_GSTIN = '24AAECL1234F1Z1';
 export const SAC_CODE = '998314';
 
 export const roundHalfUp = (n: number) => Math.floor(n + 0.5);

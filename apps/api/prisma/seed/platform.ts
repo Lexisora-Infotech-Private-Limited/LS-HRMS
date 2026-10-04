@@ -222,11 +222,11 @@ export async function seed_platform(prisma: PrismaClient, ctx: SeedCtx): Promise
   }
 
   const lexState = '24';
-  await invoice({ tenantId: ctx.tenantId, subscriptionId: lexSub.id, number: 'LXS/25-26/0001', fy: '2025-26', issued: '2025-04-01T10:00:00', kind: 'UPGRADE', cycle: 'YEARLY', quantity: 40, periodStart: '2025-04-01T00:00:00', periodEnd: '2026-03-31T23:59:59', lines: [periodLine('YEARLY', 40)], state: lexState, gstin: '24AAECL1234F1Z5', paid: true });
+  await invoice({ tenantId: ctx.tenantId, subscriptionId: lexSub.id, number: 'LXS/25-26/0001', fy: '2025-26', issued: '2025-04-01T10:00:00', kind: 'UPGRADE', cycle: 'YEARLY', quantity: 40, periodStart: '2025-04-01T00:00:00', periodEnd: '2026-03-31T23:59:59', lines: [periodLine('YEARLY', 40)], state: lexState, gstin: '24AAECL1234F1Z1', paid: true });
   if (acmeId && acmeSub) {
     await invoice({ tenantId: acmeId, subscriptionId: acmeSub.id, number: 'LXS/25-26/0002', fy: '2025-26', issued: '2026-03-15T08:40:00', kind: 'RENEWAL', cycle: 'YEARLY', quantity: 200, periodStart: '2026-03-15T00:00:00', periodEnd: '2027-03-14T23:59:59', lines: [periodLine('YEARLY', 200)], state: '27', gstin: '27AAKCA7310M1Z9', paid: true });
   }
-  await invoice({ tenantId: ctx.tenantId, subscriptionId: lexSub.id, number: 'LXS/26-27/0001', fy: '2026-27', issued: '2026-04-01T09:12:00', kind: 'RENEWAL', cycle: 'YEARLY', quantity: 50, periodStart: '2026-04-01T00:00:00', periodEnd: '2027-03-31T23:59:59', lines: [periodLine('YEARLY', 50)], state: lexState, gstin: '24AAECL1234F1Z5', paid: true });
+  await invoice({ tenantId: ctx.tenantId, subscriptionId: lexSub.id, number: 'LXS/26-27/0001', fy: '2026-27', issued: '2026-04-01T09:12:00', kind: 'RENEWAL', cycle: 'YEARLY', quantity: 50, periodStart: '2026-04-01T00:00:00', periodEnd: '2027-03-31T23:59:59', lines: [periodLine('YEARLY', 50)], state: lexState, gstin: '24AAECL1234F1Z1', paid: true });
   await invoice({ tenantId: novaId, subscriptionId: novaSub.id, number: 'LXS/26-27/0002', fy: '2026-27', issued: '2026-07-12T12:15:00', kind: 'UPGRADE', cycle: 'MONTHLY', quantity: 50, periodStart: '2026-07-12T00:00:00', periodEnd: '2026-08-12T00:00:00', lines: [periodLine('MONTHLY', 50)], state: '29', gstin: '29AAGCN4821K1Z3', paid: true });
   await invoice({ tenantId: novaId, subscriptionId: novaSub.id, number: 'LXS/26-27/0003', fy: '2026-27', issued: '2026-08-12T00:05:00', kind: 'RENEWAL', cycle: 'MONTHLY', quantity: 50, periodStart: '2026-08-12T00:00:00', periodEnd: '2026-09-12T00:00:00', lines: [periodLine('MONTHLY', 50)], state: '29', gstin: '29AAGCN4821K1Z3', paid: true });
   if (acmeId && acmeSub) {

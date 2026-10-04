@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../core/prisma/prisma.service';
+import { parseBadgeToken } from './lib/compliance';
 import { dateOf, keyOf } from './lib/time-utils';
 
 /**
@@ -154,8 +155,7 @@ export class CrossReader {
   async employeeIdFromBadge(token: string): Promise<string | null> {
     const t = token.trim();
     if (t.startsWith('DEV:')) return t.slice(4);
-    const url = /\/(?:vcard|id-cards?|idcards?|verify)\/(?:scan\/)?([\w-]+)/.exec(t);
-    const raw = url?.[1] ?? t;
+    const raw = parseBadgeToken(t);
     const card = await this.safe<any>('idCard', (m) => m.findFirst({ where: { verifyToken: raw } }), null);
     if (card?.employeeId) return card.employeeId as string;
     const byCode = await this.prisma.employee.findFirst({ where: { empCode: raw }, select: { id: true } });

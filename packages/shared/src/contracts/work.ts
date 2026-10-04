@@ -471,7 +471,7 @@ export type InternSheetRow = {
   weekScore: number | null;
   tasks: InternTaskRow[];
 };
-export type InternContext = { isIntern: boolean; isMentor: boolean; canAssign: boolean; canViewAll: boolean; mentees: { value: string; label: string }[]; today: string };
+export type InternContext = { isIntern: boolean; isMentor: boolean; canAssign: boolean; canViewAll: boolean; mentees: { value: string; label: string }[]; today: string; lastSheetDate: string | null };
 export type InternWeek = {
   intern: { id: string; name: string; empCode: string; mentorName: string | null; department: string | null };
   weekStart: string;

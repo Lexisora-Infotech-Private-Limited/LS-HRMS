@@ -93,7 +93,7 @@ export class KitsService {
           }),
         };
       })
-      .sort((a, b) => (b.joined ?? '').localeCompare(a.joined ?? ''));
+      .sort((a, b) => (b.joined ?? '').localeCompare(a.joined ?? '') || a.name.localeCompare(b.name));
     return { items, rows };
   }
 

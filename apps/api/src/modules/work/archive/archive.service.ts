@@ -12,6 +12,7 @@ import { paginated } from '../../../core/http/paginate';
 import { WorkDocsService } from '../projects/work-docs.service';
 import { WorkAccessService } from '../work-access.service';
 import { WorkEvents } from '../work-events.service';
+import { archiveAccessLevels } from '../work.rules';
 import { monthYearLabel } from '../work.util';
 
 type Tab = 'all' | 'web' | 'mobile' | 'internal';
@@ -34,7 +35,8 @@ export class ArchiveService {
 
   private accessWhere(): Prisma.ProjectWhereInput {
     const ctx = requireContext();
-    return hasPerm(ctx, 'archive.view') ? {} : { archiveAccess: 'ALL_DEVELOPERS' };
+    const levels = archiveAccessLevels({ canViewArchive: hasPerm(ctx, 'archive.view'), canViewProjects: hasPerm(ctx, 'projects.view') });
+    return levels === null ? {} : { archiveAccess: { in: levels } };
   }
 
   private tabWhere(tab: Tab): Prisma.ProjectWhereInput {

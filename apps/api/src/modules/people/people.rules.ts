@@ -481,6 +481,12 @@ export function suggestResult(recs: (string | null | undefined)[]): 'SELECTED' |
   return sel > rej ? 'SELECTED' : rej > sel ? 'REJECTED' : 'ON_HOLD';
 }
 
+/** Recording a result completes the interview; resetting it to PENDING re-opens a completed one. */
+export function interviewStatusAfterResult<S extends string>(status: S, result: string): S | 'SCHEDULED' | 'COMPLETED' {
+  if (result !== 'PENDING') return 'COMPLETED';
+  return status === 'COMPLETED' ? 'SCHEDULED' : status;
+}
+
 export function applicationScore(overalls: (number | null | undefined)[]): number | null {
   const v = overalls.filter((x): x is number => typeof x === 'number');
   if (!v.length) return null;

@@ -172,12 +172,34 @@ export class InvoiceService {
 
   async options(): Promise<FinInvoiceFormOptions> {
     const [tenant, clients, projects] = await Promise.all([this.tenant(), this.spine.clients({ isInternal: false, status: 'ACTIVE' }), this.spine.projects({ billable: true })]);
+    const months = recentMonths(currentMonthKey(), 6);
+    const billable = projects.filter((p) => p.clientId && !p.isInternal);
+    const unbilled = await this.unbilledByMonth(
+      billable.map((p) => p.id),
+      monthRange(months[months.length - 1]!).start,
+      monthRange(months[0]!).end,
+    );
     return {
       sellerStateCode: tenant.stateCode,
       clients: clients.map((c) => ({ id: c.id, name: c.name, stateCode: c.stateCode, gstin: c.gstin, billingEmails: c.billingEmails ?? [], defaultRatePaise: c.defaultRatePerHourPaise, paymentTermsDays: c.paymentTermsDays })),
-      projects: projects.filter((p) => p.clientId && !p.isInternal).map((p) => ({ id: p.id, clientId: p.clientId!, name: p.name, ratePaise: p.ratePerHourPaise, status: String(p.status) })),
-      periods: recentMonths(currentMonthKey(), 6).map((m) => ({ value: m, label: finMonthLabel(m) })),
+      projects: billable.map((p) => ({ id: p.id, clientId: p.clientId!, name: p.name, ratePaise: p.ratePerHourPaise, status: String(p.status), unbilled: unbilled.get(p.id) ?? [] })),
+      periods: months.map((m) => ({ value: m, label: finMonthLabel(m) })),
     };
+  }
+
+  /** Project → months (newest first) with approved billable minutes not yet held by an invoice. */
+  private async unbilledByMonth(projectIds: string[], start: Date, end: Date) {
+    const out = new Map<string, { period: string; minutes: number }[]>();
+    for (const projectId of projectIds) {
+      const r = await this.spine.billableCells(projectId, start, end);
+      if (!r.approved.length) continue;
+      const held = new Set((await this.prisma.invoiceTimeEntry.findMany({ where: { timesheetCellId: { in: r.approved.map((c) => c.id) } }, select: { timesheetCellId: true } })).map((h) => h.timesheetCellId));
+      const byMonth = new Map<string, number>();
+      for (const c of r.approved) if (!held.has(c.id)) byMonth.set(dateKeyOf(c.date).slice(0, 7), (byMonth.get(dateKeyOf(c.date).slice(0, 7)) ?? 0) + c.finalMinutes);
+      const rows = [...byMonth.entries()].filter(([, m]) => m > 0).sort((a, b) => b[0].localeCompare(a[0])).map(([period, minutes]) => ({ period, minutes }));
+      if (rows.length) out.set(projectId, rows);
+    }
+    return out;
   }
 
   /** Approved (L1+) billable cells of a project in a month that no other invoice holds. */

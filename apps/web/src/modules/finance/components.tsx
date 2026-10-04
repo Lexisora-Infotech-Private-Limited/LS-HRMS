@@ -1,9 +1,35 @@
-import { useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { finMonthLabel, formatINR } from '@lexisora/shared';
 import { Modal, type Tone } from '@/components/ui';
 import { HttpError } from '@/lib/api';
 import { lastMonths, monthKeyNow } from './api';
+
+/**
+ * Month filter state that starts on the current month. Until the user picks a month it falls back
+ * once to the previous month while the current one has nothing posted yet (the first days after a
+ * month end, when finance is still closing the previous month). The page reports whether the data
+ * of the shown month is empty (`undefined` while loading) through the third element.
+ */
+export function useFallbackMonth(): [string, (m: string) => void, (empty: boolean | undefined) => void] {
+  const [month, setMonthState] = useState(monthKeyNow());
+  const decided = useRef(false);
+  const setMonth = useCallback((m: string) => {
+    decided.current = true;
+    setMonthState(m);
+  }, []);
+  const report = useCallback((empty: boolean | undefined) => {
+    if (decided.current || empty === undefined) return;
+    decided.current = true;
+    if (empty) setMonthState((cur) => (cur === monthKeyNow() ? lastMonths(cur, 2)[1]! : cur));
+  }, []);
+  return [month, setMonth, report];
+}
+
+/** Report "is this month empty?" to `useFallbackMonth` once the data arrives. */
+export function useReportEmpty(report: (empty: boolean | undefined) => void, empty: boolean | undefined) {
+  useEffect(() => report(empty), [report, empty]);
+}
 
 /** Month dropdown (newest first) used for KPI periods. `allowAll` adds an "All months" option (value ''). */
 export function MonthSelect({ value, onChange, count = 12, label = 'Month', allowAll }: { value: string; onChange: (v: string) => void; count?: number; label?: string; allowAll?: boolean }) {

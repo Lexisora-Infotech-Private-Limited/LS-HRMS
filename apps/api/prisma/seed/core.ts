@@ -59,7 +59,7 @@ export async function seedCore(prisma: PrismaClient): Promise<SeedCtx> {
       legalName: 'Lexisora Infotech Private Limited',
       domain: 'lexisora.hrms.app',
       slug: 'lexisora',
-      gstin: '24AAECL1234F1Z5',
+      gstin: '24AAECL1234F1Z1',
       pan: 'AAECL1234F',
       address: '4th Floor, Titanium City Centre, Satellite',
       city: 'Ahmedabad',

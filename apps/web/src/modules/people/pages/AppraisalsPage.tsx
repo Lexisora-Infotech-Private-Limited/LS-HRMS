@@ -85,7 +85,8 @@ function CyclesTab({ manage }: { manage: boolean }) {
   const columns: Column<AppraisalCycleRow>[] = [
     { key: 'n', header: 'Cycle', render: (r) => r.name },
     { key: 'p', header: 'Period', render: (r) => r.period },
-    { key: 'r', header: 'Reviewers', render: (r) => <span className="tnum" title={`${r.participants} employees in the cycle`}>{r.reviewers}</span> },
+    // Wireframe "Reviewers" = people under review in the cycle (H1 FY26-27 → 8); the distinct reviewer count is in the tooltip.
+    { key: 'r', header: 'Reviewers', render: (r) => <span className="tnum" title={`${r.participants} employees in the cycle · ${r.reviewers} reviewing managers`}>{r.participants}</span> },
     { key: 's', header: 'Self review', render: (r) => <span className="tnum">{r.selfPct}%</span> },
     { key: 'm', header: 'Manager review', render: (r) => <span className="tnum">{r.managerPct}%</span> },
     { key: 'st', header: 'Status', render: (r) => <StatusTag status={r.statusLabel} label={r.statusLabel} /> },

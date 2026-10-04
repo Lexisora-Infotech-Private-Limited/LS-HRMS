@@ -23,7 +23,7 @@ import { fileUrl, uploadFile } from '@/lib/api';
 import { useAction } from '@/lib/query';
 import { useToast } from '@/lib/toast';
 import { FIN_ALL, finApi, finKeys, monthKeyNow, paiseToRupeesText, rupeesToPaise, todayKey } from '../api';
-import { Badge, DocFrame, errorText, Field, fieldErrors, inr2, MonthSelect, ReasonDialog, Section, useParamState } from '../components';
+import { Badge, DocFrame, errorText, Field, fieldErrors, inr2, MonthSelect, ReasonDialog, Section, useFallbackMonth, useParamState, useReportEmpty } from '../components';
 import '../finance.css';
 
 type Tab = 'purchases' | 'gstr3b' | 'vendors';
@@ -64,7 +64,7 @@ export default function PurchasesPage() {
 // ── Purchases list ───────────────────────────────────────────────────────────
 
 function PurchasesTab({ onOpen }: { onOpen: (id: string) => void }) {
-  const [month, setMonth] = useState(monthKeyNow());
+  const [month, setMonth, reportEmpty] = useFallbackMonth();
   const [categoryId, setCategoryId] = useState('');
   const [vendorId, setVendorId] = useState('');
   const [itc, setItc] = useState<'all' | 'eligible' | 'ineligible'>('all');
@@ -81,6 +81,7 @@ function PurchasesTab({ onOpen }: { onOpen: (id: string) => void }) {
     setPage(1);
   };
   const k = kpis.data;
+  useReportEmpty(reportEmpty, k ? k.bills === 0 : undefined);
   const short = finMonthLabel(kpiMonth).slice(0, 3);
 
   const columns: Column<PurchaseRow>[] = [
@@ -513,11 +514,12 @@ function RecordPurchaseForm({ onClose, onSaved }: { onClose: () => void; onSaved
 // ── GSTR-3B summary ──────────────────────────────────────────────────────────
 
 function Gstr3bTab() {
-  const [month, setMonth] = useState(monthKeyNow());
+  const [month, setMonth, reportEmpty] = useFallbackMonth();
   const q = useQuery({ queryKey: finKeys.gstr3b(month), queryFn: () => finApi.gstr3b(month) });
   const csv = useAction(() => finApi.gstr3bCsv(month), {});
   const file = useAction(() => finApi.fileGstr3b(month), { success: (r) => `Saved to Filing cabinet › GST returns · ${r.title}`, invalidate: FIN_ALL });
   const s = q.data;
+  useReportEmpty(reportEmpty, s ? s.outward.invoices === 0 && s.itc.bills === 0 : undefined);
   const r = (p: number) => inr2(p);
   return (
     <div className="stack" style={{ gap: 14 }} data-screen-label="GSTR-3B summary">

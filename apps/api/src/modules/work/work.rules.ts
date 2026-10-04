@@ -256,7 +256,38 @@ export function suggestKey(name: string, taken: Set<string> = new Set()): string
   return 'PRJ';
 }
 
+// ── Archive ────────────────────────────────────────────────────────────────
+
+export type ArchiveAccessKey = 'LEADS_ONLY' | 'ALL_DEVELOPERS';
+
+/**
+ * Archive access levels a viewer may open (null = all). `archive.view` (leads, managers, admin)
+ * opens everything; any other employee with `projects.view` only "All developers" items.
+ */
+export function archiveAccessLevels(p: { canViewArchive: boolean; canViewProjects: boolean }): ArchiveAccessKey[] | null {
+  if (p.canViewArchive) return null;
+  return p.canViewProjects ? ['ALL_DEVELOPERS'] : [];
+}
+
+export function canOpenArchiveItem(access: string, p: { canViewArchive: boolean; canViewProjects: boolean }): boolean {
+  const levels = archiveAccessLevels(p);
+  return levels === null || levels.includes(access as ArchiveAccessKey);
+}
+
 // ── Interns ────────────────────────────────────────────────────────────────
+
+/** Relationship scope on an intern's sheet: self, mentor (= reporting manager) or interns.viewAll. */
+export function internAccess(a: { viewerEmployeeId: string | null; internId: string; internManagerId: string | null; viewAll: boolean }) {
+  const isSelf = !!a.viewerEmployeeId && a.internId === a.viewerEmployeeId;
+  const isMentor = !!a.viewerEmployeeId && a.internManagerId === a.viewerEmployeeId;
+  return { isSelf, isMentor, canView: isSelf || isMentor || a.viewAll, canScore: isMentor || a.viewAll, canEditOwn: isSelf };
+}
+
+/** Fields an intern may change on their own task (status, hours, note); everything else is the mentor's. */
+export const INTERN_SELF_FIELDS = ['status', 'hours', 'internNote'] as const;
+export function internForbiddenFields(keys: string[]): string[] {
+  return keys.filter((k) => !(INTERN_SELF_FIELDS as readonly string[]).includes(k));
+}
 
 export type InternStatus = 'ASSIGNED' | 'IN_PROGRESS' | 'DONE' | 'NOT_DONE';
 

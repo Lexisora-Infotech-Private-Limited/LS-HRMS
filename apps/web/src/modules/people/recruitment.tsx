@@ -112,7 +112,8 @@ export function HireModal({ candidate, app, onClose, onHired }: { candidate: Can
   });
   if (lk.isLoading) return null;
   const d = lk.data ?? {};
-  const domain = me.tenantDomain || me.email.split('@')[1] || 'lexisora.com';
+  // Official mail domain = the signed-in HR user's mail domain (the workspace domain is not a mailbox).
+  const domain = me.email.split('@')[1] || 'lexisora.com';
   const suggested = `${candidate.fullName.toLowerCase().replace(/[^a-z\s]/g, '').trim().split(/\s+/).join('.')}@${domain}`;
   const fields: FieldDef[] = [
     { name: 'officialEmail', label: 'Official email', type: 'email', span: 2, required: true },

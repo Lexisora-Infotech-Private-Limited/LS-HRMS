@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { ARCHIVE_ACCESS, ARCHIVE_ACCESS_LABELS, TASK_STATUS_LABELS, formatDate, type ArchiveRow, type ProjectDocumentRow, type TaskStatusKey } from '@lexisora/shared';
 import { download } from '@/lib/api';
@@ -16,7 +17,9 @@ export default function ArchivePage() {
   const [tab, setTab] = useState<Tab>('all');
   const [q, setQ] = useState('');
   const [page, setPage] = useState(1);
-  const [openId, setOpenId] = useState<string | null>(null);
+  const [params, setParams] = useSearchParams();
+  const openId = params.get('open');
+  const setOpenId = (id: string | null) => setParams(id ? { open: id } : {}, { replace: true });
   const [archiving, setArchiving] = useState(false);
   const list = useQuery({ queryKey: [...workKeys.archive, tab, q, page], queryFn: () => workApi.archive({ tab, q: q || undefined, page, pageSize: 25 }) });
   const c = list.data?.counts;
@@ -26,7 +29,7 @@ export default function ArchivePage() {
     { key: 'cl', header: 'Closed', render: (r) => r.closedLabel },
     { key: 'd', header: 'Documents', render: (r) => `${r.documents} file${r.documents === 1 ? '' : 's'}` },
     { key: 't', header: 'Tech', render: (r) => r.techStack.join(', ') || '—' },
-    { key: 'a', header: 'Access', render: (r) => <Tag>{ARCHIVE_ACCESS_LABELS[r.archiveAccess as keyof typeof ARCHIVE_ACCESS_LABELS] ?? humanize(r.archiveAccess)}</Tag> },
+    { key: 'a', header: 'Access', render: (r) => <Tag tone={r.archiveAccess === 'ALL_DEVELOPERS' ? 'outline' : 'neutral'}>{ARCHIVE_ACCESS_LABELS[r.archiveAccess as keyof typeof ARCHIVE_ACCESS_LABELS] ?? humanize(r.archiveAccess)}</Tag> },
   ];
   return (
     <div data-screen-label="Project archive & client vault" className="stack" style={{ gap: 18 }}>

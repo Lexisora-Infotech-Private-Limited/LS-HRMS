@@ -12,6 +12,7 @@ import { CrossReader } from './cross';
 import { addDays, istKeyOf, keyOf } from './lib/time-utils';
 import { ApprovalService } from './services/approval.service';
 import { AttendanceService } from './services/attendance.service';
+import { BiometricService } from './services/biometric.service';
 import { IdCheckService } from './services/idcheck.service';
 import { MastersService } from './services/masters.service';
 import { PolicyService } from './services/policy.service';
@@ -44,6 +45,7 @@ export class TimeRegistry implements OnModuleInit {
     private readonly approvals: ApprovalService,
     private readonly regs: RegularizationService,
     private readonly idchecks: IdCheckService,
+    private readonly bio: BiometricService,
   ) {}
 
   onModuleInit() {
@@ -142,6 +144,12 @@ export class TimeRegistry implements OnModuleInit {
   @Cron('15 * * * *')
   async overdueApprovals() {
     await this.forEachTenant(() => this.approvals.remindOverdue());
+  }
+
+  /** Every 15 min: biometric devices silent for 30+ min during working hours → alert HR once. */
+  @Cron('*/15 * * * *')
+  async biometricHealth() {
+    await this.forEachTenant(() => this.bio.offlineCheck());
   }
 
   /** 00:30 IST: materialise yesterday's attendance days (absences, weekly offs) for everyone. */

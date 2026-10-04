@@ -395,10 +395,19 @@ export class PurchaseService {
     const p = await this.prisma.purchase.findFirst({ where: { id } });
     if (!p) throw notFound('Purchase');
     if (p.status === 'CANCELLED') throw conflict('This purchase is already cancelled');
-    if (p.voucherId) await this.ledger.reverse(p.voucherId, `Purchase ${p.vendorInvoiceNo} cancelled: ${reason}`);
+    // The vendor invoice no. is freed (renamed) so the corrected bill can be recorded again; pick a
+    // name that is still unique for this vendor + FY before touching the ledger.
+    const base = `${p.vendorInvoiceNo.slice(0, 40)} (cancelled`;
+    const taken = new Set((await this.prisma.purchase.findMany({ where: { vendorId: p.vendorId, fy: p.fy, vendorInvoiceNo: { startsWith: base } }, select: { vendorInvoiceNo: true } })).map((x) => x.vendorInvoiceNo));
+    let renamed = `${base})`;
+    for (let n = 2; taken.has(renamed); n++) renamed = `${base} ${n})`;
+    if (p.voucherId) {
+      const v = await this.prisma.voucher.findFirst({ where: { id: p.voucherId }, select: { status: true } });
+      if (v && v.status !== 'REVERSED') await this.ledger.reverse(p.voucherId, `Purchase ${p.vendorInvoiceNo} cancelled: ${reason}`);
+    }
     await this.prisma.purchase.update({
       where: { id },
-      data: { status: 'CANCELLED', vendorInvoiceNo: `${p.vendorInvoiceNo} (cancelled)`.slice(0, 60), notes: [p.notes, `Cancelled: ${reason}`].filter(Boolean).join(' · ') },
+      data: { status: 'CANCELLED', vendorInvoiceNo: renamed, notes: [p.notes, `Cancelled: ${reason}`].filter(Boolean).join(' · ') },
     });
     await this.audit.record({ action: 'purchase.cancelled', entity: 'Purchase', entityId: id, meta: { invoiceNo: p.vendorInvoiceNo, reason } });
     return this.detail(id);

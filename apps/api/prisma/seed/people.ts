@@ -198,12 +198,12 @@ export async function seed_people(prisma: PrismaClient, ctx: SeedCtx): Promise<v
       title: 'Offer letter',
       source: 'ESIGNED',
       status: 'NOT_REQUIRED',
-      uploaded: '2026-09-24',
-      lines: ['Dear Meera Iyer,', 'This letter confirms your appointment at Lexisora Infotech as QA Engineer in the QA department, joining on 6 Oct 2026, with the compensation shown in Annexure A.', 'Signed electronically by Meera Iyer on 24 Sep 2026 · IP 49.36.112.18.'],
+      uploaded: '2026-09-28',
+      lines: ['Dear Meera Iyer,', 'This letter confirms your appointment at Lexisora Infotech as QA Engineer in the QA department, joining on 6 Oct 2026, with the compensation shown in Annexure A.', 'Signed electronically by Meera Iyer on 28 Sep 2026 · IP 49.36.112.18.'],
     });
     await doc({ who: 'meera', category: 'CAREER', docType: 'RESUME', title: 'Resume', source: 'RECRUITMENT', status: 'NOT_REQUIRED', uploaded: '2026-09-05', lines: ['Meera Iyer — QA Engineer', 'Manual + automation testing (Selenium, Playwright), API testing with Postman. 2.5 years at Zoho.'] });
     const steps = [
-      { key: 'offer', status: 'DONE' as const, completedAt: at('2026-09-24', '19:42'), data: { signedAt: at('2026-09-24', '19:42').toISOString(), signedSha256: signed?.sha256 ?? null } },
+      { key: 'offer', status: 'DONE' as const, completedAt: at('2026-09-28', '19:42'), data: { signedAt: at('2026-09-28', '19:42').toISOString(), signedSha256: signed?.sha256 ?? null } },
       { key: 'nda', status: 'PENDING' as const },
       { key: 'docs', status: 'PENDING' as const },
       { key: 'bank', status: 'PENDING' as const },
@@ -214,9 +214,10 @@ export async function seed_people(prisma: PrismaClient, ctx: SeedCtx): Promise<v
         tenantId,
         employeeId: emp.meera,
         status: 'IN_PROGRESS',
-        invitedAt: at('2026-09-22', '11:05'),
-        startedAt: at('2026-09-24', '19:30'),
-        createdAt: at('2026-09-22', '11:00'),
+        // Hired from the candidate pipeline on Mon 28 Sep (HR round 25 Sep, offer accepted 28 Sep).
+        invitedAt: at('2026-09-28', '11:05'),
+        startedAt: at('2026-09-28', '19:30'),
+        createdAt: at('2026-09-28', '11:00'),
         steps: {
           create: steps.map((s, i) => ({
             tenantId,
@@ -356,8 +357,8 @@ export async function seed_people_phase2(prisma: PrismaClient, ctx: SeedCtx): Pr
     const NAMED: CandSeed[] = [
       { name: 'Aditya Kulkarni', email: 'aditya.kulkarni@example.com', phone: '+91 98220 41123', job: 'react', source: 'LINKEDIN', stage: 'INTERVIEW', score: 8.2, location: 'Pune', company: 'Persistent', exp: 42, ctc: 950000, expected: 1300000, notice: 60, tags: ['react', 'typescript', 'redux'], applied: '2026-09-08', stageAt: at('2026-09-18', '12:00'),
         events: [[null, 'SCREENING', at('2026-09-08', '09:40')], ['SCREENING', 'INTERVIEW', at('2026-09-18', '12:00')]], resume: ['Aditya Kulkarni — Frontend Engineer, Pune', '3.5 years with React, TypeScript and Redux Toolkit at Persistent Systems.', 'Built a design-system component library used by 6 product teams; Jest + Playwright tests.'] },
-      { name: 'Meera Iyer', email: 'meera.iyer.qa@example.com', phone: '+91 98400 77215', job: 'qa', source: 'REFERRAL', stage: 'HIRED', score: 7.5, location: 'Ahmedabad', company: 'Zoho', exp: 30, ctc: 520000, expected: 650000, notice: 15, tags: ['selenium', 'playwright', 'api testing'], applied: '2026-09-05', stageAt: at('2026-09-22', '11:00'), referredBy: 'sneha', employee: 'meera',
-        events: [[null, 'SCREENING', at('2026-09-05', '15:20')], ['SCREENING', 'INTERVIEW', at('2026-09-11', '10:00')], ['INTERVIEW', 'OFFERED', at('2026-09-21', '17:00')], ['OFFERED', 'HIRED', at('2026-09-22', '11:00'), 'Converted to employee LX-0160']], resume: ['Meera Iyer — QA Engineer', 'Manual + automation testing (Selenium, Playwright), API testing with Postman. 2.5 years at Zoho.'] },
+      { name: 'Meera Iyer', email: 'meera.iyer.qa@example.com', phone: '+91 98400 77215', job: 'qa', source: 'REFERRAL', stage: 'HIRED', score: 7.5, location: 'Ahmedabad', company: 'Zoho', exp: 30, ctc: 520000, expected: 650000, notice: 15, tags: ['selenium', 'playwright', 'api testing'], applied: '2026-09-05', stageAt: at('2026-09-28', '11:00'), referredBy: 'sneha', employee: 'meera',
+        events: [[null, 'SCREENING', at('2026-09-05', '15:20')], ['SCREENING', 'INTERVIEW', at('2026-09-11', '10:00')], ['INTERVIEW', 'OFFERED', at('2026-09-25', '17:00')], ['OFFERED', 'HIRED', at('2026-09-28', '11:00'), 'Converted to employee LX-0160']], resume: ['Meera Iyer — QA Engineer', 'Manual + automation testing (Selenium, Playwright), API testing with Postman. 2.5 years at Zoho.'] },
       { name: 'Farhan Ali', email: 'farhan.ali@example.com', phone: '+91 99090 31877', job: 'react', source: 'NAUKRI', stage: 'REJECTED', score: 5.1, location: 'Ahmedabad', company: 'TCS', exp: 24, ctc: 480000, expected: 800000, notice: 90, tags: ['react', 'javascript'], applied: '2026-09-03', stageAt: at('2026-09-17', '16:45'), rejectReason: 'Skills mismatch',
         events: [[null, 'SCREENING', at('2026-09-03', '11:10')], ['SCREENING', 'INTERVIEW', at('2026-09-10', '10:30')], ['INTERVIEW', 'REJECTED', at('2026-09-17', '16:45'), 'Skills mismatch']], resume: ['Farhan Ali — Software Engineer', '2 years building internal dashboards in React and jQuery at TCS.'] },
       { name: 'Tanvi Shah', email: 'tanvi.shah@example.org', phone: '+91 97250 66340', job: 'intern', source: 'CAMPUS', stage: 'SCREENING', score: null, location: 'Pune', company: null, exp: 0, ctc: null, expected: 25000, notice: 0, tags: ['figma', 'ui', 'research'], applied: '2026-09-21', stageAt: at('2026-09-21', '10:00'),
@@ -387,7 +388,7 @@ export async function seed_people_phase2(prisma: PrismaClient, ctx: SeedCtx): Pr
 
     // Offers: Meera accepted (now onboarding), Rohan's is out for acceptance.
     if (appId['Meera Iyer']) {
-      await prisma.jobOffer.create({ data: { tenantId, applicationId: appId['Meera Iyer']!, designationId: desig['QA Engineer'] ?? null, departmentId: dept.QA ?? null, branchId: branch.Ahmedabad ?? null, employmentType: 'FULL_TIME', annualCtcPaise: 65_000_000, joiningDate: d('2026-10-06'), expiresOn: d('2026-09-29'), status: 'ACCEPTED', employeeId: emp.meera ?? null, createdAt: at('2026-09-21', '17:00') } });
+      await prisma.jobOffer.create({ data: { tenantId, applicationId: appId['Meera Iyer']!, designationId: desig['QA Engineer'] ?? null, departmentId: dept.QA ?? null, branchId: branch.Ahmedabad ?? null, employmentType: 'FULL_TIME', annualCtcPaise: 65_000_000, joiningDate: d('2026-10-06'), expiresOn: d('2026-10-02'), status: 'ACCEPTED', employeeId: emp.meera ?? null, createdAt: at('2026-09-25', '17:00') } });
     }
     if (appId['Rohan Gupta']) {
       await prisma.jobOffer.create({ data: { tenantId, applicationId: appId['Rohan Gupta']!, designationId: desig['React Developer'] ?? null, departmentId: dept.Development ?? null, branchId: branch.Ahmedabad ?? null, employmentType: 'FULL_TIME', annualCtcPaise: 120_000_000, joiningDate: d('2026-10-19'), expiresOn: d('2026-10-05'), status: 'ISSUED', createdAt: at('2026-09-25', '15:30') } });
@@ -400,7 +401,7 @@ export async function seed_people_phase2(prisma: PrismaClient, ctx: SeedCtx): Pr
       { app: 'Aditya Kulkarni', round: 'Technical 2', seq: 2, date: '2026-09-30', time: '11:00', min: 60, mode: 'VIDEO', lead: 'arjun', status: 'SCHEDULED', result: 'PENDING', emailed: at('2026-09-24', '16:30') },
       { app: 'Tanvi Shah', round: 'Portfolio', seq: 1, date: '2026-10-01', time: '15:00', min: 45, mode: 'IN_OFFICE', location: 'Lexisora Infotech, Baner Road, Pune', lead: 'vikram', status: 'SCHEDULED', result: 'PENDING', emailed: at('2026-09-26', '11:00') },
       { app: 'Meera Iyer', round: 'Technical 1', seq: 1, date: '2026-09-15', time: '11:00', min: 60, mode: 'VIDEO', lead: 'sneha', status: 'COMPLETED', result: 'SELECTED', emailed: at('2026-09-11', '10:05'), card: { ratings: [4, 3, 4], overall: 7.0, rec: 'HIRE', notes: 'Good test design and API testing depth; automation coding is average but improving.' } },
-      { app: 'Meera Iyer', round: 'HR', seq: 2, date: '2026-09-21', time: '12:00', min: 30, mode: 'VIDEO', lead: 'kavya', status: 'COMPLETED', result: 'SELECTED', emailed: at('2026-09-16', '14:00'), card: { ratings: [4, 4, 4], overall: 8.0, rec: 'STRONG_HIRE', notes: 'Clear communicator, referred by Sneha; expectations within band. Can join 6 Oct.' } },
+      { app: 'Meera Iyer', round: 'HR', seq: 2, date: '2026-09-25', time: '12:00', min: 30, mode: 'VIDEO', lead: 'kavya', status: 'COMPLETED', result: 'SELECTED', emailed: at('2026-09-22', '14:00'), card: { ratings: [4, 4, 4], overall: 8.0, rec: 'STRONG_HIRE', notes: 'Clear communicator, referred by Sneha; expectations within band. Can join 6 Oct.' } },
       { app: 'Farhan Ali', round: 'Technical 1', seq: 1, date: '2026-09-16', time: '11:00', min: 60, mode: 'VIDEO', lead: 'rahul', status: 'COMPLETED', result: 'REJECTED', emailed: at('2026-09-10', '10:35'), card: { ratings: [3, 2, 3], overall: 5.1, rec: 'NO_HIRE', notes: 'Struggled with async patterns and testing; hooks knowledge is shallow.' } },
       { app: 'Rohan Gupta', round: 'Technical 1', seq: 1, date: '2026-09-11', time: '11:00', min: 60, mode: 'VIDEO', lead: 'arjun', status: 'COMPLETED', result: 'SELECTED', emailed: at('2026-09-04', '12:10'), card: { ratings: [4, 4, 3], overall: 7.6, rec: 'HIRE', notes: 'Solid Next.js experience; good trade-off discussion on SSR vs CSR.' } },
       { app: 'Rohan Gupta', round: 'HR', seq: 2, date: '2026-09-18', time: '16:00', min: 30, mode: 'VIDEO', lead: 'kavya', status: 'COMPLETED', result: 'SELECTED', emailed: at('2026-09-12', '11:00'), card: { ratings: [4, 4, 4], overall: 8.2, rec: 'HIRE', notes: 'Wants product ownership; 30-day notice, negotiable.' } },
@@ -626,6 +627,7 @@ export async function seed_people_phase2(prisma: PrismaClient, ctx: SeedCtx): Pr
       { name: 'Ergonomic chair · Featherlite Optima', cat: 'Furniture', make: 'Featherlite', model: 'Optima HB', serial: null, bought: '2025-01-15', cost: 14_500, vendor: 'Featherlite Ahmedabad', warranty: '2028-01-14', status: 'IN_STOCK', condition: 'NEW' },
     ];
     let tag = 0;
+    const createdIds: string[] = [];
     for (const a of ASSETS) {
       if (a.to && !emp[a.to]) continue;
       if (a.returned && !emp[a.returned.by]) continue;
@@ -637,6 +639,7 @@ export async function seed_people_phase2(prisma: PrismaClient, ctx: SeedCtx): Pr
           statusBeforeRepair: a.repair ? 'IN_STOCK' : null, createdAt: at(a.bought, '12:00'),
         },
       });
+      createdIds.push(asset.id);
       if (a.status === 'ASSIGNED' && a.to && a.on) {
         const asg = await prisma.assetAssignment.create({ data: { tenantId, assetId: asset.id, employeeId: emp[a.to]!, assignedOn: d(a.on), assignedByName: hrName, acknowledgedAt: a.ack ? at(addDaysKey(a.on, 1), '10:30') : null, createdAt: at(a.on, '10:00') } });
         await prisma.asset.update({ where: { id: asset.id }, data: { currentAssigneeId: emp[a.to]!, currentAssignmentId: asg.id } });
@@ -647,6 +650,10 @@ export async function seed_people_phase2(prisma: PrismaClient, ctx: SeedCtx): Pr
       if (a.repair) {
         await prisma.assetRepair.create({ data: { tenantId, assetId: asset.id, vendor: a.repair.vendor, issue: a.repair.issue, sentOn: d(a.repair.sent), expectedBack: d(a.repair.back), createdAt: at(a.repair.sent, '15:00') } });
       }
+    }
+    // The list is "recently updated first": stamp updatedAt so the wireframe's four rows lead.
+    for (const [i, id] of createdIds.entries()) {
+      await prisma.asset.update({ where: { id }, data: { updatedAt: new Date(at('2026-09-28', '18:00').getTime() - i * 60_000) } });
     }
     await seqAt('asset.tag', tag + 1);
   }
@@ -673,7 +680,7 @@ export async function seed_people_phase2(prisma: PrismaClient, ctx: SeedCtx): Pr
       const all = Object.values(k.issued).every(Boolean);
       await prisma.welcomeKitIssue.create({
         data: {
-          tenantId, employeeId: emp[k.who]!, status: all ? 'ISSUED' : 'PARTIAL', tshirtSize: k.size, delivery: 'HANDOVER', lastIssuedName: hrName, completedAt: all ? at(k.on, '11:00') : null, createdAt: at(addDaysKey(k.on, -7), '10:00'),
+          tenantId, employeeId: emp[k.who]!, status: all ? 'ISSUED' : 'PARTIAL', tshirtSize: k.size, delivery: 'HANDOVER', lastIssuedName: hrName, completedAt: all ? at(k.on, '11:00') : null, createdAt: k.who === 'meera' ? at(k.on, '11:00') : at(addDaysKey(k.on, -7), '10:00'),
           lines: { create: ITEMS.map((it) => ({ tenantId, itemId: item[it.name]!, size: it.sizes.length ? k.size : null, issued: !!k.issued[it.name], issuedOn: k.issued[it.name] ? d(k.on) : null, issuedByName: k.issued[it.name] ? hrName : null })) },
         },
       });
@@ -758,7 +765,7 @@ export async function seed_people_phase2(prisma: PrismaClient, ctx: SeedCtx): Pr
       if (!e) continue;
       const missing = [...(e.photoFileId ? [] : ['employee.photo']), ...(e.bloodGroup ? [] : ['employee.blood_group'])];
       await prisma.idCard.create({
-        data: { tenantId, employeeId: e.id, templateId: classic.id, serial: `IDC-2026-${String(++serialNo).padStart(4, '0')}`, status: 'QUEUED', missingFields: missing, verifyToken: randomBytes(16).toString('base64url'), createdAt: k === 'meera' ? at('2026-09-22', '11:00') : at('2026-09-15', '09:30') },
+        data: { tenantId, employeeId: e.id, templateId: classic.id, serial: `IDC-2026-${String(++serialNo).padStart(4, '0')}`, status: 'QUEUED', missingFields: missing, verifyToken: randomBytes(16).toString('base64url'), createdAt: k === 'meera' ? at('2026-09-28', '11:00') : at('2026-09-15', '09:30') },
       });
     }
     await seqAt('idcard.serial', serialNo + 1, '2026');

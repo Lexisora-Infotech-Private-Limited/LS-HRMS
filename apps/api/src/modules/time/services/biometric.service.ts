@@ -3,46 +3,14 @@ import type { BiometricDevice } from '@prisma/client';
 import type { BiometricDeviceInput, BiometricDeviceRow, BiometricSimulateInput, EnrollmentRow, RawLogRow } from '@lexisora/shared';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { AuditService } from '../../../core/audit/audit.service';
+import { NotificationsService } from '../../../core/notifications/notifications.service';
 import { requireContext, runAsTenant } from '../../../core/context/request-context';
 import { AppError, notFound } from '../../../core/http/errors';
+import { directionFromStatus, localToInstant, parseAttLog } from '../lib/adms';
 import { IST_OFFSET_MIN } from '../lib/time-utils';
 import { AttendanceService } from './attendance.service';
 
-export type AttLogLine = { pin: string; local: string; status: number | null; verify: number | null; workCode: string | null; raw: string };
-
-/** Parse an ADMS ATTLOG body: "PIN\tYYYY-MM-DD HH:MM:SS\tstatus\tverify\tworkcode…" per line. */
-export function parseAttLog(body: string): AttLogLine[] {
-  const out: AttLogLine[] = [];
-  for (const rawLine of body.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line) continue;
-    const parts = line.split('\t').map((p) => p.trim());
-    const pin = parts[0] ?? '';
-    const local = parts[1] ?? '';
-    if (!/^\d{1,9}$/.test(pin) || !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(local)) continue;
-    out.push({
-      pin,
-      local: local.length === 16 ? `${local}:00` : local,
-      status: parts[2] !== undefined && parts[2] !== '' ? Number(parts[2]) : null,
-      verify: parts[3] !== undefined && parts[3] !== '' ? Number(parts[3]) : null,
-      workCode: parts[4] || null,
-      raw: line,
-    });
-  }
-  return out;
-}
-
-/** Device-local IST "YYYY-MM-DD HH:MM:SS" → instant. */
-export function localToInstant(local: string): Date {
-  return new Date(new Date(`${local.replace(' ', 'T')}Z`).getTime() - IST_OFFSET_MIN * 60_000);
-}
-
-/** ZKTeco status codes: 0 check-in, 1 check-out, 2 break-out, 3 break-in, 4 OT-in, 5 OT-out. */
-export function directionFromStatus(status: number | null): 'IN' | 'OUT' | undefined {
-  if (status === 0 || status === 3 || status === 4) return 'IN';
-  if (status === 1 || status === 2 || status === 5) return 'OUT';
-  return undefined;
-}
+export { directionFromStatus, localToInstant, parseAttLog, type AttLogLine } from '../lib/adms';
 
 /** Biometric devices (ZKTeco ADMS push protocol) — spec-time I. */
 @Injectable()
@@ -52,6 +20,7 @@ export class BiometricService {
     private readonly prisma: PrismaService,
     private readonly attendance: AttendanceService,
     private readonly audit: AuditService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   // ── admin ────────────────────────────────────────────────────────────────
@@ -154,6 +123,52 @@ export class BiometricService {
     return rows.map((r) => ({ id: r.id, pin: r.pin, employeeName: r.employeeId ? (names.get(r.employeeId) ?? null) : null, punchedAtLocal: r.punchedAtLocal, statusCode: r.statusCode, processed: r.processed, error: r.error, receivedAt: r.receivedAt.toISOString() }));
   }
 
+  /** Retry raw logs that could not become punches (unknown PIN fixed by enrolling, period unlocked, …). */
+  async reprocess(deviceId?: string) {
+    const rows = await this.prisma.biometricRawLog.findMany({ where: { processed: false, ...(deviceId ? { deviceId } : {}) }, orderBy: { punchedAt: 'asc' }, take: 500 });
+    const devices = new Map<string, BiometricDevice | null>();
+    let accepted = 0;
+    for (const r of rows) {
+      if (!devices.has(r.deviceId)) devices.set(r.deviceId, await this.prisma.biometricDevice.findFirst({ where: { id: r.deviceId } }));
+      const d = devices.get(r.deviceId);
+      if (d && (await this.processLog(d, r.id))) accepted++;
+    }
+    const left = await this.prisma.biometricRawLog.count({ where: { processed: false, ...(deviceId ? { deviceId } : {}) } });
+    await this.audit.record({ action: 'biometric.logs.reprocessed', entity: 'BiometricDevice', entityId: deviceId ?? 'all', meta: { total: rows.length, accepted, left } });
+    return {
+      ok: true,
+      total: rows.length,
+      accepted,
+      left,
+      message: rows.length ? `${accepted} of ${rows.length} logs turned into punches${left ? ` · ${left} still need attention` : ''}` : 'Nothing waiting to be processed',
+    };
+  }
+
+  /** Device health (spec-time I6): during 06:00–22:00 IST alert HR once when a device is silent for 30+ min. */
+  async offlineCheck(now = new Date()) {
+    const minute = (now.getUTCHours() * 60 + now.getUTCMinutes() + IST_OFFSET_MIN) % 1440;
+    if (minute < 6 * 60 || minute >= 22 * 60) return 0;
+    const silent = await this.prisma.biometricDevice.findMany({ where: { status: 'ACTIVE', lastSeenAt: { not: null, lt: new Date(now.getTime() - 30 * 60_000) } } });
+    let n = 0;
+    for (const d of silent) {
+      const link = `/attendance?view=devices&device=${d.id}`;
+      const already = await this.prisma.notification.count({ where: { type: 'biometric.offline', link, createdAt: { gte: d.lastSeenAt! } } });
+      if (already) continue;
+      const since = new Date(d.lastSeenAt!.getTime() + IST_OFFSET_MIN * 60_000).toISOString().slice(11, 16);
+      await this.notifications.notify({
+        userIds: await this.notifications.usersWithPermission('attendance.manage'),
+        type: 'biometric.offline',
+        title: `Biometric device ${d.name} offline since ${since}`,
+        body: `Serial ${d.serialNumber}. Punches made on it will sync when it reconnects.`,
+        link,
+        from: 'Attendance',
+        email: true,
+      });
+      n++;
+    }
+    return n;
+  }
+
   /** HR simulator: push one ATTLOG line through the same pipeline as a real device. */
   async simulate(input: BiometricSimulateInput) {
     const ctx = requireContext();
@@ -169,10 +184,11 @@ export class BiometricService {
 
   // ── ADMS protocol (public, device SN auth) ──────────────────────────────
   /** Resolve the device by serial number; unknown devices are recorded as unclaimed. */
-  async deviceBySn(sn: string, ip?: string): Promise<BiometricDevice | null> {
+  async deviceBySn(sn: string, ip?: string, touch = true): Promise<BiometricDevice | null> {
     const serial = (sn ?? '').trim().toUpperCase();
     if (!serial) return null;
     const d = await this.prisma.raw.biometricDevice.findUnique({ where: { serialNumber: serial } });
+    if (!touch) return d && d.status !== 'DISABLED' ? d : null;
     if (!d) {
       await this.prisma.raw.unclaimedBiometricDevice.upsert({ where: { serialNumber: serial }, create: { serialNumber: serial, ip: ip ?? null }, update: { lastSeenAt: new Date(), ip: ip ?? null } }).catch(() => undefined);
       return null;

@@ -10,6 +10,11 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: false });
   app.setGlobalPrefix('api/v1');
   app.set('trust proxy', 1);
+  // ZKTeco/ADMS biometric devices always call /iclock/* at the server root.
+  app.use((req: { url: string }, _res: unknown, next: () => void) => {
+    if (req.url.startsWith('/iclock/')) req.url = '/api/v1/attendance/biometric' + req.url;
+    next();
+  });
   app.use(cookieParser());
   app.useBodyParser('json', { limit: '10mb' });
   app.enableCors({ origin: [env.WEB_ORIGIN, /^http:\/\/localhost:\d+$/], credentials: true });

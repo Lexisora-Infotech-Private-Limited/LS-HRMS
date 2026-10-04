@@ -16,6 +16,7 @@ import type {
   LocationDetail,
   LocationRow,
   MyIdCheckCard,
+  PeriodLockReadiness,
   PeriodLockRow,
   RawLogRow,
   RegularizationRow,
@@ -47,10 +48,13 @@ export const tk = {
   location: (id: string) => ['time', 'location', id] as const,
   policy: ['time', 'policy'] as const,
   holidays: (year: number) => ['time', 'holidays', year] as const,
-  idSummary: ['time', 'id-summary'] as const,
-  idChecks: (filter: string) => ['time', 'id-checks', filter] as const,
-  idPending: ['time', 'id-pending'] as const,
+  id: ['time', 'id'] as const,
+  idSummary: (date: string) => ['time', 'id', 'summary', date] as const,
+  idChecks: (date: string, filter: string) => ['time', 'id', 'checks', date, filter] as const,
+  idPending: (date: string) => ['time', 'id', 'pending', date] as const,
   locks: ['time', 'locks'] as const,
+  lockReadiness: (month: string) => ['time', 'locks', 'readiness', month] as const,
+  unclaimed: ['time', 'bio-unclaimed'] as const,
   devices: ['time', 'bio-devices'] as const,
   enrollments: ['time', 'bio-enrollments'] as const,
   bioLogs: ['time', 'bio-logs'] as const,
@@ -80,8 +84,8 @@ export const useWeek = (weekStart: string | null) =>
   useQuery({ queryKey: tk.week(weekStart ?? 'default'), queryFn: () => get<TimesheetWeek>('/timesheets/me/week', weekStart ? { weekStart } : undefined) });
 export const useTsOptions = () => useQuery({ queryKey: tk.options, queryFn: () => get<TimesheetOptions>('/timesheets/options'), staleTime: 60_000 });
 
-export const useApprovals = (level: number, status: string) =>
-  useQuery({ queryKey: tk.approvals(level, status), queryFn: () => get<ApprovalList>('/timesheet-approvals', { level, status }) });
+export const useApprovals = (level: number, status: string, enabled = true) =>
+  useQuery({ queryKey: tk.approvals(level, status), queryFn: () => get<ApprovalList>('/timesheet-approvals', { level, status }), enabled });
 export const useApproval = (stepId: string | null, page: number, date: string, taskKey: string) =>
   useQuery({
     queryKey: tk.approval(stepId ?? '', page, date, taskKey),
@@ -97,14 +101,19 @@ export const usePolicy = () => useQuery({ queryKey: tk.policy, queryFn: () => ge
 export const useHolidays = (year: number) => useQuery({ queryKey: tk.holidays(year), queryFn: () => get<HolidayRow[]>('/holidays', { year }) });
 export const useUpcomingHolidays = () => useQuery({ queryKey: ['time', 'holidays-upcoming'], queryFn: () => get<HolidayGroup[]>('/holidays/upcoming') });
 
-export const useIdSummary = () => useQuery({ queryKey: tk.idSummary, queryFn: () => get<IdComplianceSummary>('/id-compliance/summary') });
-export const useIdChecks = (wearing: string) => useQuery({ queryKey: tk.idChecks(wearing), queryFn: () => get<IdCheckRow[]>('/id-compliance/checks', { wearing: wearing || undefined }) });
-export const useIdPending = () => useQuery({ queryKey: tk.idPending, queryFn: () => get<IdPendingRow[]>('/id-compliance/pending') });
+export const useIdSummary = (date: string) => useQuery({ queryKey: tk.idSummary(date), queryFn: () => get<IdComplianceSummary>('/id-compliance/summary', { date }) });
+export const useIdChecks = (date: string, wearing: string) =>
+  useQuery({ queryKey: tk.idChecks(date, wearing), queryFn: () => get<IdCheckRow[]>('/id-compliance/checks', { date, wearing: wearing || undefined }) });
+export const useIdPending = (date: string) => useQuery({ queryKey: tk.idPending(date), queryFn: () => get<IdPendingRow[]>('/id-compliance/pending', { date }) });
 
 export const useLocks = (enabled = true) => useQuery({ queryKey: tk.locks, queryFn: () => get<PeriodLockRow[]>('/period-locks'), enabled });
-export const useDevices = (enabled = true) => useQuery({ queryKey: tk.devices, queryFn: () => get<BiometricDeviceRow[]>('/attendance/biometric/devices'), enabled });
+export const useLockReadiness = (month: string) => useQuery({ queryKey: tk.lockReadiness(month), queryFn: () => get<PeriodLockReadiness>('/period-locks/readiness', { month }) });
+export const useDevices = (enabled = true) => useQuery({ queryKey: tk.devices, queryFn: () => get<BiometricDeviceRow[]>('/attendance/biometric/devices'), enabled, refetchInterval: 60_000 });
+export const useUnclaimed = (enabled = true) =>
+  useQuery({ queryKey: tk.unclaimed, queryFn: () => get<{ serialNumber: string; firstSeenAt: string; lastSeenAt: string; ip: string | null; model: string | null }[]>('/attendance/biometric/unclaimed'), enabled });
 export const useEnrollments = (enabled = true) => useQuery({ queryKey: tk.enrollments, queryFn: () => get<EnrollmentRow[]>('/attendance/biometric/enrollments'), enabled });
-export const useBioLogs = (enabled = true) => useQuery({ queryKey: tk.bioLogs, queryFn: () => get<RawLogRow[]>('/attendance/biometric/logs'), enabled });
+export const useBioLogs = (deviceId: string, enabled = true) =>
+  useQuery({ queryKey: [...tk.bioLogs, deviceId], queryFn: () => get<RawLogRow[]>('/attendance/biometric/logs', { deviceId: deviceId || undefined }), enabled });
 
 // ── formatting helpers ─────────────────────────────────────────────────────
 /** 2480 → "41h 20m" */
@@ -157,6 +166,16 @@ export function hhmmss(sec: number): string {
   const s = Math.max(0, Math.floor(sec));
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
+}
+/** "2026-09-29" → "Tue 29 Sep" */
+export function dayKeyLabel(key: string): string {
+  return new Date(`${key}T00:00:00Z`).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+}
+/** ISO instant → "29 Sep, 09:41" (IST). */
+export function stamp(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const d = new Date(new Date(iso).getTime() + 330 * 60_000);
+  return `${d.getUTCDate()} ${d.toLocaleString('en-IN', { month: 'short', timeZone: 'UTC' })}, ${d.toISOString().slice(11, 16)}`;
 }
 export function timeOf(iso: string | null | undefined): string {
   if (!iso) return '—';

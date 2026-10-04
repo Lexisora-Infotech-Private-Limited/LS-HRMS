@@ -633,7 +633,8 @@ export async function seed_finance(prisma: PrismaClient, ctx: SeedCtx): Promise<
     const client = clientNames[i % 4]!;
     await synth('SALES_INVOICES', `INV-0${n} · ${client} · ${monLabel(monthKeyAdd(m, -1))}.pdf`, `${m}-${dd}`, [client, 'invoice', fyOf(day(`${m}-${dd}`))], ['Tax invoice (archived copy)', `Client: ${client}`]);
   }
-  // Bills & receipts archive: recurring monthly bills + one-offs (282).
+  // Bills & receipts archive: recurring monthly bills + one-offs (281) — with the 27 recorded bills and the
+  // 104 sales-invoice PDFs in its sub-folder the tile shows 412 files.
   const RECURRING: [string, string, string][] = [
     ['Airtel', 'Postpaid bill', 'internet & telecom'],
     ['Tata Tele', 'Leased line invoice', 'internet & telecom'],
@@ -671,7 +672,6 @@ export async function seed_finance(prisma: PrismaClient, ctx: SeedCtx): Promise<
     ['2026-02-17', 'Flipkart – monitors × 4 invoice', 'peripherals'],
     ['2026-03-25', 'Godrej – fire safety cabinet invoice', 'furniture'],
     ['2026-05-14', 'Dell India – Latitude 5450 × 3 invoice', 'laptops'],
-    ['2026-07-02', 'Canon – printer service invoice', 'repairs'],
   ];
   for (const [d, t, c] of ONE_OFF) await synth('BILLS', `${t}.pdf`, d, [c, fyOf(day(d))], [t]);
   // GST returns: 17 months × (GSTR-1 + GSTR-3B) acknowledgements + GSTR-9 + Aug working (36).
