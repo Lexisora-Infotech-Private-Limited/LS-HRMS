@@ -6,7 +6,8 @@ Commands are for Windows PowerShell, run from the repository root (`lexisora-hrm
 ## 1. Prerequisites
 
 - Docker Desktop running (WSL 2 backend).
-- Free ports: **8080** (web), **4000** (API / desktop tracker), **8026** (mail outbox).
+- Ports: web portal **8080** (or the first free of 8088 / 8090 / 8180 — `new-env.ps1` picks it and
+  prints the address), **4000** (API / desktop tracker), **8026** (mail outbox). All are set in `.env.prod`.
   Stop the development servers (`pnpm dev`) first — they also use port 4000.
 
 ## 2. Create the environment file (once)
@@ -37,7 +38,7 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod logs -f api   # w
 ```
 
 On first start the API applies the database schema and creates your workspace (or the demo data).
-Then open **http://localhost:8080** and sign in with the workspace address and the admin you entered.
+Then open the web portal address printed by `new-env.ps1` (e.g. **http://localhost:8080**) and sign in with the workspace address and the admin you entered.
 
 | What | Where |
 |---|---|

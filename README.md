@@ -84,26 +84,25 @@ SPA and proxying `/api` + `/socket.io`, `apps/web/Dockerfile`). Provide `POSTGRE
 Integrations use adapters with working stubs until configured: GitLab (`GITLAB_URL/TOKEN`),
 LiveKit calls, WhatsApp, Razorpay, CCTV gateway, e-sign, print vendor.
 
-## Release status
+## Release status — v1.0.0
 
-**Core release (v0.1.0-core) — complete, tested end to end**
+All screens from the wireframes are implemented against the real API and database:
+Home (dashboard, company feed, notice board, comms hub with calls), Time (attendance + desktop tracker,
+timesheets, two-level approvals, attendance corrections, period locks, biometric devices, time off,
+leave setup, ID card compliance), Work (clients, projects, task board with GitLab, project archive,
+intern task sheets), People (employees, profiles, paperless onboarding, shifts, work locations,
+appraisals, jobs, candidates, interviews), Finance (payslips, payroll run, GST invoices, purchases &
+input GST, ledger, filing cabinet), Workplace (digital vault, ID card designer, visiting card, assets,
+welcome kits, policies, helpdesk, learning, kudos & EOTM, rooms & visitors, CCTV, wellness games),
+Admin (roles & access, attendance policy, audit log, alerts) and SaaS (subscription & billing,
+branding, tenants, data privacy, Lexisora support).
 
-- Sign-in (workspace, email, password, forgot/reset password, invite acceptance, SSO stub), mobile-access rule, JWT + rotating refresh cookies, tenant-scoped data, permission-based RBAC
-- Dashboard (quote, today/punch card, leave balance, to-dos, approvals, announcements, birthdays & events, leave history), Notice board, Alerts, header search
-- Attendance (web punch rules by work mode, timeline, monthly stats, team view), shifts, work locations, attendance policy matrix, holidays
-- Desktop tracker app + backend (pairing, punch, per-task time, auto-idle dialog, breaks, screenshots, tray widget, offline encrypted queue, daily summary, HR-locked settings)
-- My timesheet (tracker-driven grid, adjustments with reason, outside-hours tasks) and two-level approvals (project lead → reporting manager, screenshots + idle claims)
-- Time off (balances, sandwich/holiday rules, approvals), leave setup, salary structures, payroll run (PF/ESI/PT/TDS, LOP, idle deduction) with payslip PDFs, My payslips
-- Employees directory (+ CSV import), masters, employee profile & My profile (documents, assets, offer & pay, attendance, devices), paperless onboarding (e-sign, documents + HR verification, bank & tax, welcome kit), digital vault
-- Clients, projects, task board (team boards with access control, drag & drop, GitLab branch/MR on WIP/Dev Completed)
-- Roles & access (matrix + per-role editor), audit log
+Verification: 725 unit tests (API 609, tracker 116), 29 Playwright journeys including every screen for
+all five roles, and the production Docker stack (`docs/DEPLOYMENT.md`).
 
-**Next releases** (screens currently show a placeholder; much of the API already exists):
-Finance (GST invoices, purchases & input GST, ledger, filing cabinet) · Workplace (company feed, kudos & EOTM,
-comms hub, helpdesk, learning, rooms & visitors, policies, wellness games, CCTV) · Recruitment (jobs, candidates,
-interviews), appraisals, assets, welcome kits, ID card designer, visiting card · ID card compliance, regularization
-& period-lock screens · project archive, intern task sheets · SaaS (subscription, branding, tenants, data privacy,
-Lexisora support).
+Integrations run on built-in stubs until configured (GitLab, LiveKit calls, WhatsApp, Razorpay, CCTV
+gateway, e-sign, SMTP). Enterprise items deliberately deferred: per-tenant encryption keys / dedicated
+databases, PostgreSQL row-level security, SAML/OIDC SSO, signed tracker auto-update.
 
 Design documents: `docs/ARCHITECTURE.md` (conventions and cross-domain contract), `docs/specs/`
 (master design, per-domain specs, coverage audit).
