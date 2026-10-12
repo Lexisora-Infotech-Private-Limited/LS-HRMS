@@ -94,6 +94,8 @@ export class WorkAccessService {
     if (v.employeeId) {
       const rows = await this.prisma.boardMember.findMany({ where: { employeeId: v.employeeId }, select: { projectId: true, departmentId: true } });
       for (const r of rows) keys.add(`${r.projectId}|${r.departmentId}`);
+      const led = await this.prisma.project.findMany({ where: { leadEmployeeId: v.employeeId }, select: { id: true, boardDepartmentIds: true } });
+      for (const p of led) for (const d of p.boardDepartmentIds) keys.add(`${p.id}|${d}`);
     }
     if (v.leadsDepartments.length) {
       const ps = await this.prisma.project.findMany({ where: { boardDepartmentIds: { hasSome: v.leadsDepartments } }, select: { id: true, boardDepartmentIds: true } });

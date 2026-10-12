@@ -99,8 +99,7 @@ export class BoardsService {
       const pool = await this.prisma.employee.findMany({
         where: {
           status: { in: ['ACTIVE', 'NOTICE_PERIOD'] },
-          id: { notIn: [...rows.map((r) => r.employeeId), ...(dept.leadEmployeeId ? [dept.leadEmployeeId] : [])] },
-          OR: [{ departmentId }, { id: { in: projectMembers.map((m) => m.employeeId) } }],
+          id: { in: projectMembers.map((m) => m.employeeId), notIn: [...rows.map((r) => r.employeeId), ...(dept.leadEmployeeId ? [dept.leadEmployeeId] : [])] },
         },
         orderBy: { fullName: 'asc' },
         select: { id: true, fullName: true, department: { select: { name: true } } },
@@ -132,6 +131,7 @@ export class BoardsService {
     if (!e || e.status === 'EXITED') throw badRequest('Employee not found');
     if (e.id === dept.leadEmployeeId) throw conflict(`${e.fullName} leads ${dept.name} and already has access`);
     if (await this.prisma.boardMember.count({ where: { projectId, departmentId, employeeId } })) throw conflict(`${e.fullName} is already on this board`);
+    if (!(await this.prisma.projectMember.count({ where: { projectId, employeeId } }))) throw badRequest(`${e.fullName} is not a member of this project — ask the project lead to add them first`);
     await this.prisma.boardMember.create({ data: { tenantId: currentTenantId(), projectId, departmentId, employeeId, allocatedByEmployeeId: v.employeeId } });
     await this.audit.record({ action: 'board.member.allocated', entity: 'Project', entityId: projectId, meta: { board: dept.name, employeeId, name: e.fullName } });
     if (e.userId) {

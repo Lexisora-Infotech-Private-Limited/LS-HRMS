@@ -208,15 +208,15 @@ export type BoardAccessInput = {
   isDeptLead: boolean;
   /** Allocated by the department lead (BoardMember row). */
   isAllocated: boolean;
-  /** Project lead (manages tasks on boards they can see; no implicit access to other departments). */
+  /** Project lead: sees and manages every board of their own project (allocating people stays with the department lead). */
   isProjectLead: boolean;
 };
 
 export function boardAccess(a: BoardAccessInput): { canView: boolean; canManage: boolean; canAllocate: boolean } {
-  const canView = a.viewAll || a.isDeptLead || a.isAllocated;
+  const canView = a.viewAll || a.isDeptLead || a.isAllocated || a.isProjectLead;
   return {
     canView,
-    canManage: a.viewAll || a.isDeptLead || (a.isProjectLead && canView),
+    canManage: a.viewAll || a.isDeptLead || a.isProjectLead,
     canAllocate: a.viewAll || a.isDeptLead,
   };
 }

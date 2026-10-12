@@ -54,7 +54,7 @@ export const NAV: NavGroup[] = [
       { id: 'onboarding', label: 'Paperless onboarding', path: '/onboarding', permission: 'onboarding.self' },
       { id: 'shifts', label: 'Shifts', path: '/shifts', permission: 'shifts.manage' },
       { id: 'locations', label: 'Work locations', path: '/locations', permission: 'locations.manage' },
-      { id: 'appraisal', label: 'Appraisals', path: '/appraisals', permission: 'appraisal.view' },
+      { id: 'appraisal', label: 'Appraisals', path: '/appraisals', permission: ['appraisal.view', 'dashboard.view'] },
       { id: 'jobs', label: 'Jobs', path: '/jobs', permission: 'jobs.manage' },
       { id: 'candidates', label: 'Candidates', path: '/candidates', permission: 'candidates.view' },
       { id: 'interviews', label: 'Interviews', path: '/interviews', permission: 'interviews.view' },

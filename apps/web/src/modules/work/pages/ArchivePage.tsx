@@ -127,7 +127,7 @@ function ArchiveDrawer({ id, onClose }: { id: string; onClose: () => void }) {
             <span>Estimated vs logged</span><span>{hours(d.estimatedMinutes, '0h')} / {hours(d.loggedMinutes, '0h')}</span>
             <span>Closed</span><span>{d.closedAt ? formatDate(d.closedAt) : d.closedLabel}</span>
             <span>Modules</span><span>{d.modules.join(', ') || '—'}</span>
-            <span>Team</span><span>{d.members.map((m) => `${m.name} (${humanize(m.role)})`).join(', ') || '—'}</span>
+            <span>Team</span><span>{d.members.map((m) => `${m.name} (${m.role === 'MEMBER' ? 'Development' : humanize(m.role)})`).join(', ') || '—'}</span>
             <span>Tasks</span><span>{Object.entries(d.tasksByStatus).map(([s, n]) => `${TASK_STATUS_LABELS[s as TaskStatusKey] ?? s} ${n}`).join(' · ') || '—'}</span>
             <span>Access</span>
             {d.canManage ? (
