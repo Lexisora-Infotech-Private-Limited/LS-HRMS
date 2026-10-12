@@ -18,17 +18,17 @@
 /* — app shell — */
 .shell { display: grid; grid-template-columns: 236px minmax(0, 1fr); min-height: 100vh; }
 .sidebar {
-  border-right: 1px solid var(--color-divider); padding: 18px 10px; position: sticky; top: 0; height: 100vh;
-  overflow: auto; display: flex; flex-direction: column; gap: 16px;
+  background: var(--color-sidebar-bg); border-right: 1px solid var(--color-sidebar-border); padding: 18px 10px;
+  position: sticky; top: 0; height: 100vh; overflow: auto; display: flex; flex-direction: column; gap: 16px;
 }
-.brand { padding: 0 8px; display: flex; flex-direction: column; gap: 2px; text-decoration: none; color: inherit; }
-.brand-name { font-family: var(--font-heading); font-size: 22px; font-weight: 600; line-height: 1; }
-.brand-sub { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-accent-700); }
+.brand { padding: 0 8px; display: flex; flex-direction: column; gap: 2px; text-decoration: none; color: var(--color-sidebar-text); }
+.brand-name { font-family: var(--font-heading); font-size: 22px; font-weight: 600; line-height: 1; color: var(--color-sidebar-active-text); }
+.brand-sub { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-sidebar-text-muted); }
 .nav-group { display: flex; flex-direction: column; gap: 1px; }
-.nav-group-title { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-neutral-600); padding: 0 8px 4px; }
-.nav-link { text-align: left; font-size: 13px; padding: 5px 8px; border-radius: 4px; color: var(--color-text); text-decoration: none; display: flex; justify-content: space-between; }
-.nav-link:hover { background: color-mix(in srgb, var(--color-text) 6%, transparent); color: var(--color-text); }
-.nav-link.active { background: var(--color-accent-100); color: var(--color-accent-800); }
+.nav-group-title { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-sidebar-text-muted); padding: 0 8px 4px; }
+.nav-link { text-align: left; font-size: 13px; padding: 5px 8px; border-radius: 4px; color: var(--color-sidebar-text); text-decoration: none; display: flex; justify-content: space-between; }
+.nav-link:hover { background: var(--color-sidebar-hover); color: var(--color-sidebar-active-text); }
+.nav-link.active { background: var(--color-sidebar-active-bg); color: var(--color-sidebar-active-text); }
 .topbar { display: flex; align-items: center; gap: 14px; padding: 12px 32px; border-bottom: 1px solid var(--color-divider); flex-wrap: wrap; position: sticky; top: 0; background: var(--color-bg); z-index: 20; }
 .main { padding: 28px 32px 64px; display: flex; flex-direction: column; gap: 22px; max-width: 1320px; width: 100%; }
 .avatar {
@@ -43,7 +43,7 @@
 .mobile-nav-toggle { display: none; }
 @media (max-width: 860px) {
   .shell { grid-template-columns: minmax(0, 1fr); }
-  .sidebar { position: fixed; z-index: 45; background: var(--color-bg); width: 260px; transform: translateX(-100%); transition: transform .2s; }
+  .sidebar { position: fixed; z-index: 45; width: 260px; transform: translateX(-100%); transition: transform .2s; }
   .sidebar.open { transform: none; box-shadow: var(--shadow-lg); }
   .mobile-nav-toggle { display: inline-flex; }
   .topbar, .main { padding-left: 16px; padding-right: 16px; }
@@ -109,6 +109,11 @@
 
 /* — login split — */
 .login { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); }
-.login-left { border-right: 1px solid var(--color-divider); padding: 56px; display: flex; flex-direction: column; justify-content: space-between; gap: 32px; }
+.login-left {
+  background: var(--color-sidebar-bg); color: var(--color-sidebar-text);
+  padding: 56px; display: flex; flex-direction: column; justify-content: space-between; gap: 32px;
+}
+.login-left .kicker { color: var(--color-accent-300); }
+.login-left .muted, .login-left .faint { color: var(--color-sidebar-text-muted); }
 .login-right { display: flex; align-items: center; justify-content: center; padding: 56px; }
 @media (max-width: 860px) { .login { grid-template-columns: 1fr; } .login-left { display: none; } .login-right { padding: 24px 16px; } }

@@ -61,7 +61,7 @@ export function AppShell() {
             {g.items.map((it) => (
               <NavLink key={it.id} to={it.path} className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}>
                 <span>{it.label}</span>
-                {!!badges[it.id] && <span className="tnum" style={{ color: 'var(--color-accent-700)' }}>{badges[it.id]}</span>}
+                {!!badges[it.id] && <span className="tnum" style={{ color: 'var(--color-accent-300)' }}>{badges[it.id]}</span>}
               </NavLink>
             ))}
           </nav>
@@ -74,7 +74,10 @@ export function AppShell() {
           <GlobalSearch />
           <div style={{ marginLeft: 'auto' }} />
           <PunchButton />
-          <button className="btn btn-secondary" onClick={() => nav('/alerts')}>Alerts · {count.data?.unread ?? 0}</button>
+          <button className="btn btn-secondary" onClick={() => nav('/alerts')}>
+            <span>Alerts</span>
+            {!!count.data?.unread && <span className="count-badge">{count.data.unread}</span>}
+          </button>
           <div style={{ position: 'relative' }} ref={menuRef}>
             <button className="user-btn" onClick={() => setMenu((m) => !m)} aria-haspopup="menu" aria-expanded={menu}>
               <Avatar initials={me.initials} name={me.name} />

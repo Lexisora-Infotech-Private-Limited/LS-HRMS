@@ -36,6 +36,14 @@
   --color-danger-100: #fbe9e6;
   --color-success: #4d7a3a;
 
+  --color-sidebar-bg: #0c1530;
+  --color-sidebar-border: color-mix(in srgb, #ffffff 10%, transparent);
+  --color-sidebar-text: #eef0f6;
+  --color-sidebar-text-muted: color-mix(in srgb, #eef0f6 55%, transparent);
+  --color-sidebar-hover: color-mix(in srgb, #ffffff 8%, transparent);
+  --color-sidebar-active-bg: color-mix(in srgb, #ffffff 12%, transparent);
+  --color-sidebar-active-text: #ffffff;
+
   --font-heading: 'Cormorant Garamond', Georgia, serif;
   --font-heading-weight: 600;
   --font-body: 'Lora', Georgia, serif;
@@ -104,10 +112,10 @@ figure { margin: 0; }
 }
 .btn svg { display: block; }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.btn-primary { color: var(--color-accent-700); border-color: var(--color-accent); }
-.btn-primary:hover:not(:disabled) { background: color-mix(in srgb, var(--color-accent) 12%, transparent); }
-.btn-primary:active:not(:disabled) { background: color-mix(in srgb, var(--color-accent) 22%, transparent); }
-.btn-secondary { border-color: var(--color-divider); }
+.btn-primary { color: #ffffff; background: var(--color-sidebar-bg); border-color: var(--color-sidebar-bg); }
+.btn-primary:hover:not(:disabled) { background: color-mix(in srgb, var(--color-sidebar-bg) 85%, #000 15%); border-color: color-mix(in srgb, var(--color-sidebar-bg) 85%, #000 15%); }
+.btn-primary:active:not(:disabled) { background: color-mix(in srgb, var(--color-sidebar-bg) 70%, #000 30%); border-color: color-mix(in srgb, var(--color-sidebar-bg) 70%, #000 30%); }
+.btn-secondary { background: var(--color-bg); border-color: var(--color-divider); }
 .btn-secondary:hover:not(:disabled) { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
 .btn-secondary:active:not(:disabled) { background: color-mix(in srgb, var(--color-text) 14%, transparent); }
 .btn-ghost { color: var(--color-accent-700); padding-inline: var(--space-1); }
@@ -170,6 +178,12 @@ textarea.input { min-height: 90px; resize: vertical; }
 .tag-neutral { background: var(--color-neutral-100); color: var(--color-neutral-800); }
 .tag-outline { border: 1px solid var(--color-accent); color: var(--color-accent-700); }
 .tag-danger { background: var(--color-danger-100); color: var(--color-danger); }
+
+.count-badge {
+  display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px;
+  border-radius: 999px; background: var(--color-danger); color: #ffffff; font-size: 11px;
+  font-weight: 600; line-height: 1; font-feature-settings: 'tnum';
+}
 
 /* — tables — */
 .table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
