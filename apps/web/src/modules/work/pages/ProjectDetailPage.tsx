@@ -174,6 +174,8 @@ function Modules({ p }: { p: ProjectDetail }) {
   );
 }
 
+const roleLabel = (r: string) => (r === 'MEMBER' ? 'Development' : humanize(r));
+
 function Members({ p }: { p: ProjectDetail }) {
   const lk = useLookups(['employees']);
   const [emp, setEmp] = useState('');
@@ -198,11 +200,11 @@ function Members({ p }: { p: ProjectDetail }) {
             header: 'Role',
             render: (m) =>
               p.canManage ? (
-                <select className="input" style={{ padding: '3px 6px', width: 'auto' }} value={m.role} onChange={(e) => upd.mutate({ id: m.id, role: e.target.value })}>
-                  {PROJECT_MEMBER_ROLES.map((r) => <option key={r} value={r}>{humanize(r)}</option>)}
+                <select className="input" style={{ padding: '3px 28px 3px 6px', width: 'auto' }} value={m.role} onChange={(e) => upd.mutate({ id: m.id, role: e.target.value })}>
+                  {PROJECT_MEMBER_ROLES.map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}
                 </select>
               ) : (
-                humanize(m.role)
+                roleLabel(m.role)
               ),
           },
           { key: 'j', header: 'Joined', render: (m) => formatDate(m.joinedAt) },
@@ -216,8 +218,8 @@ function Members({ p }: { p: ProjectDetail }) {
             <option value="">Add a member…</option>
             {opts(lk.data, 'employees').filter((o) => !existing.has(o.value)).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
-          <select className="input" value={role} onChange={(e) => setRole(e.target.value)} style={{ width: 130, minWidth: 0 }}>
-            {PROJECT_MEMBER_ROLES.filter((r) => r !== 'LEAD').map((r) => <option key={r} value={r}>{humanize(r)}</option>)}
+          <select className="input" value={role} onChange={(e) => setRole(e.target.value)} style={{ width: 160, minWidth: 0 }}>
+            {PROJECT_MEMBER_ROLES.filter((r) => r !== 'LEAD').map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}
           </select>
           <button className="btn btn-secondary" disabled={!emp || add.isPending} onClick={() => add.mutate(undefined)}>Add member</button>
         </div>

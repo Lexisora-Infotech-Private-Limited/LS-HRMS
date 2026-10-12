@@ -130,10 +130,8 @@ describe('board access', () => {
   it('managers/admin (tasks.viewAllBoards) see every board', () => {
     expect(boardAccess({ ...none, viewAll: true })).toEqual({ canView: true, canManage: true, canAllocate: true });
   });
-  it('project lead manages only boards they can see', () => {
-    expect(boardAccess({ ...none, isProjectLead: true }).canView).toBe(false);
-    expect(boardAccess({ ...none, isProjectLead: true }).canManage).toBe(false);
-    expect(boardAccess({ ...none, isProjectLead: true, isAllocated: true })).toEqual({ canView: true, canManage: true, canAllocate: false });
+  it('project lead views and manages every board of their project but cannot allocate', () => {
+    expect(boardAccess({ ...none, isProjectLead: true })).toEqual({ canView: true, canManage: true, canAllocate: false });
   });
   it('members move their own or unassigned cards; managers move anything', () => {
     const member = { canManage: false, canView: true, me: 'priya' };

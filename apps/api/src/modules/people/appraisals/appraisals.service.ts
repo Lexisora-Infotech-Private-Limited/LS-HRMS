@@ -307,8 +307,10 @@ export class AppraisalsService {
     const isSelf = ctx.employeeId === p.employeeId;
     const isReviewer = ctx.employeeId === p.reviewerEmployeeId;
     const admin = this.isAdmin();
-    if (!isSelf && !isReviewer && !admin) throw notFound('Review');
-    return { p, isSelf, isReviewer, admin };
+    // Managers can open (read-only) the reviews of anyone in their reporting tree — the same rows the cycle list shows them.
+    const isTeamViewer = !isSelf && !isReviewer && !admin && hasPerm(ctx, 'appraisal.view') && !!ctx.employeeId && (await this.org.reportTree(ctx.employeeId)).includes(p.employeeId);
+    if (!isSelf && !isReviewer && !admin && !isTeamViewer) throw notFound('Review');
+    return { p, isSelf, isReviewer, admin, isTeamViewer };
   }
 
   async review(id: string): Promise<ReviewDetail> {
@@ -319,6 +321,7 @@ export class AppraisalsService {
     const closed = p.cycle.status === 'CLOSED';
     // The employee sees the manager's ratings only once the cycle is closed.
     const showManager = !isSelf || closed || admin;
+    // Everyone but the employee (reviewer, viewing manager) sees the self answers once they are submitted.
     const showSelfToReviewer = p.selfStatus === 'SUBMITTED' || isSelf || admin;
     return {
       id: p.id,

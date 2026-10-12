@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { requireContext } from '../context/request-context';
 import { MailService } from '../mail/mail.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { env } from '../../config/env';
 
 export type NotifyInput = {
   /** Recipient user ids (use `usersForEmployees` to map employee ids). */
@@ -45,10 +46,11 @@ export class NotificationsService {
     });
     this.realtime.toUsers(ids, 'notification', { type: n.type, title: n.title, body: n.body, link: n.link });
     if (n.email) {
+      const link = n.link ? `${env.WEB_ORIGIN.replace(/\/$/, '')}${n.link}` : null;
       const users = await this.prisma.user.findMany({ where: { id: { in: ids } }, select: { email: true, name: true } });
       await Promise.all(
         users.map((u) =>
-          this.mail.send({ to: u.email, subject: n.title, text: `Hi ${u.name},\n\n${n.body ?? n.title}\n\n— Lexisora HRMS` }),
+          this.mail.send({ to: u.email, subject: n.title, text: `Hi ${u.name},\n\n${n.body ?? n.title}${link ? `\n\nOpen: ${link}` : ''}\n\n— Lexisora HRMS` }),
         ),
       );
     }
