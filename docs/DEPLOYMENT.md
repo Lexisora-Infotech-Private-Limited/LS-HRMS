@@ -114,6 +114,15 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 
 Data stays in the `pgdata` and `storage` Docker volumes. Take a backup before every update.
 
+On Linux (or Git Bash), `./deploy.sh` does the whole update: fast-forwards `main` (or `DEPLOY_BRANCH`),
+rebuilds the images, dumps the database to `backups/<timestamp>-predeploy/`, runs
+`prisma migrate deploy`, then swaps the api/web containers and waits until they are healthy. If the
+backup or a migration fails, the running containers are left as they were.
+
+Schema changes must ship as migration files: after editing `apps/api/prisma/schema/*.prisma`, run
+`pnpm --filter @lexisora/api prisma:migrate` and commit the new folder under `prisma/schema/migrations/`.
+`db push` (and `db:sync`) only change your local database — production never sees those changes.
+
 ## 10. Stop / start
 
 ```powershell

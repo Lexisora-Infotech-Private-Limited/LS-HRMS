@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { DAY_STATUS_LABEL, REGULARIZATION_TYPES, REGULARIZATION_TYPE_LABEL, type AttendanceDayRow, type AttendanceTimeline, type TeamTodayRow } from '@lexisora/shared';
+import { DAY_STATUS_LABEL, REGULARIZATION_TYPES, REGULARIZATION_TYPE_LABEL, type AttendanceDayRow, type AttendanceTimeline, type TeamTodayRow, type TimelineSegment } from '@lexisora/shared';
 import { FormModal, type FieldDef } from '@/components/form';
 import { DataTable } from '@/components/table';
 import { ErrorBlock, Kpis, Loading, PageHeader, Seg, Tabs, Tag, toneFor } from '@/components/ui';
@@ -8,6 +8,7 @@ import { post } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { useAction } from '@/lib/query';
 import { dur, istToday, monthLabel, shiftMonth, timeOf, tk, useMonth, useMyIdCheck, useTeam, useTimeline } from '../api';
+import { useIdlePending, type PendingIdle } from '../idle';
 import { usePunch } from '../punch';
 import '../time.css';
 import { BiometricPanel } from './BiometricPanel';
@@ -131,38 +132,82 @@ function MonthCard({ employeeId, month }: { employeeId: string | null; month: st
 function TimelineBlock({ employeeId }: { employeeId: string | null }) {
   const [date] = useState(istToday());
   const q = useTimeline(employeeId, date);
+  const pending = useIdlePending();
   return (
     <div className="stack" style={{ gap: 8 }}>
       <h4 style={{ margin: 0 }}>Today's timeline</h4>
-      {q.isLoading ? <Loading /> : q.isError ? <ErrorBlock error={q.error} /> : q.data && <TimelineStrip tl={q.data} />}
+      {q.isLoading ? <Loading /> : q.isError ? <ErrorBlock error={q.error} /> : q.data && <TimelineStrip tl={q.data} live={employeeId ? null : pending} />}
     </div>
   );
 }
 
-export function TimelineStrip({ tl }: { tl: AttendanceTimeline }) {
+type StripPart = { start: number; end: number; kind: TimelineSegment['kind'] | 'gap'; label: string };
+const KIND_RANK: Record<TimelineSegment['kind'], number> = { active: 1, break: 2, idle: 3 };
+const hmOf = (ms: number) => timeOf(new Date(ms).toISOString());
+
+/** Lay segments on the axis; where they overlap the higher kind wins (idle > break > active). */
+function paint(a0: number, a1: number, segments: TimelineSegment[]): StripPart[] {
+  const spans = segments.map((s) => ({ ...s, s: Math.max(a0, Date.parse(s.start)), e: Math.min(a1, Date.parse(s.end)) })).filter((s) => s.e > s.s);
+  const points = [...new Set([a0, a1, ...spans.flatMap((s) => [s.s, s.e])])].sort((x, y) => x - y);
+  const lastEnd = Math.max(a0, ...spans.map((s) => s.e));
+  const out: (StripPart & { src: object | null })[] = [];
+  for (let i = 0; i + 1 < points.length; i++) {
+    const x = points[i]!;
+    const y = points[i + 1]!;
+    let top: (typeof spans)[number] | null = null;
+    for (const s of spans) if (s.s <= x && s.e >= y && (!top || KIND_RANK[s.kind] >= KIND_RANK[top.kind])) top = s;
+    const prev = out.at(-1);
+    if (prev && prev.src === top) prev.end = y;
+    else out.push({ start: x, end: y, kind: top?.kind ?? 'gap', label: top?.label ?? '', src: top });
+  }
+  for (const p of out) if (p.kind === 'gap' && p.end <= lastEnd) p.label = `${hmOf(p.start)} – ${hmOf(p.end)} · no activity`;
+  return out;
+}
+
+/** `live`: your open idle span (not saved yet), drawn on top in the idle colour. Hover or tap a part for its label. */
+export function TimelineStrip({ tl, live }: { tl: AttendanceTimeline; live?: PendingIdle | null }) {
+  const [hover, setHover] = useState<{ i: number; x: number; pct: number } | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const growing = !!live && live.back === null;
+  useEffect(() => {
+    if (!growing) return;
+    setNow(Date.now());
+    const t = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(t);
+  }, [growing]);
   const parts = useMemo(() => {
-    const a0 = new Date(tl.axisStart).getTime();
-    const a1 = new Date(tl.axisEnd).getTime();
-    const out: { w: number; kind: 'active' | 'break' | 'idle' | 'gap'; label: string }[] = [];
-    let cur = a0;
-    const segs = [...tl.segments].sort((x, y) => x.start.localeCompare(y.start));
-    for (const s of segs) {
-      const st = Math.max(a0, new Date(s.start).getTime());
-      const en = Math.min(a1, new Date(s.end).getTime());
-      if (en <= st) continue;
-      if (st > cur) out.push({ w: st - cur, kind: 'gap', label: `${timeOf(new Date(cur).toISOString())} – ${timeOf(new Date(st).toISOString())} · no activity` });
-      out.push({ w: en - Math.max(st, cur), kind: s.kind, label: s.label });
-      cur = Math.max(cur, en);
+    const segs = [...tl.segments];
+    if (live) {
+      const label = `Idle since ${hmOf(live.since)} · ${live.back === null ? 'no input' : 'waiting for your reason'}`;
+      segs.push({ kind: 'idle', start: new Date(live.since).toISOString(), end: new Date(live.back ?? now).toISOString(), label });
     }
-    if (cur < a1) out.push({ w: a1 - cur, kind: 'gap', label: '' });
-    return out.filter((p) => p.w > 0);
-  }, [tl]);
+    return paint(Date.parse(tl.axisStart), Date.parse(tl.axisEnd), segs);
+  }, [tl, live, now]);
+  const pick = (i: number, el: HTMLElement) => {
+    const x = el.offsetLeft + el.offsetWidth / 2;
+    setHover({ i, x, pct: (x / Math.max(1, el.parentElement?.offsetWidth ?? 1)) * 100 });
+  };
+  const tip = hover ? parts[hover.i]?.label : null;
   return (
     <>
-      <div className="timeline" style={{ height: 28 }}>
-        {parts.map((p, i) => (
-          <div key={i} className={p.kind === 'gap' ? 'time-gap' : `seg-${p.kind}`} style={{ flex: p.w }} title={p.label} />
-        ))}
+      <div className="time-strip" onMouseLeave={() => setHover(null)}>
+        <div className="timeline" style={{ height: 28 }}>
+          {parts.map((p, i) => (
+            <div
+              key={i}
+              className={`${p.kind === 'gap' ? 'time-gap' : `seg-${p.kind}`}${hover?.i === i && p.label ? ' is-hover' : ''}`}
+              style={{ flex: p.end - p.start }}
+              aria-label={p.label || undefined}
+              onMouseEnter={(e) => pick(i, e.currentTarget)}
+              onClick={(e) => pick(i, e.currentTarget)}
+            />
+          ))}
+        </div>
+        {tip && hover && (
+          <div className="time-tip" role="tooltip" style={{ left: hover.x, transform: `translateX(-${hover.pct}%)` }}>
+            {tip}
+          </div>
+        )}
       </div>
       <div className="time-axis">
         {tl.ticks.map((t) => (
@@ -172,8 +217,8 @@ export function TimelineStrip({ tl }: { tl: AttendanceTimeline }) {
       <div className="time-legend">
         <span><i className="a" />Active</span>
         <span><i className="b" />Break</span>
-        <span><i className="i" />Auto-idle (no input &gt; {tl.idleThresholdMinutes} min)</span>
-        {tl.source === 'none' && <span className="faint">No activity recorded yet today</span>}
+        <span><i className="i" />Idle (no input &gt; {tl.idleThresholdMinutes} min)</span>
+        {tl.source === 'none' ? <span className="faint">No activity recorded yet today</span> : <span className="faint">Hover a bar to see details</span>}
       </div>
     </>
   );

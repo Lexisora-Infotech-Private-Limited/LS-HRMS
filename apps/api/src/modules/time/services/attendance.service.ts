@@ -5,6 +5,8 @@ import type {
   AttendanceMonth,
   AttendanceTimeline,
   AttendanceToday,
+  IdleSpanInput,
+  IdleSpanResult,
   PayrollInputRow,
   TeamToday,
   TimelineSegment,
@@ -22,6 +24,7 @@ import { hasPerm } from '../../../core/auth/decorators';
 import { AppError, forbidden, notFound } from '../../../core/http/errors';
 import { CrossReader } from '../cross';
 import { computeDay, isWeeklyOff, latePenaltyDays, requiredMinutes, shiftWindow, sourceLabel, summarizeMonth, type SourceKey } from '../lib/day-calc';
+import { freePart, idleSpanLabel, splitByIdle } from '../lib/idle-spans';
 import { effectiveAudience, evaluatePunch, modeNote, trackerMode, webPunchAllowed, type GeoInput } from '../lib/policy';
 import { addDays, dateOf, dayLabel, daysBetween, fmtMinute, istHm, istKeyOf, keyOf, monthOf, monthRange, prevMonth, shortDur } from '../lib/time-utils';
 import { PeriodLockService } from './period-lock.service';
@@ -361,7 +364,52 @@ export class AttendanceService {
       modeChip: `${r.audience === 'OFFICE' ? 'Office' : 'Remote / WFH'} · ${r.location?.name ?? '—'}`,
       trackerRequired: r.audience === 'REMOTE' && r.policy.trackerRequired,
       idleThresholdMinutes: r.policy.autoIdleMinutes,
+      webIdleWatch: r.policy.autoIdleEnabled && !!open && open.source !== 'DESKTOP' && !(await this.cross.hasSegments(emp.id, date)),
     };
+  }
+
+  // ── web idle ────────────────────────────────────────────────────────────────
+  /**
+   * Save idle time the web app saw (no input ≥ autoIdleMinutes) with the reason picked on return.
+   * Clipped to the punched-in session it falls in and to time not saved yet; replays are ignored.
+   */
+  async recordIdle(employeeId: string, input: IdleSpanInput): Promise<IdleSpanResult> {
+    const minutesOf = (s: { startedAt: Date; endedAt: Date }) => Math.round((s.endedAt.getTime() - s.startedAt.getTime()) / 60_000);
+    const dup = await this.prisma.attendanceIdleSpan.findFirst({ where: { clientId: input.clientId } });
+    if (dup) {
+      if (dup.employeeId !== employeeId) throw forbidden('This idle entry belongs to someone else');
+      return { ok: true, saved: false, minutes: minutesOf(dup), message: 'Idle time already saved' };
+    }
+    const now = new Date();
+    const start = new Date(input.startedAt);
+    const end = new Date(Math.min(Date.parse(input.endedAt), now.getTime()));
+    if (end <= start) throw new AppError(422, 'IDLE_SPAN', 'The idle end must be after its start');
+    if (end.getTime() - start.getTime() > 16 * 3600_000) throw new AppError(422, 'IDLE_SPAN', 'An idle span can be at most 16 hours');
+    const session = await this.prisma.workSession.findFirst({
+      where: { employeeId, startedAt: { lt: end }, OR: [{ endedAt: null }, { endedAt: { gt: start } }] },
+      orderBy: { startedAt: 'desc' },
+    });
+    if (!session) throw new AppError(409, 'NO_SESSION', "You weren't punched in during that time");
+    const date = keyOf(session.attendanceDate);
+    await this.locks.assertOpen(date);
+    const taken = await this.prisma.attendanceIdleSpan.findMany({ where: { employeeId, startedAt: { lt: end }, endedAt: { gt: start } } });
+    const free = freePart(Math.max(start.getTime(), session.startedAt.getTime()), Math.min(end.getTime(), (session.endedAt ?? now).getTime()), taken);
+    if (!free || free.to - free.from < 60_000) return { ok: true, saved: false, minutes: 0, message: 'That time is already on your timeline' };
+    const row = await this.prisma.attendanceIdleSpan.create({
+      data: {
+        employeeId,
+        attendanceDate: dateOf(date),
+        sessionId: session.id,
+        clientId: input.clientId,
+        startedAt: new Date(free.from),
+        endedAt: new Date(free.to),
+        reason: input.reason,
+        note: input.note || null,
+      } as any,
+    });
+    const minutes = minutesOf(row);
+    await this.audit.record({ action: 'attendance.idle.recorded', entity: 'AttendanceIdleSpan', entityId: row.id, meta: { date, reason: input.reason, minutes } });
+    return { ok: true, saved: true, minutes, message: `${idleSpanLabel(row)} · saved to your timeline` };
   }
 
   /** Effective policy for an employee today (also consumed by the tracker via GET /attendance-policy/me). */
@@ -464,13 +512,25 @@ export class AttendanceService {
         return { kind, start: s.startAt.toISOString(), end: s.endAt.toISOString(), label: `${name} ${istHm(s.startAt)}–${istHm(s.endAt)}${task ? ` · ${task}` : ''}` };
       });
     } else {
-      const sessions = await this.prisma.workSession.findMany({ where: { employeeId, attendanceDate: dateOf(date) }, orderBy: { startedAt: 'asc' } });
+      const [sessions, idle] = await Promise.all([
+        this.prisma.workSession.findMany({ where: { employeeId, attendanceDate: dateOf(date) }, orderBy: { startedAt: 'asc' } }),
+        this.prisma.attendanceIdleSpan.findMany({ where: { employeeId, attendanceDate: dateOf(date) } }),
+      ]);
       if (sessions.length) source = 'sessions';
       let prev: Date | null = null;
       for (const s of sessions) {
         if (prev && s.startedAt > prev) segments.push({ kind: 'break', start: prev.toISOString(), end: s.startedAt.toISOString(), label: `Break ${istHm(prev)}–${istHm(s.startedAt)}` });
         const end = s.endedAt ?? (date === istKeyOf(now) ? now : s.startedAt);
-        segments.push({ kind: 'active', start: s.startedAt.toISOString(), end: end.toISOString(), label: `Active ${istHm(s.startedAt)}–${istHm(end)} · ${s.source.toLowerCase()}` });
+        // Web idle spans show in the idle colour, labelled with the reason the employee gave.
+        for (const p of splitByIdle(s.startedAt.getTime(), end.getTime(), idle)) {
+          const a = new Date(p.start);
+          const b = new Date(p.end);
+          segments.push(
+            p.idle
+              ? { kind: 'idle', start: a.toISOString(), end: b.toISOString(), label: idleSpanLabel({ ...p.idle, startedAt: a, endedAt: b }) }
+              : { kind: 'active', start: a.toISOString(), end: b.toISOString(), label: `Active ${istHm(a)}–${istHm(b)} · ${s.source.toLowerCase()}` },
+          );
+        }
         prev = end;
       }
     }

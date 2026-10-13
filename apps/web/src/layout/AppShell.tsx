@@ -7,6 +7,7 @@ import { get } from '@/lib/api';
 import { onRealtime } from '@/lib/socket';
 import { useToast } from '@/lib/toast';
 import { Avatar } from '@/components/ui';
+import { IdleWatcher } from '@/modules/time/idle';
 import { PunchButton } from '@/modules/time/punch';
 import { GlobalSearch } from '@/modules/platform/GlobalSearch';
 
@@ -74,6 +75,7 @@ export function AppShell() {
           <GlobalSearch />
           <div style={{ marginLeft: 'auto' }} />
           <PunchButton />
+          <IdleWatcher />
           <button className="btn btn-secondary" onClick={() => nav('/alerts')}>
             <span>Alerts</span>
             {!!count.data?.unread && <span className="count-badge">{count.data.unread}</span>}

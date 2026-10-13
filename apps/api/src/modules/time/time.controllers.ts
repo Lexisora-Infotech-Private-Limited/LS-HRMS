@@ -18,6 +18,7 @@ import {
   holidaySchema,
   idCheckPatchSchema,
   idCheckSchema,
+  idleSpanSchema,
   locationSchema,
   outsideHoursSchema,
   periodLockSchema,
@@ -39,6 +40,8 @@ import {
   type DayOverrideInput,
   type HolidayInput,
   type IdCheckInput,
+  type IdleSpanInput,
+  type IdleSpanResult,
   type LocationInput,
   type OutsideHoursInput,
   type PolicyPatch,
@@ -109,6 +112,13 @@ export class AttendanceController {
       message: res.direction === 'IN' ? `Punched in at ${istHm(at)} · web` : 'Punched out · day summary saved',
       today,
     };
+  }
+
+  /** Idle time the web app saw while punched in, with the reason picked on return (Break / Meeting / Other). */
+  @Post('me/idle')
+  @RequirePerm('attendance.self')
+  recordIdle(@Body(new ZodPipe(idleSpanSchema)) body: IdleSpanInput): Promise<IdleSpanResult> {
+    return this.attendance.recordIdle(this.org.myEmployeeId(), body);
   }
 
   @Get('me/month')

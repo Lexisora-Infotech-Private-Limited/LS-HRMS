@@ -38,6 +38,7 @@ export async function seed_time(prisma: PrismaClient, ctx: SeedCtx): Promise<voi
   await prisma.outsideHoursEntry.deleteMany(w);
   await prisma.timesheetAdjustment.deleteMany(w);
   await prisma.timesheet.deleteMany(w); // cascades lines/cells/steps/idle days
+  await prisma.attendanceIdleSpan.deleteMany(w);
   await prisma.workSession.deleteMany(w);
   await prisma.attendancePunch.deleteMany(w);
   await prisma.attendanceDay.deleteMany(w);

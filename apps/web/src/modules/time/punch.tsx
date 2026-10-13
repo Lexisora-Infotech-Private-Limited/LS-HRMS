@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { AttendanceToday, PunchResult } from '@lexisora/shared';
 import { HttpError, post } from '@/lib/api';
@@ -6,6 +6,7 @@ import { useAuth } from '@/lib/auth';
 import { onRealtime } from '@/lib/socket';
 import { useToast } from '@/lib/toast';
 import { hhmmss, tk, useToday } from './api';
+import { requestIdlePermission } from './idle';
 
 /**
  * Punch controls owned by Time (ARCHITECTURE §8):
@@ -29,15 +30,18 @@ function getGeo(): Promise<{ lat: number; lng: number; accuracyM: number } | nul
 function useElapsed(today: AttendanceToday | undefined): number {
   const [now, setNow] = useState(() => Date.now());
   const open = today?.openSessionStart;
+  const serverNow = today?.serverNow;
   useEffect(() => {
     if (!open) return;
+    setNow(Date.now());
     const t = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(t);
   }, [open]);
+  // Server-minus-client clock offset, captured once per response. Recomputing it on every
+  // render would cancel out `now` and freeze the timer.
+  const offset = useMemo(() => (serverNow ? Date.parse(serverNow) - Date.now() : 0), [serverNow]);
   if (!today) return 0;
-  // Correct for client clock skew using the server's clock at fetch time.
-  const skew = today.serverNow ? Date.now() - new Date(today.serverNow).getTime() : 0;
-  const openSec = open ? Math.max(0, (now - skew - new Date(open).getTime()) / 1000) : 0;
+  const openSec = open ? Math.max(0, (now + offset - Date.parse(open)) / 1000) : 0;
   return today.workedSecondsClosed + openSec;
 }
 
@@ -72,6 +76,8 @@ export function usePunch() {
       toast(today.blockReason ?? 'Punch out at the biometric sensor');
       return;
     }
+    // The browser only shows this prompt on a click; with it, idle sees input in other apps too.
+    if (!punchedIn) requestIdlePermission();
     setBusy(true);
     const direction = punchedIn ? 'OUT' : 'IN';
     const send = (geo?: { lat: number; lng: number; accuracyM: number } | null) => post<PunchResult>('/attendance/me/punch', { direction, ...(geo ?? {}) });
