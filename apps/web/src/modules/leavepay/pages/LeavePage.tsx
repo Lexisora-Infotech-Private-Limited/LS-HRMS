@@ -203,7 +203,12 @@ function ApplyModal({ onClose }: { onClose: () => void }) {
   const blocked = !body || !p || p.blocks.length > 0 || (p.lopDays > 0 && !v.acceptLop) || preview.isFetching;
   return (
     <Modal
-      title="Apply time off"
+      title={
+        <div className="row-between" style={{ flexWrap: 'nowrap' }}>
+          <span>Apply time off</span>
+          <button className="btn btn-ghost btn-sm" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+      }
       onClose={onClose}
       wide
       actions={

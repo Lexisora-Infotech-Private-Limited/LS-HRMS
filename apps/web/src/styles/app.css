@@ -102,7 +102,7 @@
 .timeline > div { border-right: 1px solid var(--color-bg); }
 .seg-active { background: var(--color-accent-300); }
 .seg-break { background: var(--color-neutral-400); }
-.seg-idle { background: var(--color-neutral-200); }
+.seg-idle { background: color-mix(in srgb, var(--color-danger) 45%, var(--color-bg)); }
 .legend { display: flex; gap: 16px; font-size: 12px; flex-wrap: wrap; }
 .legend span { display: flex; gap: 6px; align-items: center; }
 .legend i { width: 12px; height: 12px; display: inline-block; }

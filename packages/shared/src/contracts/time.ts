@@ -76,8 +76,27 @@ export type AttendanceToday = {
   modeChip: string;
   trackerRequired: boolean;
   idleThresholdMinutes: number;
+  /** The web app should watch for idle: auto-idle on, a non-desktop session open, no tracker data today. */
+  webIdleWatch: boolean;
 };
 export type PunchResult = { ok: true; direction: 'IN' | 'OUT'; at: string; source: TimePunchSource; message: string; today: AttendanceToday };
+
+// ── Web idle (no input ≥ autoIdleMinutes while punched in) ────────────────────
+export const IDLE_SPAN_REASONS = ['BREAK', 'MEETING', 'OTHER'] as const;
+export type IdleSpanReason = (typeof IDLE_SPAN_REASONS)[number];
+export const IDLE_SPAN_REASON_LABEL: Record<IdleSpanReason, string> = { BREAK: 'Break', MEETING: 'Meeting', OTHER: 'Other' };
+
+export const idleSpanSchema = z
+  .object({
+    clientId: z.string().uuid(),
+    startedAt: z.string().datetime(),
+    endedAt: z.string().datetime(),
+    reason: z.enum(IDLE_SPAN_REASONS),
+    note: z.string().trim().max(200).optional(),
+  })
+  .refine((v) => v.reason !== 'OTHER' || (v.note?.length ?? 0) >= 3, { message: 'Type the reason (at least 3 characters)', path: ['note'] });
+export type IdleSpanInput = z.infer<typeof idleSpanSchema>;
+export type IdleSpanResult = { ok: true; saved: boolean; minutes: number; message: string };
 
 export type AttendanceDayRow = {
   id: string | null;

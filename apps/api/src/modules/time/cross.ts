@@ -44,6 +44,11 @@ export class CrossReader {
     return this.safe('activitySegment', (m) => m.findMany({ where: { employeeId: { in: ids }, workDate: { gte: dateOf(from), lte: dateOf(to) } }, orderBy: { startAt: 'asc' } }), []);
   }
 
+  /** The desktop tracker sent activity for this day (it then owns idle detection). */
+  async hasSegments(employeeId: string, date: string): Promise<boolean> {
+    return (await this.safe('activitySegment', (m) => m.count({ where: { employeeId, workDate: dateOf(date) } }), 0)) > 0;
+  }
+
   daySummaries(employeeIds: string[], from: string, to: string): Promise<DaySummaryRow[]> {
     return this.safe('trackerDaySummary', (m) => m.findMany({ where: { employeeId: { in: employeeIds }, workDate: { gte: dateOf(from), lte: dateOf(to) } } }), []);
   }

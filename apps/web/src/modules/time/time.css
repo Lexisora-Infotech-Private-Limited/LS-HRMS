@@ -10,8 +10,18 @@
 .time-legend i { width: 12px; height: 12px; display: inline-block; }
 .time-legend i.a { background: var(--color-accent-300); }
 .time-legend i.b { background: var(--color-neutral-400); }
-.time-legend i.i { background: var(--color-neutral-200); }
+.time-legend i.i { background: color-mix(in srgb, var(--color-danger) 45%, var(--color-bg)); }
 .time-gap { background: transparent; }
+.time-strip { position: relative; }
+/* A few idle minutes on a 9-hour axis would be a hairline; keep every bar visible and hoverable. */
+.time-strip .timeline > div:not(.time-gap) { min-width: 4px; }
+.time-strip .is-hover { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-text) 35%, transparent); }
+.time-tip {
+  position: absolute; bottom: calc(100% + 6px); z-index: 5; width: max-content; max-width: min(420px, 100%);
+  padding: 5px 9px; border-radius: var(--radius-md); font-size: 12.5px; line-height: 1.35;
+  background: var(--color-neutral-900); color: var(--color-neutral-100); box-shadow: var(--shadow-md); pointer-events: none;
+}
+.time-idle-choices { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-2); }
 .time-mode { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 13px; }
 
 /* Wireframe-style grids (7 columns table + timesheet grid) */

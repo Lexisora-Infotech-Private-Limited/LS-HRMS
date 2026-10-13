@@ -279,6 +279,26 @@ model WorkSession {
   @@index([tenantId, endedAt])
 }
 
+/// Idle time seen by the web app inside a punched-in session (no input ≥ autoIdleMinutes),
+/// with the reason the employee picked on return. Shown on the day timeline.
+model AttendanceIdleSpan {
+  id             String   @id @default(cuid())
+  tenantId       String
+  employeeId     String
+  attendanceDate DateTime @db.Date
+  sessionId      String?
+  /// Client-generated uuid; a replayed save with the same id is ignored.
+  clientId       String   @unique
+  startedAt      DateTime
+  endedAt        DateTime
+  /// BREAK | MEETING | OTHER
+  reason         String
+  note           String?
+  createdAt      DateTime @default(now())
+
+  @@index([tenantId, employeeId, attendanceDate])
+}
+
 model AttendanceRegularization {
   id                 String               @id @default(cuid())
   tenantId           String
