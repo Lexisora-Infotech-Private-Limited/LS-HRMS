@@ -340,11 +340,13 @@ export const esignSchema = z
 export type EsignInput = z.infer<typeof esignSchema>;
 
 export const docsStepSchema = z.object({
-  panNumber: z.string().trim().toUpperCase(),
-  panFileId: id,
-  aadhaarNumber: noSpaces,
-  aadhaarFileId: id,
-  marksheetFileIds: z.array(id).min(1, 'Upload at least one education marksheet'),
+  // PAN / Aadhaar / marksheets are optional so a resubmit can carry only the rejected documents;
+  // the service enforces which ones are actually required from the vault state.
+  panNumber: z.string().trim().toUpperCase().optional(),
+  panFileId: id.optional(),
+  aadhaarNumber: noSpaces.optional(),
+  aadhaarFileId: id.optional(),
+  marksheetFileIds: z.array(id).optional(),
   prevEmploymentFileId: z.string().optional().nullable(),
   declaration: z.literal(true, { errorMap: () => ({ message: 'Confirm the declaration' }) }),
 });
@@ -355,7 +357,7 @@ export const bankStepSchema = z.object({
   confirmAccountNumber: noSpaces,
   ifsc: z.string().trim().toUpperCase(),
   taxRegime: z.enum(['NEW', 'OLD']).default('NEW'),
-  uan: z.string().trim().optional().nullable(),
+  uan: z.string().trim().regex(/^(\d{12})?$/, 'UAN must be exactly 12 digits').optional().nullable(),
   chequeFileId: z.string().optional().nullable(),
 });
 export type BankStepInput = z.infer<typeof bankStepSchema>;

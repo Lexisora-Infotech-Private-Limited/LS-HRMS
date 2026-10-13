@@ -128,9 +128,16 @@ export class MastersService {
     if (!s) throw notFound('Shift');
     if (s.isDefault) throw new AppError(409, 'SHIFT_IN_USE', 'Make another shift the default before archiving this one');
     const today = dateOf(istKeyOf(new Date()));
-    const inUse = await this.prisma.shiftAssignment.count({ where: { shiftId: id, OR: [{ effectiveTo: null }, { effectiveTo: { gte: today } }] } });
-    const direct = await this.prisma.employee.count({ where: { shiftId: id, status: { in: [...ACTIVE] } } });
-    if (inUse || direct) throw new AppError(409, 'SHIFT_IN_USE', 'This shift still has current or future allocations');
+    const held = await this.prisma.shiftAssignment.findMany({ where: { shiftId: id, OR: [{ effectiveTo: null }, { effectiveTo: { gte: today } }] }, select: { employeeId: true } });
+    const direct = await this.prisma.employee.findMany({ where: { shiftId: id, status: { in: [...ACTIVE] } }, select: { id: true } });
+    if (held.length || direct.length) {
+      const holders = await this.prisma.employee.findMany({ where: { id: { in: [...new Set([...held.map((h) => h.employeeId), ...direct.map((d) => d.id)])] } }, select: { fullName: true, empCode: true, status: true }, orderBy: { empCode: 'asc' } });
+      // Active holders already show in the Employees count, so the plain message is enough. Only when exited
+      // employees alone are blocking (count 0) do we explain who — capped so a long list never floods the toast.
+      if (holders.some((e) => e.status !== 'EXITED')) throw new AppError(409, 'SHIFT_IN_USE', 'This shift still has current or future allocations');
+      const names = holders.slice(0, 3).map((e) => `${e.fullName} (${e.empCode})`).join(', ');
+      throw new AppError(409, 'SHIFT_IN_USE', `Can't archive: allocations of exited employees still hold this shift — ${names}${holders.length > 3 ? ` and ${holders.length - 3} more` : ''}`);
+    }
     await this.prisma.shift.update({ where: { id }, data: { archivedAt: new Date() } });
     await this.audit.record({ action: 'shift.archived', entity: 'Shift', entityId: id, meta: { name: s.name } });
     return { ok: true };
@@ -141,7 +148,7 @@ export class MastersService {
     const rows = await this.prisma.shiftAssignment.findMany({
       where: { ...(q.shiftId ? { shiftId: q.shiftId } : {}) },
       include: { shift: true },
-      orderBy: [{ effectiveFrom: 'desc' }],
+      orderBy: [{ createdAt: 'desc' }, { effectiveFrom: 'desc' }],
       take: 500,
     });
     const emps = await this.prisma.employee.findMany({
@@ -184,37 +191,53 @@ export class MastersService {
     if (!emps.length) throw badRequest('Select employees');
     const from = dateOf(input.effectiveFrom);
     const to = input.effectiveTo ? dateOf(input.effectiveTo) : null;
+    const shiftChanged: string[] = [];
+    let recomputeFrom = input.effectiveFrom;
     for (const e of emps) {
       const start = e.joiningDate && keyOf(e.joiningDate) > input.effectiveFrom ? e.joiningDate : from;
+      // Re-allocating the same shift as HR's last allocation for this employee only moves its dates (no new row);
+      // a different shift adds a row.
+      const latest = await this.prisma.shiftAssignment.findFirst({ where: { employeeId: e.id }, orderBy: [{ createdAt: 'desc' }] });
+      const same = latest && latest.shiftId === shift.id ? latest : null;
+      const others = same ? { id: { not: same.id } } : {};
+      if (same && keyOf(same.effectiveFrom) <= today && keyOf(same.effectiveFrom) < input.effectiveFrom && (await this.locks.isLocked(keyOf(same.effectiveFrom)))) {
+        throw new AppError(409, 'PERIOD_LOCKED', 'The existing allocation starts in a locked attendance period');
+      }
       // overlap check against closed ranges that are not the open-ended current one
       const overlapping = await this.prisma.shiftAssignment.findFirst({
-        where: { employeeId: e.id, effectiveTo: { not: null, gte: start }, effectiveFrom: to ? { lte: to } : undefined },
+        where: { employeeId: e.id, ...others, effectiveTo: { not: null, gte: start }, effectiveFrom: to ? { lte: to } : undefined },
       });
       if (overlapping && keyOf(overlapping.effectiveFrom) >= keyOf(start)) {
         throw new AppError(409, 'ALLOCATION_OVERLAP', `${e.fullName} already has a shift allocation in this range`);
       }
       await this.prisma.$transaction(async (tx) => {
-        const open = await tx.shiftAssignment.findMany({ where: { tenantId: ctx.tenantId, employeeId: e.id, OR: [{ effectiveTo: null }, { effectiveTo: { gte: start } }] } });
+        const open = await tx.shiftAssignment.findMany({ where: { tenantId: ctx.tenantId, employeeId: e.id, ...others, OR: [{ effectiveTo: null }, { effectiveTo: { gte: start } }] } });
         for (const o of open) {
           if (o.effectiveFrom >= start) await tx.shiftAssignment.delete({ where: { id: o.id } });
           else await tx.shiftAssignment.update({ where: { id: o.id }, data: { effectiveTo: dateOf(addDays(keyOf(start), -1)) } });
         }
-        await tx.shiftAssignment.create({ data: { tenantId: ctx.tenantId, employeeId: e.id, shiftId: shift.id, effectiveFrom: start, effectiveTo: to, assignedByName: ctx.userName ?? null } });
+        if (same) await tx.shiftAssignment.update({ where: { id: same.id }, data: { effectiveFrom: start, effectiveTo: to, assignedByName: ctx.userName ?? null, createdAt: new Date() } });
+        else await tx.shiftAssignment.create({ data: { tenantId: ctx.tenantId, employeeId: e.id, shiftId: shift.id, effectiveFrom: start, effectiveTo: to, assignedByName: ctx.userName ?? null } });
         if (keyOf(start) <= today && (!to || keyOf(to) >= today)) await tx.employee.update({ where: { id: e.id }, data: { shiftId: shift.id } });
       });
+      if (!same) shiftChanged.push(e.id);
+      if (same && keyOf(same.effectiveFrom) < recomputeFrom) recomputeFrom = keyOf(same.effectiveFrom);
     }
     await this.audit.record({ action: 'shift.allocated', entity: 'Shift', entityId: shift.id, meta: { employeeIds: emps.map((e) => e.id), from: input.effectiveFrom, to: input.effectiveTo ?? null } });
     const timing = `${fmtMinute(shift.startMinute)}–${fmtMinute(shift.endMinute)}`;
-    await this.notifications.notify({
-      userIds: emps.map((e) => e.userId).filter((x): x is string => !!x),
-      type: 'shift.changed',
-      title: `Your shift changes to ${shift.name} ${timing} from ${dm(input.effectiveFrom)}`,
-      link: '/attendance',
-      from: ctx.userName ?? 'HR',
-      email: true,
-    });
-    if (input.effectiveFrom <= today) {
-      await this.jobs.enqueue('time.recomputeRange', { tenantId: ctx.tenantId, employeeIds: emps.map((e) => e.id), from: input.effectiveFrom, to: today });
+    const notifyUsers = emps.filter((e) => shiftChanged.includes(e.id)).map((e) => e.userId).filter((x): x is string => !!x);
+    if (notifyUsers.length) {
+      await this.notifications.notify({
+        userIds: notifyUsers,
+        type: 'shift.changed',
+        title: `Your shift changes to ${shift.name} ${timing} from ${dm(input.effectiveFrom)}`,
+        link: '/attendance',
+        from: ctx.userName ?? 'HR',
+        email: true,
+      });
+    }
+    if (recomputeFrom <= today) {
+      await this.jobs.enqueue('time.recomputeRange', { tenantId: ctx.tenantId, employeeIds: emps.map((e) => e.id), from: recomputeFrom, to: today });
     }
     return { ok: true, count: emps.length };
   }
