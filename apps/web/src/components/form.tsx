@@ -7,7 +7,7 @@ export type Option = { value: string; label: string };
 export type FieldDef = {
   name: string;
   label: string;
-  type: 'text' | 'email' | 'number' | 'money' | 'date' | 'time' | 'datetime' | 'select' | 'multiselect' | 'area' | 'file' | 'checkbox' | 'password' | 'color';
+  type: 'text' | 'phone' | 'email' | 'number' | 'money' | 'date' | 'time' | 'datetime' | 'select' | 'multiselect' | 'area' | 'file' | 'checkbox' | 'password' | 'color';
   /** 2 = full row (wireframe "span 2"). */
   span?: 1 | 2;
   options?: Option[];
@@ -23,6 +23,18 @@ export type FieldDef = {
 };
 
 export type FormValues = Record<string, any>;
+
+/**
+ * Phone input filter: optional leading +, digits and single spaces only.
+ * Indian numbers are capped at 10 digits (12 with a +91 prefix); other country codes at 15 (E.164).
+ */
+export function cleanPhone(v: string) {
+  const plus = v.trimStart().startsWith('+');
+  const body = v.replace(/[^\d ]/g, '').replace(/ {2,}/g, ' ').trimStart();
+  const limit = !plus ? 10 : body.replace(/ /g, '').startsWith('91') ? 12 : 15;
+  let digits = 0;
+  return (plus ? '+' : '') + body.split('').filter((c) => c === ' ' || ++digits <= limit).join('').trimEnd().concat(body.endsWith(' ') && digits < limit ? ' ' : '');
+}
 
 function initialValue(f: FieldDef, init?: FormValues) {
   if (init && init[f.name] !== undefined && init[f.name] !== null) return init[f.name];
@@ -163,6 +175,8 @@ export function FieldInput({ f, value, onChange, file, onFile, invalid }: { f: F
       );
     case 'file':
       return <FileDrop file={file ?? null} onFile={onFile ?? (() => {})} accept={f.accept} existing={value ? 'File attached' : undefined} />;
+    case 'phone':
+      return <input className="input" {...common} type="tel" inputMode="tel" autoComplete="off" maxLength={18} placeholder={f.placeholder} value={value ?? ''} onChange={(e) => onChange(cleanPhone(e.target.value))} />;
     case 'money':
       return <input className="input" {...common} inputMode="decimal" placeholder={f.placeholder ?? '₹'} value={value ?? ''} onChange={(e) => onChange(e.target.value)} />;
     case 'datetime':

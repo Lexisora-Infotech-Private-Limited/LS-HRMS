@@ -182,9 +182,29 @@ export class EmployeesService {
     }
   }
 
+  /**
+   * Finds an existing employee who already has this phone number (last 10 digits) or any of these
+   * emails (as official or personal email). Used to stop the same person being added twice.
+   */
+  async findDuplicate(input: { phone?: string | null; emails?: (string | null | undefined)[] }): Promise<{ message: string } | null> {
+    const emails = (input.emails ?? []).map((e) => e?.trim().toLowerCase()).filter((e): e is string => !!e);
+    const phone = (input.phone ?? '').replace(/\D/g, '').slice(-10);
+    if (!emails.length && phone.length < 10) return null;
+    const rows = await this.prisma.employee.findMany({ select: { fullName: true, empCode: true, status: true, phone: true, officialEmail: true, personalEmail: true } });
+    for (const r of rows) {
+      const who = `${r.fullName} (${r.empCode}${r.status === 'EXITED' ? ', former employee' : ''})`;
+      const hit = emails.find((e) => e === r.officialEmail?.toLowerCase() || e === r.personalEmail?.toLowerCase());
+      if (hit) return { message: `${hit} already belongs to employee ${who}` };
+      if (phone.length === 10 && (r.phone ?? '').replace(/\D/g, '').slice(-10) === phone) return { message: `This phone number already belongs to employee ${who}` };
+    }
+    return null;
+  }
+
   async create(input: CreateEmployeeInput, opts: CreateOpts = {}) {
     const ctx = requireContext();
     const email = input.officialEmail.toLowerCase();
+    const dup = await this.findDuplicate({ phone: input.phone, emails: [input.officialEmail, input.personalEmail] });
+    if (dup) throw conflict(dup.message, 'DUPLICATE_EMPLOYEE');
     if (await this.prisma.employee.findFirst({ where: { officialEmail: email }, select: { id: true } })) {
       throw conflict(`${email} already belongs to an employee`, 'EMAIL_TAKEN');
     }

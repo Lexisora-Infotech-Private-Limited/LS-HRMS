@@ -99,7 +99,7 @@ function JoinerFlow() {
           ) : key === 'offer' || key === 'nda' ? (
             <SignStep ob={ob} step={step} onDone={next} />
           ) : key === 'docs' ? (
-            <DocsStep onDone={next} />
+            <DocsStep ob={ob} onDone={next} />
           ) : key === 'bank' ? (
             <BankStep ob={ob} onDone={next} />
           ) : (
@@ -302,27 +302,58 @@ function SignaturePad({ onChange }: { onChange: (png: string | null) => void }) 
   );
 }
 
-function DocsStep({ onDone }: { onDone: (d: OnboardingDto) => void }) {
+/** Digits only, max 12, shown as "1234 5678 9012" — the spaces are added for the user, not typed. */
+const formatAadhaar = (v: string) => (v.replace(/\D/g, '').slice(0, 12).match(/\d{1,4}/g) ?? []).join(' ');
+
+/** Read-only row for a document HR hasn't rejected — it stays in the vault and isn't re-uploaded. */
+function SubmittedDoc({ label, status }: { label: string; status: string }) {
+  return (
+    <div className="row-between" style={{ padding: '8px 0', fontSize: 13 }}>
+      <span>{label}</span>
+      <span className="faint">{status === 'VERIFIED' ? 'Verified ✓' : 'Submitted · awaiting HR'}</span>
+    </div>
+  );
+}
+
+function DocsStep({ ob, onDone }: { ob: OnboardingDto; onDone: (d: OnboardingDto) => void }) {
   const { toast, toastError } = useToast();
   const qc = useQueryClient();
   const [pan, setPan] = useState('');
   const [panFile, setPanFile] = useState<File | null>(null);
   const [aadhaar, setAadhaar] = useState('');
   const [aadhaarFile, setAadhaarFile] = useState<File | null>(null);
-  const [marks, setMarks] = useState<(File | null)[]>([null]);
+  const [marks, setMarks] = useState<(File | null)[]>(() => Array.from({ length: Math.max(1, ob.documents.filter((d) => d.docType === 'DEGREE' && d.status === 'REJECTED').length) }, () => null));
   const [prev, setPrev] = useState<File | null>(null);
   const [decl, setDecl] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const markFiles = marks.filter((m): m is File => !!m);
-  const ready = pan.trim() && panFile && aadhaar.trim() && aadhaarFile && markFiles.length && decl;
+  // Only missing or HR-rejected documents need a (re)upload; the rest are left untouched.
+  const ofType = (t: string) => ob.documents.filter((d) => d.docType === t);
+  const needsUpload = (t: string) => ofType(t).length === 0 || ofType(t).some((d) => d.status === 'REJECTED');
+  const needPan = needsUpload('PAN');
+  const needAadhaar = needsUpload('AADHAAR');
+  const degrees = ofType('DEGREE');
+  const needMarks = degrees.length === 0 ? 1 : degrees.filter((d) => d.status === 'REJECTED').length;
+  const ready = (!needPan || (pan.trim() && panFile)) && (!needAadhaar || (aadhaar.replace(/\s/g, '').length === 12 && aadhaarFile)) && markFiles.length >= needMarks && decl;
   async function submit() {
     setBusy(true);
     setErr(null);
     try {
       const up = (f: File) => uploadFile(f, 'vault').then((r) => r.id);
-      const [panFileId, aadhaarFileId, prevId, ...markIds] = await Promise.all([up(panFile!), up(aadhaarFile!), prev ? up(prev) : Promise.resolve(null), ...markFiles.map(up)]);
-      const d = await peopleApi.submitDocs({ panNumber: pan.trim().toUpperCase(), panFileId, aadhaarNumber: aadhaar.replace(/\s+/g, ''), aadhaarFileId, marksheetFileIds: markIds as string[], prevEmploymentFileId: prevId, declaration: true });
+      const [panFileId, aadhaarFileId, prevId, ...markIds] = await Promise.all([
+        needPan && panFile ? up(panFile) : Promise.resolve(undefined),
+        needAadhaar && aadhaarFile ? up(aadhaarFile) : Promise.resolve(undefined),
+        prev ? up(prev) : Promise.resolve(null),
+        ...markFiles.map(up),
+      ]);
+      const d = await peopleApi.submitDocs({
+        ...(needPan ? { panNumber: pan.trim().toUpperCase(), panFileId } : {}),
+        ...(needAadhaar ? { aadhaarNumber: aadhaar.replace(/\s+/g, ''), aadhaarFileId } : {}),
+        marksheetFileIds: markIds as string[],
+        prevEmploymentFileId: prevId,
+        declaration: true,
+      });
       qc.setQueryData(peopleKeys.onboardingMe, d);
       void qc.invalidateQueries({ queryKey: peopleKeys.vault });
       toast('Documents uploaded · HR will verify them');
@@ -336,19 +367,35 @@ function DocsStep({ onDone }: { onDone: (d: OnboardingDto) => void }) {
   }
   return (
     <div className="stack" style={{ gap: 10 }}>
-      <div className="field"><label htmlFor="pan">PAN number</label><input id="pan" className="input" value={pan} maxLength={10} placeholder="ABCPE1234F" onChange={(e) => setPan(e.target.value.toUpperCase())} /></div>
-      <FileDrop file={panFile} onFile={setPanFile} accept=".pdf,image/*" label="Drop PAN card or browse" />
-      <div className="field"><label htmlFor="aad">Aadhaar number</label><input id="aad" className="input" value={aadhaar} maxLength={14} placeholder="1234 5678 9012" inputMode="numeric" onChange={(e) => setAadhaar(e.target.value)} /></div>
-      <FileDrop file={aadhaarFile} onFile={setAadhaarFile} accept=".pdf,image/*" label="Drop Aadhaar card or browse" />
-      <div className="field">
-        <label>Education marksheets</label>
-        <div className="stack" style={{ gap: 6 }}>
-          {marks.map((m, i) => (
-            <FileDrop key={i} file={m} onFile={(f) => setMarks((s) => s.map((x, j) => (j === i ? f : x)))} accept=".pdf,image/*" label="Drop marksheet or browse" />
-          ))}
-          {marks.length < 5 && <button className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start' }} onClick={() => setMarks((s) => [...s, null])}>+ Add another marksheet</button>}
+      {needPan ? (
+        <>
+          <div className="field"><label htmlFor="pan">PAN number</label><input id="pan" className="input" value={pan} maxLength={10} placeholder="ABCPE1234F" onChange={(e) => setPan(e.target.value.toUpperCase())} /></div>
+          <FileDrop file={panFile} onFile={setPanFile} accept=".pdf,image/*" label="Drop PAN card or browse" />
+        </>
+      ) : (
+        <SubmittedDoc label="PAN card" status={ofType('PAN')[0]!.status} />
+      )}
+      {needAadhaar ? (
+        <>
+          <div className="field"><label htmlFor="aad">Aadhaar number</label><input id="aad" className="input" value={aadhaar} maxLength={14} placeholder="1234 5678 9012" inputMode="numeric" autoComplete="off" onChange={(e) => setAadhaar(formatAadhaar(e.target.value))} /></div>
+          <FileDrop file={aadhaarFile} onFile={setAadhaarFile} accept=".pdf,image/*" label="Drop Aadhaar card or browse" />
+        </>
+      ) : (
+        <SubmittedDoc label="Aadhaar card" status={ofType('AADHAAR')[0]!.status} />
+      )}
+      {needMarks > 0 ? (
+        <div className="field">
+          <label>Education marksheets</label>
+          <div className="stack" style={{ gap: 6 }}>
+            {marks.map((m, i) => (
+              <FileDrop key={i} file={m} onFile={(f) => setMarks((s) => s.map((x, j) => (j === i ? f : x)))} accept=".pdf,image/*" label="Drop marksheet or browse" />
+            ))}
+            {marks.length < 5 && <button className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start' }} onClick={() => setMarks((s) => [...s, null])}>+ Add another marksheet</button>}
+          </div>
         </div>
-      </div>
+      ) : (
+        <SubmittedDoc label="Education marksheets" status={degrees.every((d) => d.status === 'VERIFIED') ? 'VERIFIED' : 'PENDING'} />
+      )}
       <div className="field"><label>Previous employment letter (optional)</label><FileDrop file={prev} onFile={setPrev} accept=".pdf,image/*" /></div>
       <label className="radio"><input type="checkbox" checked={decl} onChange={(e) => setDecl(e.target.checked)} /><span className="dot" style={{ borderRadius: 3 }} />I confirm these documents are genuine and belong to me</label>
       {err && <div className="field-error" role="alert">{err}</div>}
@@ -365,7 +412,17 @@ function BankStep({ ob, onDone }: { ob: OnboardingDto; onDone: (d: OnboardingDto
   const qc = useQueryClient();
   const { toast, toastError } = useToast();
   const [busy, setBusy] = useState(false);
-  const set = (k: keyof typeof v) => (e: React.ChangeEvent<HTMLInputElement>) => setV((s) => ({ ...s, [k]: k === 'ifsc' ? e.target.value.toUpperCase() : e.target.value }));
+  // Keep each field to the characters and length it can legally hold (account 9-18 digits, UAN 12 digits, IFSC 11 alphanumerics).
+  const clean: Partial<Record<keyof typeof v, (x: string) => string>> = {
+    accountNumber: (x) => x.replace(/\D/g, '').slice(0, 18),
+    confirmAccountNumber: (x) => x.replace(/\D/g, '').slice(0, 18),
+    uan: (x) => x.replace(/\D/g, '').slice(0, 12),
+    ifsc: (x) => x.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 11),
+  };
+  const set = (k: keyof typeof v) => (e: React.ChangeEvent<HTMLInputElement>) => setV((s) => ({ ...s, [k]: clean[k] ? clean[k]!(e.target.value) : e.target.value }));
+  const ifscBad = v.ifsc.length > 0 && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(v.ifsc);
+  const accountBad = v.accountNumber.length > 0 && v.accountNumber.length < 9;
+  const uanBad = v.uan.length > 0 && v.uan.length !== 12;
   const mismatch = v.confirmAccountNumber && v.accountNumber.replace(/\s/g, '') !== v.confirmAccountNumber.replace(/\s/g, '');
   async function submit() {
     setBusy(true);
@@ -387,10 +444,10 @@ function BankStep({ ob, onDone }: { ob: OnboardingDto; onDone: (d: OnboardingDto
     <div className="stack" style={{ gap: 10 }}>
       <div className="field"><label htmlFor="bh">Account holder name</label><input id="bh" className="input" value={v.holderName} onChange={set('holderName')} /></div>
       <div className="form-grid">
-        <div className="field"><label htmlFor="ba">Account no.</label><input id="ba" className="input" inputMode="numeric" autoComplete="off" value={v.accountNumber} onChange={set('accountNumber')} /></div>
+        <div className="field"><label htmlFor="ba">Account no.</label><input id="ba" className="input" inputMode="numeric" autoComplete="off" value={v.accountNumber} onChange={set('accountNumber')} aria-invalid={accountBad || undefined} />{accountBad && <div className="field-error">Account number must be 9 to 18 digits</div>}</div>
         <div className="field"><label htmlFor="bc">Confirm account no.</label><input id="bc" className="input" inputMode="numeric" autoComplete="off" value={v.confirmAccountNumber} onChange={set('confirmAccountNumber')} aria-invalid={!!mismatch || undefined} />{mismatch && <div className="field-error">Account numbers don't match</div>}</div>
-        <div className="field"><label htmlFor="bi">IFSC</label><input id="bi" className="input" maxLength={11} placeholder="HDFC0001234" value={v.ifsc} onChange={set('ifsc')} /></div>
-        <div className="field"><label htmlFor="bu">UAN (optional)</label><input id="bu" className="input" inputMode="numeric" value={v.uan} onChange={set('uan')} /></div>
+        <div className="field"><label htmlFor="bi">IFSC</label><input id="bi" className="input" maxLength={11} placeholder="HDFC0001234" value={v.ifsc} onChange={set('ifsc')} aria-invalid={ifscBad || undefined} />{ifscBad && <div className="field-error">IFSC is 4 letters, then 0, then 6 letters or digits</div>}</div>
+        <div className="field"><label htmlFor="bu">UAN (optional)</label><input id="bu" className="input" inputMode="numeric" value={v.uan} onChange={set('uan')} aria-invalid={uanBad || undefined} />{uanBad && <div className="field-error">UAN must be exactly 12 digits</div>}</div>
       </div>
       <div className="field">
         <label>Tax regime</label>
@@ -398,7 +455,7 @@ function BankStep({ ob, onDone }: { ob: OnboardingDto; onDone: (d: OnboardingDto
       </div>
       <div className="field"><label>Cancelled cheque (optional)</label><FileDrop file={cheque} onFile={setCheque} accept=".pdf,image/*" /></div>
       {err && <div className="field-error" role="alert">{err}</div>}
-      <button className="btn btn-primary" disabled={busy || !v.holderName || !v.accountNumber || !v.confirmAccountNumber || !!mismatch || v.ifsc.length !== 11} onClick={() => void submit()}>{busy ? 'Saving…' : COPY.bank.cta}</button>
+      <button className="btn btn-primary" disabled={busy || !v.holderName || v.accountNumber.length < 9 || accountBad || !v.confirmAccountNumber || !!mismatch || v.ifsc.length !== 11 || ifscBad || uanBad} onClick={() => void submit()}>{busy ? 'Saving…' : COPY.bank.cta}</button>
       <div className="faint" style={{ fontSize: 11.5 }}>Your account number is encrypted; HR and Payroll see only the last 4 digits.</div>
     </div>
   );
@@ -570,6 +627,11 @@ function HrDetail({ employeeId, onClose }: { employeeId: string; onClose: () => 
             <div className="row" style={{ gap: 8, marginTop: 8 }}>
               {ob.bankVerified ? (
                 <Tag tone="accent">Bank verified</Tag>
+              ) : ob.steps.find((s) => s.key === 'bank')?.status === 'NEEDS_ATTENTION' ? (
+                <span className="row" style={{ gap: 8 }}>
+                  <Tag tone="danger">Rejected · waiting for employee</Tag>
+                  {ob.steps.find((s) => s.key === 'bank')?.note && <span className="faint" style={{ fontSize: 12.5 }}>{ob.steps.find((s) => s.key === 'bank')?.note}</span>}
+                </span>
               ) : ob.bank.ifsc && open ? (
                 <>
                   <button className="btn btn-secondary btn-sm" disabled={bank.isPending} onClick={() => bank.mutate('VERIFIED')}>Verify bank details</button>

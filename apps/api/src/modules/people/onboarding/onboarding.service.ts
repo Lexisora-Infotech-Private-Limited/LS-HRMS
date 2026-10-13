@@ -381,21 +381,53 @@ export class OnboardingService {
 
   async submitDocs(i: DocsStepInput) {
     const ob = await this.joinerOb();
-    if (!isValidPan(i.panNumber)) throw new AppError(422, 'PAN_INVALID', 'Enter a valid PAN (5 letters, 4 digits, 1 letter; 4th letter P)');
-    if (!isValidAadhaar(i.aadhaarNumber)) throw new AppError(422, 'AADHAAR_INVALID', 'Enter a valid 12-digit Aadhaar number');
     const m = this.stepMap(ob);
     if (m.offer !== 'DONE' && m.offer !== 'SKIPPED') throw new AppError(409, 'OFFER_FIRST', 'Sign the offer letter first');
     const empId = ob.employeeId;
+
+    // Only documents that are missing or REJECTED must be (re)submitted; pending/verified ones stay as they are.
+    const current = await this.vault.listFor(empId);
+    const of = (t: string) => current.filter((d) => d.docType === t);
+    const needsUpload = (t: string) => of(t).length === 0 || of(t).some((d) => d.status === 'REJECTED');
+    const needPan = needsUpload('PAN');
+    const needAadhaar = needsUpload('AADHAAR');
+    const degrees = of('DEGREE');
+    const needMarks = degrees.length === 0 ? 1 : degrees.filter((d) => d.status === 'REJECTED').length;
+
+    const marks = i.marksheetFileIds ?? [];
+    if (needPan) {
+      if (!i.panFileId) throw new AppError(422, 'PAN_REQUIRED', 'Upload your PAN card');
+      if (!i.panNumber || !isValidPan(i.panNumber)) throw new AppError(422, 'PAN_INVALID', 'Enter a valid PAN (5 letters, 4 digits, 1 letter; 4th letter P)');
+    }
+    if (needAadhaar) {
+      if (!i.aadhaarFileId) throw new AppError(422, 'AADHAAR_REQUIRED', 'Upload your Aadhaar card');
+      if (!i.aadhaarNumber || !isValidAadhaar(i.aadhaarNumber)) throw new AppError(422, 'AADHAAR_INVALID', 'Enter a valid 12-digit Aadhaar number');
+    }
+    if (marks.length < needMarks) throw new AppError(422, 'MARKSHEET_REQUIRED', needMarks > 1 ? `Re-upload ${needMarks} education marksheets` : 'Upload your education marksheet');
+
     const docIds: string[] = [];
-    docIds.push((await this.vault.add(empId, { docType: 'PAN', fileId: i.panFileId, source: 'SELF_UPLOAD' })).id);
-    docIds.push((await this.vault.add(empId, { docType: 'AADHAAR', fileId: i.aadhaarFileId, source: 'SELF_UPLOAD' })).id);
-    for (const [n, f] of i.marksheetFileIds.entries()) {
-      docIds.push((await this.vault.add(empId, { docType: 'DEGREE', fileId: f, title: i.marksheetFileIds.length === 1 ? 'Education marksheets' : `Education marksheet ${n + 1}`, source: 'SELF_UPLOAD' })).id);
+    if (needPan) docIds.push((await this.vault.add(empId, { docType: 'PAN', fileId: i.panFileId!, source: 'SELF_UPLOAD' })).id);
+    if (needAadhaar) docIds.push((await this.vault.add(empId, { docType: 'AADHAAR', fileId: i.aadhaarFileId!, source: 'SELF_UPLOAD' })).id);
+    for (const [n, f] of marks.entries()) {
+      docIds.push((await this.vault.add(empId, { docType: 'DEGREE', fileId: f, title: marks.length === 1 && degrees.length === 0 ? 'Education marksheets' : `Education marksheet ${degrees.length - needMarks + n + 1}`, source: 'SELF_UPLOAD' })).id);
     }
     if (i.prevEmploymentFileId) docIds.push((await this.vault.add(empId, { docType: 'PREV_EMPLOYMENT', fileId: i.prevEmploymentFileId, source: 'SELF_UPLOAD' })).id);
-    await this.prisma.employee.update({ where: { id: empId }, data: { panEnc: this.crypto.encrypt(i.panNumber), aadhaarEnc: this.crypto.encrypt(i.aadhaarNumber), aadhaarLast4: i.aadhaarNumber.slice(-4) } });
-    await this.apply(ob, { type: 'STEP_DONE', key: 'docs' }, { docs: { data: { pan: maskPan(i.panNumber), aadhaarLast4: i.aadhaarNumber.slice(-4), documentIds: docIds } } });
-    await this.audit.record({ action: 'statutory.updated', entity: 'Employee', entityId: empId, meta: { pan: maskPan(i.panNumber) } });
+
+    const emp: Prisma.EmployeeUncheckedUpdateInput = {};
+    const data: Record<string, unknown> = { ...((ob.steps.find((s) => s.key === 'docs')?.data ?? {}) as Record<string, unknown>) };
+    if (needPan) {
+      emp.panEnc = this.crypto.encrypt(i.panNumber!);
+      data.pan = maskPan(i.panNumber!);
+    }
+    if (needAadhaar) {
+      emp.aadhaarEnc = this.crypto.encrypt(i.aadhaarNumber!);
+      emp.aadhaarLast4 = i.aadhaarNumber!.slice(-4);
+      data.aadhaarLast4 = i.aadhaarNumber!.slice(-4);
+    }
+    if (Object.keys(emp).length) await this.prisma.employee.update({ where: { id: empId }, data: emp });
+    data.documentIds = [...new Set([...((data.documentIds as string[] | undefined) ?? []), ...docIds])];
+    await this.apply(ob, { type: 'STEP_DONE', key: 'docs' }, { docs: { data: data as Prisma.InputJsonValue } });
+    if (needPan) await this.audit.record({ action: 'statutory.updated', entity: 'Employee', entityId: empId, meta: { pan: maskPan(i.panNumber!) } });
     return this.mine();
   }
 
@@ -499,6 +531,7 @@ export class OnboardingService {
     const ob = await this.mustLoad(employeeId);
     const e = await this.prisma.employee.findUniqueOrThrow({ where: { id: employeeId } });
     if (!e.bankAccountLast4) throw badRequest('No bank details submitted yet', 'NO_BANK');
+    if (this.stepMap(ob).bank === 'NEEDS_ATTENTION') throw new AppError(409, 'BANK_AWAITING_EMPLOYEE', 'Bank details were rejected. Wait for the employee to resubmit them.');
     if (decision === 'VERIFIED') {
       await this.prisma.onboarding.update({ where: { id: ob.id }, data: { bankVerifiedAt: new Date(), bankVerifiedBy: ctx.userName ?? null } });
       await this.audit.record({ action: 'bank_account.verified', entity: 'Employee', entityId: employeeId });

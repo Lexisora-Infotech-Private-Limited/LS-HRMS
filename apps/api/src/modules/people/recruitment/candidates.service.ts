@@ -202,6 +202,8 @@ export class CandidatesService {
     if (job.status === 'CLOSED') throw conflict(`${job.title} is closed for applications`, 'JOB_CLOSED');
     const file = await this.prisma.fileObject.findUnique({ where: { id: i.resumeFileId } });
     if (!file) throw badRequest('Attach the resume', 'FILE_MISSING');
+    const dup = await this.employees.findDuplicate({ phone: i.phone, emails: [i.email] });
+    if (dup) throw conflict(`${dup.message}. Check before adding them as a candidate.`, 'DUPLICATE_EMPLOYEE');
     const tags = (i.tags ?? '').split(',').map((t) => t.trim().toLowerCase()).filter(Boolean).slice(0, 10);
     const existing = await this.prisma.candidate.findFirst({ where: { email: i.email } });
     let candidateId: string;
