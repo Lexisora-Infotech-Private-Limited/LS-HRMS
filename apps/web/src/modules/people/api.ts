@@ -195,7 +195,7 @@ export const peopleApi = {
   cancelInterview: (id: string, reason?: string | null) => post<unknown>(`/interviews/${id}/cancel`, { reason }),
   noShow: (id: string) => post<InterviewDetail>(`/interviews/${id}/no-show`),
   scorecard: (id: string, b: ScorecardInput) => put<InterviewDetail>(`/interviews/${id}/scorecard`, b),
-  interviewResult: (id: string, result: 'PENDING' | 'SELECTED' | 'REJECTED' | 'ON_HOLD') => post<InterviewDetail>(`/interviews/${id}/result`, { result }),
+  interviewResult: (id: string, result: 'PENDING' | 'SELECTED' | 'REJECTED' | 'ON_HOLD', overrideReason?: string) => post<InterviewDetail>(`/interviews/${id}/result`, { result, ...(overrideReason ? { overrideReason } : {}) }),
 
   // Appraisals
   cycles: () => get<AppraisalCycleRow[]>('/appraisals/cycles'),

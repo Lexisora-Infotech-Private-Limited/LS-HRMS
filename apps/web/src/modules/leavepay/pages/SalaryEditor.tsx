@@ -25,10 +25,16 @@ export function SalaryEditor({ employeeId, onClose }: { employeeId: string; onCl
   const [note, setNote] = useState('');
   const payType = s?.payType ?? 'SALARY';
   const paise = Math.round(Number(amount.replace(/[,₹\s]/g, '')) * 100) || 0;
+  // With no amount typed, preview the CURRENT CTC under the employee's current PF / ESI settings, so ticking a box shows its
+  // effect straight away (the saved structure only changes when a revision is saved).
+  const baseCtc = s?.ctcAnnualPaise ?? 0;
+  const typed = paise > 0;
+  const prevAmount = typed ? paise : baseCtc;
+  const prevMode = typed ? mode : 'CTC';
   const preview = useQuery({
-    queryKey: ['leavepay', 'salary-preview', mode, paise, payType, s?.statutory.pfCeilingOpted],
-    queryFn: () => lpApi.salaryPreview(mode === 'CTC' ? { ctcAnnualPaise: paise, payType, pfCeilingOpted: s?.statutory.pfCeilingOpted ?? true } : { grossMonthlyPaise: paise, payType, pfCeilingOpted: s?.statutory.pfCeilingOpted ?? true }),
-    enabled: paise > 0 && !!s,
+    queryKey: ['leavepay', 'salary-preview', employeeId, prevMode, prevAmount, payType, s?.statutory.pfEnabled, s?.statutory.pfCeilingOpted, s?.profile.esiMode],
+    queryFn: () => lpApi.salaryPreview(prevMode === 'CTC' ? { ctcAnnualPaise: prevAmount, payType, employeeId, pfCeilingOpted: s?.statutory.pfCeilingOpted ?? true } : { grossMonthlyPaise: prevAmount, payType, employeeId, pfCeilingOpted: s?.statutory.pfCeilingOpted ?? true }),
+    enabled: prevAmount > 0 && !!s,
     placeholderData: (p) => p,
   });
   const inv = { invalidate: [lpKeys.salaries, lpKeys.salary(employeeId), lpKeys.payroll] };
@@ -41,7 +47,10 @@ export function SalaryEditor({ employeeId, onClose }: { employeeId: string; onCl
     },
   });
   const profile = useAction((body: Parameters<typeof lpApi.updateProfile>[1]) => lpApi.updateProfile(employeeId, body), { success: 'Payroll profile updated', ...inv });
-  const rows = paise > 0 && preview.data ? preview.data.rows : s?.rows ?? [];
+  // Does the live preview differ from the saved structure? (PF / ESI switched, or the structure changed since the revision.)
+  const savedByCode = new Map((s?.rows ?? []).map((r) => [r.code, r.monthlyPaise]));
+  const changed = !typed && !!preview.data && !!s?.rows.length && (preview.data.rows.length !== s.rows.length || preview.data.rows.some((r) => savedByCode.get(r.code) !== r.monthlyPaise));
+  const rows = (typed || changed) && preview.data ? preview.data.rows : s?.rows ?? [];
   return (
     <Modal title={s ? `Salary · ${s.employeeName}` : 'Salary'} onClose={onClose} wide actions={<button className="btn btn-secondary" onClick={onClose}>Close</button>}>
       {q.isLoading && <Loading />}
@@ -51,7 +60,9 @@ export function SalaryEditor({ employeeId, onClose }: { employeeId: string; onCl
           <div className="row">
             <Tag tone="accent">{s.payType === 'STIPEND' ? 'Stipend' : 'Salary'}</Tag>
             {s.effectiveFrom && <span className="faint" style={{ fontSize: 12.5 }}>Effective {s.effectiveFrom}</span>}
-            {paise > 0 && preview.data && <Tag tone="outline">Preview of new revision</Tag>}
+            {typed && preview.data && <Tag tone="outline">Preview of new revision</Tag>}
+            {changed && <Tag tone="outline">Preview · PF / ESI settings changed</Tag>}
+            {paise > 0 && preview.data?.templateName && <Tag tone="outline">Structure: {preview.data.templateName}</Tag>}
           </div>
           <table className="lp-lines">
             <thead>
@@ -59,12 +70,18 @@ export function SalaryEditor({ employeeId, onClose }: { employeeId: string; onCl
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.code} className={r.code === 'CTC' ? 'total' : undefined}><td>{r.label}</td><td className="num">{formatINR(r.monthlyPaise)}</td><td className="num">{formatINR(r.annualPaise)}</td></tr>
+                <tr key={r.code} className={r.code === 'CTC' ? 'total' : undefined}><td>{r.kind === 'DEDUCTION' ? `− ${r.label} (company deduction)` : r.label}</td><td className="num">{formatINR(r.monthlyPaise)}</td><td className="num">{formatINR(r.annualPaise)}</td></tr>
               ))}
               {!rows.length && <tr><td colSpan={3} className="faint">No salary structure yet — add one below.</td></tr>}
             </tbody>
           </table>
           {preview.data?.warnings.map((w) => <div key={w} className="field-hint">{w}</div>)}
+          {changed && s?.canEdit && (
+            <div className="note" style={{ fontSize: 12.5 }}>
+              This shows your PF / ESI change on the current CTC. It applies to payroll only once you save a revision.{' '}
+              <button className="btn btn-ghost btn-sm" onClick={() => { setMode('CTC'); setAmount(String(baseCtc / 100)); }}>Use the current CTC for a revision</button>
+            </div>
+          )}
 
           {s.canEdit && (
             <div className="stack" style={{ gap: 10 }}>
@@ -97,7 +114,7 @@ export function SalaryEditor({ employeeId, onClose }: { employeeId: string; onCl
                 <button className="btn btn-primary" disabled={!paise || !from || revise.isPending} onClick={() => revise.mutate(undefined)}>Save revision</button>
               </div>
               <h4 style={{ margin: 0 }}>Statutory &amp; tax</h4>
-              <div className="row" style={{ gap: 16 }}>
+              <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
                 <label className="row" style={{ gap: 6, fontSize: 13.5 }}>
                   Tax regime
                   <select className="input" style={{ width: 110 }} value={s.statutory.taxRegime} onChange={(e) => profile.mutate({ taxRegime: e.target.value as 'OLD' | 'NEW' })}>
@@ -105,10 +122,26 @@ export function SalaryEditor({ employeeId, onClose }: { employeeId: string; onCl
                     <option value="OLD">Old</option>
                   </select>
                 </label>
-                <Check checked={s.statutory.pfEnabled} onChange={(x) => profile.mutate({ pfEnabled: x })} label="PF applicable" />
-                <Check checked={s.statutory.pfCeilingOpted} onChange={(x) => profile.mutate({ pfCeilingOpted: x })} label="PF on ₹15,000 ceiling" />
-                <Check checked={s.profile.idleDeductionExempt} onChange={(x) => profile.mutate({ idleDeductionExempt: x })} label="Exempt from idle deduction" />
-                <Check checked={s.profile.payrollHold} onChange={(x) => profile.mutate({ payrollHold: x, holdReason: x ? 'Held by HR' : null })} label="Hold salary" />
+                {/* Check is a bare box (aria-label only), so each one gets visible text beside it. */}
+                {([
+                  { checked: s.statutory.pfEnabled, label: 'PF applicable', onChange: (x: boolean) => profile.mutate({ pfEnabled: x }) },
+                  { checked: s.statutory.pfCeilingOpted, label: 'PF on wage ceiling', onChange: (x: boolean) => profile.mutate({ pfCeilingOpted: x }) },
+                  { checked: s.profile.idleDeductionExempt, label: 'Exempt from idle deduction', onChange: (x: boolean) => profile.mutate({ idleDeductionExempt: x }) },
+                  { checked: s.profile.payrollHold, label: 'Hold salary', onChange: (x: boolean) => profile.mutate({ payrollHold: x, holdReason: x ? 'Held by HR' : null }) },
+                ]).map((c) => (
+                  <span key={c.label} className="row" style={{ gap: 6, fontSize: 13.5, alignItems: 'center' }}>
+                    <Check checked={c.checked} onChange={c.onChange} label={c.label} />
+                    <span onClick={() => c.onChange(!c.checked)} style={{ cursor: 'pointer' }}>{c.label}</span>
+                  </span>
+                ))}
+                <label className="row" style={{ gap: 6, fontSize: 13.5 }}>
+                  ESI
+                  <select className="input" style={{ width: 150 }} value={s.profile.esiMode} onChange={(e) => profile.mutate({ esiMode: e.target.value as 'AUTO' | 'FORCE_ON' | 'FORCE_OFF' })}>
+                    <option value="AUTO">Automatic (by gross)</option>
+                    <option value="FORCE_ON">Always on</option>
+                    <option value="FORCE_OFF">Off</option>
+                  </select>
+                </label>
               </div>
               <div className="faint" style={{ fontSize: 12.5 }}>
                 UAN {s.statutory.uan ?? '—'} · PT {s.statutory.ptState} · ESI {s.statutory.esiCovered ? 'covered' : 'not applicable'} · PAN {s.statutory.panMasked ?? '—'} · Bank {s.bank.accountMasked ?? 'missing'}

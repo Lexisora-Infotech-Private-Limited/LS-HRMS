@@ -12,15 +12,18 @@
   },
   "dependencies": {
     "@fontsource/cormorant-garamond": "^5.0.0",
+    "@fontsource/lato": "^5.3.0",
     "@fontsource/lora": "^5.0.0",
+    "@fontsource/open-sans": "^5.3.0",
+    "@fontsource/roboto": "^5.3.0",
     "@lexisora/shared": "workspace:*",
     "@tanstack/react-query": "^5.0.0",
+    "livekit-client": "^2.0.0",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "react-router-dom": "^6.30.0",
     "socket.io-client": "^4.0.0",
-    "zod": "3.25.76",
-    "livekit-client": "^2.0.0"
+    "zod": "3.25.76"
   },
   "devDependencies": {
     "@types/react": "^18.3.0",

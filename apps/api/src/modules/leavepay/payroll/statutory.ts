@@ -12,14 +12,18 @@ const rupeeCeil = (paise: number) => Math.ceil(paise / 100 - 1e-9) * 100;
 export type PfResult = { pfWagePaise: number; ceilWagePaise: number; eePaise: number; erPaise: number; epsPaise: number; epfErPaise: number; edliPaise: number; adminPaise: number; trace: string };
 
 /** PF: 12% employee + 12% employer (EPS 8.33% capped ₹1,250 inside it), on the capped wage. */
-export function computePf(pfWagePaise: number, opts: { enabled: boolean; ceilingOpted: boolean }): PfResult {
+export function computePf(pfWagePaise: number, opts: { enabled: boolean; ceilingOpted: boolean; rates?: { eeRate?: number; erRate?: number; wageCeilingPaise?: number } }): PfResult {
   const zero = { pfWagePaise, ceilWagePaise: 0, eePaise: 0, erPaise: 0, epsPaise: 0, epfErPaise: 0, edliPaise: 0, adminPaise: 0 };
   if (!opts.enabled || pfWagePaise <= 0) return { ...zero, trace: 'PF not applicable' };
-  const capped = Math.min(pfWagePaise, PF_CONFIG.wageCeilingPaise);
+  const ceiling = opts.rates?.wageCeilingPaise ?? PF_CONFIG.wageCeilingPaise;
+  const capped = Math.min(pfWagePaise, ceiling);
+  const statutoryCapped = Math.min(pfWagePaise, PF_CONFIG.wageCeilingPaise); // EPS and EDLI keep the statutory ceiling
   const ceilWage = opts.ceilingOpted ? capped : pfWagePaise;
-  const ee = rupeeRound(ceilWage * PF_CONFIG.eeRate);
-  const er = rupeeRound(ceilWage * PF_CONFIG.erRate);
-  const eps = Math.min(rupeeRound(capped * PF_CONFIG.epsRate), PF_CONFIG.epsMaxPaise);
+  const eeRate = opts.rates?.eeRate ?? PF_CONFIG.eeRate;
+  const erRate = opts.rates?.erRate ?? PF_CONFIG.erRate;
+  const ee = rupeeRound(ceilWage * eeRate);
+  const er = rupeeRound(ceilWage * erRate);
+  const eps = Math.min(rupeeRound(statutoryCapped * PF_CONFIG.epsRate), PF_CONFIG.epsMaxPaise);
   return {
     pfWagePaise,
     ceilWagePaise: ceilWage,
@@ -27,25 +31,28 @@ export function computePf(pfWagePaise: number, opts: { enabled: boolean; ceiling
     erPaise: er,
     epsPaise: eps,
     epfErPaise: er - eps,
-    edliPaise: rupeeRound(capped * PF_CONFIG.edliRate),
+    edliPaise: rupeeRound(statutoryCapped * PF_CONFIG.edliRate),
     adminPaise: Math.round(ceilWage * PF_CONFIG.adminRate),
-    trace: `PF wage = min(${r(pfWagePaise)}, 15,000) = ${r(ceilWage)} × 12% = ${r(ee)}`,
+    trace: `PF wage = min(${r(pfWagePaise)}, ${r(ceiling)}) = ${r(ceilWage)} × ${Math.round(eeRate * 10000) / 100}% = ${r(ee)}`,
   };
 }
 
 /** ESI coverage is decided on fixed gross (≤ ₹21,000 per month). */
-export function esiCovered(grossFixedPaise: number, mode: string = 'AUTO'): boolean {
+export function esiCovered(grossFixedPaise: number, mode: string = 'AUTO', thresholdPaise: number = ESI_CONFIG.thresholdPaise): boolean {
   if (mode === 'FORCE_ON') return true;
   if (mode === 'FORCE_OFF') return false;
-  return grossFixedPaise > 0 && grossFixedPaise <= ESI_CONFIG.thresholdPaise;
+  return grossFixedPaise > 0 && grossFixedPaise <= thresholdPaise;
 }
 
-export function computeEsi(esiWagePaise: number, covered: boolean, paidDays: number) {
-  if (!covered || esiWagePaise <= 0) return { eePaise: 0, erPaise: 0, trace: 'ESI not applicable (gross above ₹21,000)' };
+export function computeEsi(esiWagePaise: number, covered: boolean, paidDays: number, rates?: { eeRate?: number; erRate?: number; thresholdPaise?: number }) {
+  if (!covered || esiWagePaise <= 0) return { eePaise: 0, erPaise: 0, trace: `ESI not applicable (gross above ${r(rates?.thresholdPaise ?? ESI_CONFIG.thresholdPaise)})` };
+  const eeRate = rates?.eeRate ?? ESI_CONFIG.eeRate;
+  const erRate = rates?.erRate ?? ESI_CONFIG.erRate;
   const dailyAvg = paidDays > 0 ? esiWagePaise / paidDays : 0;
-  const ee = dailyAvg <= ESI_CONFIG.eeExemptDailyAvgPaise ? 0 : rupeeCeil(esiWagePaise * ESI_CONFIG.eeRate);
-  const er = rupeeCeil(esiWagePaise * ESI_CONFIG.erRate);
-  return { eePaise: ee, erPaise: er, trace: `ESI wage ${r(esiWagePaise)} × 0.75% = ${r(ee)} (employer 3.25% = ${r(er)})` };
+  const ee = dailyAvg <= ESI_CONFIG.eeExemptDailyAvgPaise ? 0 : rupeeCeil(esiWagePaise * eeRate);
+  const er = rupeeCeil(esiWagePaise * erRate);
+  const pct = (x: number) => Math.round(x * 10000) / 100;
+  return { eePaise: ee, erPaise: er, trace: `ESI wage ${r(esiWagePaise)} × ${pct(eeRate)}% = ${r(ee)} (employer ${pct(erRate)}% = ${r(er)})` };
 }
 
 /** Professional tax slabs (monthly, on gross earned). `month` 1–12. */

@@ -33,14 +33,39 @@ export function ScheduleInterviewModal({ applicationId, onClose }: { application
   const lk = useQuery({ queryKey: ['lookups', 'people', 'interview-form'], queryFn: () => lookupsFor(['candidates', 'interviewRounds', 'employees']) });
   const save = useAction((b: ScheduleInterviewInput) => peopleApi.schedule(b), {
     success: (r) => (r.emailed ? 'Invite emailed' : 'Interview scheduled · the invite email could not be sent'),
-    invalidate: recruitmentInvalidate,
+    invalidate: [...recruitmentInvalidate, ['lookups']],
   });
   if (lk.isLoading) return null;
   const d = lk.data ?? {};
   const modes = INTERVIEW_MODES.map((m) => ({ value: m, label: INTERVIEW_MODE_LABELS[m] }));
+  // The Round dropdown follows the selected candidate's job: only that job's rounds, with the next one not yet
+  // scheduled pre-selected, plus “Add another round” for an unplanned round (which then joins the job).
+  type CandidateOpt = { value: string; label: string; rounds?: string[]; used?: string[] };
+  const cands = (d.candidates ?? []) as CandidateOpt[];
+  const allRounds = d.interviewRounds ?? [];
+  const OTHER = '__other__';
+  const jobRounds = (appId: string) => cands.find((c) => c.value === appId)?.rounds ?? [];
+  const extraRounds = (appId: string) => allRounds.filter((r) => !jobRounds(appId).includes(r.value));
+  const nextRound = (appId: string) => {
+    const jr = jobRounds(appId);
+    if (!jr.length) return allRounds[0]?.value ?? '';
+    const used = cands.find((c) => c.value === appId)?.used ?? [];
+    return jr.find((r) => !used.includes(r)) ?? jr[jr.length - 1]!;
+  };
   const fields: FieldDef[] = [
     { name: 'applicationId', label: 'Candidate', type: 'select', span: 2, required: true, options: d.candidates ?? [] },
-    { name: 'roundName', label: 'Round', type: 'select', required: true, options: d.interviewRounds ?? [] },
+    {
+      name: 'roundName',
+      label: 'Round',
+      type: 'select',
+      required: true,
+      optionsFor: (v) => {
+        const jr = jobRounds(v.applicationId);
+        if (!jr.length) return allRounds;
+        return [...jr.map((r) => ({ value: r, label: r })), ...(extraRounds(v.applicationId).length ? [{ value: OTHER, label: '+ Add another round…' }] : [])];
+      },
+    },
+    { name: 'extraRound', label: 'Round to add to this job', type: 'select', required: true, showIf: (v) => v.roundName === OTHER, optionsFor: (v) => extraRounds(v.applicationId), hint: 'It will be added to the job’s interview rounds.' },
     { name: 'interviewerId', label: 'Interviewer', type: 'select', required: true, options: d.employees ?? [] },
     { name: 'date', label: 'Date', type: 'date', required: true },
     { name: 'time', label: 'Time', type: 'time', required: true },
@@ -54,10 +79,11 @@ export function ScheduleInterviewModal({ applicationId, onClose }: { application
       title="Schedule interview"
       fields={fields}
       submitLabel="Schedule & email"
-      initial={{ applicationId: applicationId ?? d.candidates?.[0]?.value, date: plusDays(todayKey(), 1), time: '11:00', mode: 'VIDEO', durationMin: 60, panelistIds: [] }}
+      initial={{ applicationId: applicationId ?? d.candidates?.[0]?.value, roundName: nextRound(applicationId ?? d.candidates?.[0]?.value ?? ''), date: plusDays(todayKey(), 1), time: '11:00', mode: 'VIDEO', durationMin: 60, panelistIds: [] }}
       intro={!d.candidates?.length ? <span className="faint">No candidates are in screening or interview right now. Add a candidate first.</span> : undefined}
+      onFieldChange={(name, value) => (name === 'applicationId' ? { roundName: nextRound(value), extraRound: '' } : undefined)}
       onClose={onClose}
-      onSubmit={(v) => save.mutateAsync({ ...(v as ScheduleInterviewInput), durationMin: v.durationMin ? Number(v.durationMin) : 60, panelistIds: v.panelistIds ?? [] })}
+      onSubmit={({ extraRound, ...v }) => save.mutateAsync({ ...(v as ScheduleInterviewInput), roundName: v.roundName === OTHER ? extraRound : v.roundName, durationMin: v.durationMin ? Number(v.durationMin) : 60, panelistIds: v.panelistIds ?? [] })}
     />
   );
 }

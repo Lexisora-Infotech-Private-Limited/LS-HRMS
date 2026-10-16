@@ -312,7 +312,7 @@ export type LeaveHolidayRow = { id: string; date: string; name: string; type: st
 
 // ── Salary ─────────────────────────────────────────────────────────────────
 
-export type SalaryLineView = { code: string; label: string; monthlyPaise: number; annualPaise: number };
+export type SalaryLineView = { code: string; label: string; monthlyPaise: number; annualPaise: number; /** DEDUCTION = a company deduction from the template; absent for earnings and employer lines. */ kind?: 'EARNING' | 'DEDUCTION' };
 
 /** GET /salary/employee/:id — Profile "Offer & pay" tab and the payroll salary editor. */
 export type SalaryView = {
@@ -337,10 +337,142 @@ export const salaryPreviewSchema = z
     grossMonthlyPaise: z.coerce.number().int().positive().optional(),
     payType: z.enum(['SALARY', 'STIPEND']).default('SALARY'),
     pfCeilingOpted: z.boolean().default(true),
+    /** Lets the preview pick the salary structure that applies to this employee's type and CTC. */
+    employeeId: z.string().optional(),
   })
   .refine((v) => v.ctcAnnualPaise || v.grossMonthlyPaise, { message: 'Enter annual CTC or monthly gross' });
 export type SalaryPreviewInput = z.infer<typeof salaryPreviewSchema>;
-export type SalaryPreview = { grossMonthlyPaise: number; ctcAnnualPaise: number; ctcMonthlyPaise: number; rows: SalaryLineView[]; warnings: string[] };
+export type SalaryPreview = { grossMonthlyPaise: number; ctcAnnualPaise: number; ctcMonthlyPaise: number; rows: SalaryLineView[]; warnings: string[]; templateName: string | null };
+
+// ── Salary structure templates (editable by Admin/CEO and HR) ──────────────
+export const SALARY_CALC_KINDS = ['PERCENT_OF_GROSS', 'PERCENT_OF_COMPONENT', 'FIXED', 'BALANCING'] as const;
+export const SALARY_CALC_LABELS: Record<(typeof SALARY_CALC_KINDS)[number], string> = {
+  PERCENT_OF_GROSS: '% of gross',
+  PERCENT_OF_COMPONENT: '% of Basic',
+  FIXED: 'Fixed amount per month',
+  BALANCING: 'Balance (what is left)',
+};
+/** Codes the payroll engine owns - a template may not reuse them. */
+export const SALARY_RESERVED_CODES = ['PF_EE', 'PF_ER', 'ESI_EE', 'ESI_ER', 'PT', 'TDS', 'LOP', 'IDLE_DED', 'ROUNDING', 'CTC', 'GROSS', 'NET', 'NET_PAY', 'TOTAL', 'STIPEND', 'ARREARS'];
+
+/** Provident fund rates a structure uses. Defaults are the statutory 12% / 12% on a Rs 15,000 wage ceiling. */
+export const pfSettingsSchema = z.object({
+  employeePct: z.coerce.number().min(0, 'PF % cannot be negative').max(25, 'PF % above 25 is not allowed'),
+  employerPct: z.coerce.number().min(0, 'PF % cannot be negative').max(25, 'PF % above 25 is not allowed'),
+  /** Monthly wage cap PF is calculated on (rupees). */
+  wageCeiling: z.coerce.number().int().min(1000, 'Wage ceiling is at least 1,000').max(100000, 'Wage ceiling is at most 1,00,000'),
+});
+export type PfSettings = z.infer<typeof pfSettingsSchema>;
+export const DEFAULT_PF_SETTINGS: PfSettings = { employeePct: 12, employerPct: 12, wageCeiling: 15000 };
+
+/** ESI settings a structure uses. Defaults are the statutory 0.75% employee / 3.25% employer on a gross up to Rs 21,000. */
+export const esiSettingsSchema = z.object({
+  /** false = ESI is never applied to salaries on this structure. */
+  enabled: z.boolean(),
+  employeePct: z.coerce.number().min(0, 'ESI % cannot be negative').max(10, 'ESI % above 10 is not allowed'),
+  employerPct: z.coerce.number().min(0, 'ESI % cannot be negative').max(10, 'ESI % above 10 is not allowed'),
+  /** ESI applies automatically when the monthly gross is at or below this (rupees). */
+  grossLimit: z.coerce.number().int().min(1000, 'Gross limit is at least 1,000').max(100000, 'Gross limit is at most 1,00,000'),
+});
+export type EsiSettings = z.infer<typeof esiSettingsSchema>;
+export const DEFAULT_ESI_SETTINGS: EsiSettings = { enabled: true, employeePct: 0.75, employerPct: 3.25, grossLimit: 21000 };
+
+export const salaryTemplateLineSchema = z.object({
+  componentCode: z.string().trim().toUpperCase().regex(/^[A-Z][A-Z0-9_]{1,23}$/, 'Component code: letters, digits or _ (2-24 characters)'),
+  label: z.string().trim().min(2, 'Give the component a name').max(40),
+  kind: z.enum(['EARNING', 'DEDUCTION']).default('EARNING'),
+  calc: z.enum(SALARY_CALC_KINDS),
+  /** Percent (0-100) for the % methods, rupees per month for FIXED. */
+  value: z.coerce.number().min(0).max(100_000_000).optional(),
+  /** For % of another component: that earning's code. */
+  base: z.string().trim().toUpperCase().optional(),
+});
+export type SalaryTemplateLine = z.infer<typeof salaryTemplateLineSchema>;
+
+export const salaryTemplateSchema = z
+  .object({
+    name: z.string().trim().min(2, 'Give the structure a name').max(60),
+    employmentTypes: z.array(z.enum(['FULL_TIME', 'INTERN', 'CONTRACT'])).default([]),
+    minCtcPaise: z.coerce.number().int().min(0).nullable().optional(),
+    maxCtcPaise: z.coerce.number().int().min(1).nullable().optional(),
+    isDefault: z.boolean().default(false),
+    active: z.boolean().default(true),
+    pf: pfSettingsSchema.default(DEFAULT_PF_SETTINGS),
+    esi: esiSettingsSchema.default(DEFAULT_ESI_SETTINGS),
+    lines: z.array(salaryTemplateLineSchema).min(1, 'Add at least one component').max(20, 'At most 20 components'),
+  })
+  .refine((v) => v.minCtcPaise == null || v.maxCtcPaise == null || v.minCtcPaise < v.maxCtcPaise, { message: 'The upper CTC must be higher than the lower CTC', path: ['maxCtcPaise'] });
+export type SalaryTemplateInput = z.infer<typeof salaryTemplateSchema>;
+export type SalaryTemplateRow = {
+  id: string;
+  name: string;
+  employmentTypes: string[];
+  minCtcPaise: number | null;
+  maxCtcPaise: number | null;
+  isDefault: boolean;
+  active: boolean;
+  pf: PfSettings;
+  esi: EsiSettings;
+  lines: SalaryTemplateLine[];
+  updatedByName: string | null;
+  updatedAt: string;
+};
+export const salaryTemplatePreviewSchema = z.object({ ctcAnnualPaise: z.coerce.number().int().positive(), lines: z.array(salaryTemplateLineSchema).min(1).max(20), pfCeilingOpted: z.boolean().default(true), pf: pfSettingsSchema.default(DEFAULT_PF_SETTINGS), esi: esiSettingsSchema.default(DEFAULT_ESI_SETTINGS) });
+export type SalaryTemplatePreviewInput = z.infer<typeof salaryTemplatePreviewSchema>;
+
+/** The out-of-the-box structure: Basic 50% of gross, HRA 50% of Basic, Special allowance = the balance. */
+export const STANDARD_SALARY_LINES: SalaryTemplateLine[] = [
+  { componentCode: 'BASIC', label: 'Basic', kind: 'EARNING', calc: 'PERCENT_OF_GROSS', value: 50 },
+  { componentCode: 'HRA', label: 'HRA', kind: 'EARNING', calc: 'PERCENT_OF_COMPONENT', value: 50, base: 'BASIC' },
+  { componentCode: 'SPECIAL', label: 'Special allowance', kind: 'EARNING', calc: 'BALANCING' },
+];
+
+/** Business rules for a template's components. Returns every problem found (empty = valid). */
+export function validateSalaryTemplateLines(lines: SalaryTemplateLine[]): string[] {
+  const errors: string[] = [];
+  const codes = new Set<string>();
+  for (const l of lines) {
+    if (codes.has(l.componentCode)) errors.push(`"${l.componentCode}" is used twice - each component needs its own code`);
+    codes.add(l.componentCode);
+    if (SALARY_RESERVED_CODES.includes(l.componentCode)) errors.push(`"${l.componentCode}" is reserved for statutory or system lines - pick another code`);
+  }
+  const earnings = lines.filter((l) => l.kind === 'EARNING');
+  const basic = earnings.find((l) => l.componentCode === 'BASIC');
+  if (!basic) errors.push('A BASIC earning is required (PF and tax are calculated from it)');
+  else if (basic.calc !== 'PERCENT_OF_GROSS') errors.push('Basic must be a % of gross');
+  const balancing = lines.filter((l) => l.calc === 'BALANCING');
+  if (balancing.length !== 1) errors.push('Add exactly one balancing earning (for example Special allowance) so the parts add up to the gross');
+  else if (balancing[0]!.kind !== 'EARNING') errors.push('The balancing component must be an earning');
+  const seen = new Set<string>();
+  for (const l of lines) {
+    // Any component can be a share of gross; a share of another component is always of Basic.
+    if (l.calc === 'PERCENT_OF_COMPONENT' && l.base && l.base !== 'BASIC') errors.push(`${l.label}: a percentage here is always of Basic`);
+    if ((l.calc === 'PERCENT_OF_GROSS' || l.calc === 'PERCENT_OF_COMPONENT') && !(l.value != null && l.value > 0 && l.value <= 100)) errors.push(`${l.label}: enter a percentage between 0 and 100`);
+    if (l.calc === 'FIXED' && l.value == null) errors.push(`${l.label}: enter the monthly amount`);
+    if (l.calc === 'PERCENT_OF_COMPONENT') {
+      if (!l.base) errors.push(`${l.label}: pick the component it is a percentage of`);
+      else if (!seen.has(l.base) || !earnings.some((e) => e.componentCode === l.base)) errors.push(`${l.label}: "${l.base}" must be an earning listed above it`);
+    }
+    seen.add(l.componentCode);
+  }
+  // Percentages must fit inside the gross (checked on a sample gross of Rs 1,00,000).
+  const G = 100000;
+  const val: Record<string, number> = {};
+  let assigned = 0;
+  let deductions = 0;
+  for (const l of lines) {
+    let v = 0;
+    if (l.calc === 'PERCENT_OF_GROSS') v = (G * (l.value ?? 0)) / 100;
+    else if (l.calc === 'PERCENT_OF_COMPONENT') v = ((val[l.base ?? ''] ?? 0) * (l.value ?? 0)) / 100;
+    else if (l.calc === 'FIXED') v = l.value ?? 0;
+    val[l.componentCode] = v;
+    if (l.kind === 'DEDUCTION') deductions += v;
+    else if (l.calc !== 'BALANCING') assigned += v;
+  }
+  if (assigned > G) errors.push('The earnings add up to more than 100% of the gross');
+  if (deductions > G * 0.5) errors.push('Company deductions above 50% of gross are not allowed');
+  return errors;
+}
 
 export const salaryRevisionSchema = z.object({
   effectiveFrom: dateKey,
@@ -534,3 +666,56 @@ export type PayslipDetail = PayslipRow & {
 };
 
 export const payslipListQuery = z.object({ fy: z.string().regex(/^\d{4}-\d{2}$/).optional() });
+
+// ── Payslip design (one per company; applies to payslips generated from then on) ──
+export const PAYSLIP_LAYOUTS = ['CLASSIC', 'SUMMARY_CARD'] as const;
+export const PAYSLIP_LAYOUT_LABELS: Record<(typeof PAYSLIP_LAYOUTS)[number], string> = { CLASSIC: 'Classic', SUMMARY_CARD: 'Summary card' };
+
+export const payslipTemplateSchema = z
+  .object({
+    layout: z.enum(PAYSLIP_LAYOUTS).default('CLASSIC'),
+    /** NONE = no logo; COMPANY = the company logo from Branding; CUSTOM = an image uploaded for payslips only. */
+    logoMode: z.enum(['NONE', 'COMPANY', 'CUSTOM']).default('NONE'),
+    /** PNG or JPEG as a data URL, at most ~250 KB. */
+    customLogo: z
+      .string()
+      .max(340_000, 'The logo is too large (250 KB at most)')
+      .regex(/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/, 'Upload a PNG or JPEG image')
+      .nullable()
+      .default(null),
+    accentColor: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Use a colour like #b68235').default('#b68235'),
+    /** Heading, e.g. "Payslip" or "Salary slip". */
+    title: z.string().trim().min(2, 'Give the payslip a title').max(40).default('Payslip'),
+    showAddress: z.boolean().default(true),
+    labels: z
+      .object({
+        earnings: z.string().trim().min(2).max(30).default('Earnings'),
+        deductions: z.string().trim().min(2).max(30).default('Deductions'),
+        netPay: z.string().trim().min(2).max(30).default('Net pay'),
+      })
+      .default({}),
+    fields: z
+      .object({
+        designation: z.boolean().default(true),
+        department: z.boolean().default(true),
+        joiningDate: z.boolean().default(true),
+        pan: z.boolean().default(true),
+        uan: z.boolean().default(true),
+        bankAccount: z.boolean().default(true),
+        /** Working / paid / LOP days and leave. */
+        attendance: z.boolean().default(true),
+        /** The "Full month" column next to "Earned". */
+        fullMonthColumn: z.boolean().default(true),
+        employerContributions: z.boolean().default(true),
+        yearToDate: z.boolean().default(true),
+        idleNote: z.boolean().default(true),
+        netInWords: z.boolean().default(true),
+      })
+      .default({}),
+    footerNote: z.string().trim().max(240, 'At most 240 characters').default(''),
+    showSystemLine: z.boolean().default(true),
+  })
+  .refine((v) => v.logoMode !== 'CUSTOM' || !!v.customLogo, { message: 'Upload a logo, or choose another logo option', path: ['customLogo'] });
+export type PayslipTemplate = z.infer<typeof payslipTemplateSchema>;
+/** Today's payslip, unchanged: Classic layout, no logo, every field shown. */
+export const DEFAULT_PAYSLIP_TEMPLATE: PayslipTemplate = payslipTemplateSchema.parse({});

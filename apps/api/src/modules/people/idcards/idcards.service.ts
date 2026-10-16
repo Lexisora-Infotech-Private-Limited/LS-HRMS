@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { IdCard, IdCardTemplate, Prisma } from '@prisma/client';
 import { randomBytes } from 'node:crypto';
-import type { IdCardElement, IdCardPreviewData, IdCardRow, IdCardSettings, IdCardTemplateDto, IdCardTemplateInput } from '@lexisora/shared';
+import { DEFAULT_ID_CARD_BG_FIT, type IdCardBgFit, type IdCardElement, type IdCardPreviewData, IdCardRow, IdCardSettings, IdCardTemplateDto, IdCardTemplateInput } from '@lexisora/shared';
 import { env } from '../../../config/env';
 import { AuditService } from '../../../core/audit/audit.service';
 import { getContext, requireContext } from '../../../core/context/request-context';
@@ -15,7 +15,7 @@ import { SettingsService } from '../../../core/settings/settings.service';
 import { StorageService } from '../../../core/storage/storage.service';
 import { idCardMissing, MISSING_LABELS } from '../people.rules';
 import { dbDateKey, fmt, fmtStamp } from '../people.util';
-import { classicPortrait, landscapeMinimal, PT_PER_MM, qrDataUrl, renderCardSvg, svgToPng, toDataUrl } from './card-render';
+import { cardDate, cardMobile, classicPortrait, dataUrlSize, landscapeMinimal, PT_PER_MM, qrDataUrl, renderCardSvg, svgToPng, toDataUrl } from './card-render';
 
 const SETTINGS_KEY = 'people.idcard.settings';
 const ACTIVE: IdCard['status'][] = ['QUEUED', 'READY', 'SENT_TO_PRINT', 'PRINTED', 'ISSUED'];
@@ -91,6 +91,8 @@ export class IdCardsService {
       back: t.back as unknown as IdCardElement[],
       frontBgFileId: t.frontBgFileId,
       backBgFileId: t.backBgFileId,
+      frontBgFit: (t.frontBgFit as IdCardBgFit | null) ?? DEFAULT_ID_CARD_BG_FIT,
+      backBgFit: (t.backBgFit as IdCardBgFit | null) ?? DEFAULT_ID_CARD_BG_FIT,
       isDefault: t.isDefault,
       widthMm: t.widthMm,
       heightMm: t.heightMm,
@@ -107,7 +109,7 @@ export class IdCardsService {
   async createTemplate(i: IdCardTemplateInput) {
     const dims = i.orientation === 'LANDSCAPE' ? { widthMm: 85.6, heightMm: 53.98 } : { widthMm: 53.98, heightMm: 85.6 };
     const row = await this.prisma.idCardTemplate.create({
-      data: { name: i.name, orientation: i.orientation, ...dims, front: i.front, back: i.back, frontBgFileId: i.frontBgFileId ?? null, backBgFileId: i.backBgFileId ?? null, isDefault: false } as unknown as Prisma.IdCardTemplateUncheckedCreateInput,
+      data: { name: i.name, orientation: i.orientation, ...dims, front: i.front, back: i.back, frontBgFileId: i.frontBgFileId ?? null, backBgFileId: i.backBgFileId ?? null, frontBgFit: i.frontBgFit ?? DEFAULT_ID_CARD_BG_FIT, backBgFit: i.backBgFit ?? DEFAULT_ID_CARD_BG_FIT, isDefault: false } as unknown as Prisma.IdCardTemplateUncheckedCreateInput,
     });
     if (i.isDefault) await this.setDefault(row.id);
     await this.audit.record({ action: 'idcard.template.created', entity: 'IdCardTemplate', entityId: row.id, meta: { name: i.name } });
@@ -120,7 +122,7 @@ export class IdCardsService {
     const dims = i.orientation === 'LANDSCAPE' ? { widthMm: 85.6, heightMm: 53.98 } : { widthMm: 53.98, heightMm: 85.6 };
     await this.prisma.idCardTemplate.update({
       where: { id },
-      data: { name: i.name, orientation: i.orientation, ...dims, front: i.front, back: i.back, frontBgFileId: i.frontBgFileId ?? null, backBgFileId: i.backBgFileId ?? null, version: t.version + 1 },
+      data: { name: i.name, orientation: i.orientation, ...dims, front: i.front, back: i.back, frontBgFileId: i.frontBgFileId ?? null, backBgFileId: i.backBgFileId ?? null, frontBgFit: i.frontBgFit ?? DEFAULT_ID_CARD_BG_FIT, backBgFit: i.backBgFit ?? DEFAULT_ID_CARD_BG_FIT, version: t.version + 1 },
     });
     if (i.isDefault) await this.setDefault(id);
     await this.audit.record({ action: 'idcard.template.published', entity: 'IdCardTemplate', entityId: id, meta: { version: t.version + 1 } });
@@ -131,7 +133,19 @@ export class IdCardsService {
     if (!(await this.prisma.idCardTemplate.findUnique({ where: { id } }))) throw notFound('Template');
     await this.prisma.idCardTemplate.updateMany({ where: { isDefault: true }, data: { isDefault: false } });
     await this.prisma.idCardTemplate.update({ where: { id }, data: { isDefault: true } });
-    return { ok: true };
+    // Cards not yet sent to print move to the new default; the ones already drawn are drawn again with it.
+    const moved = await this.prisma.idCard.updateMany({ where: { status: { in: ['QUEUED', 'READY'] }, templateId: { not: id } }, data: { templateId: id } });
+    let regenerated = 0;
+    const ready = await this.prisma.idCard.findMany({ where: { status: 'READY' }, select: { id: true } });
+    if (ready.length) {
+      try {
+        regenerated = (await this.generate({ cardIds: ready.map((c) => c.id) })).generated;
+      } catch (e) {
+        this.log.warn(`Could not redraw ready cards after changing the default template: ${(e as Error).message}`);
+      }
+    }
+    await this.audit.record({ action: 'idcard.template.default', entity: 'IdCardTemplate', entityId: id, meta: { moved: moved.count, regenerated } });
+    return { ok: true, moved: moved.count, regenerated };
   }
 
   private async defaultTemplate(): Promise<IdCardTemplate> {
@@ -158,7 +172,11 @@ export class IdCardsService {
       'employee.blood_group': e.bloodGroup ?? null,
       'employee.photo': e.photoFileId ?? null,
       'employee.emergency_contact': e.emergencyContactName ? `${e.emergencyContactName}${e.emergencyContactPhone ? ` · ${e.emergencyContactPhone}` : ''}` : null,
-      'employee.joining_date': e.joiningDate ? fmt(e.joiningDate) : null,
+      'employee.joining_date': cardDate(dbDateKey(e.joiningDate)),
+      'employee.dob': cardDate(dbDateKey(e.dateOfBirth)),
+      'employee.mobile': cardMobile(e.phone),
+      'employee.email': e.officialEmail ?? null,
+      'employee.address': e.address ?? null,
       'employee.code_blood': [e.empCode, e.bloodGroup].filter(Boolean).join(' · '),
       'card.serial': card?.serial ?? 'IDC-PREVIEW',
       'qr.verify_url': card ? verifyUrl(card.verifyToken) : `${env.WEB_ORIGIN}/verify`,
@@ -182,16 +200,22 @@ export class IdCardsService {
 
   /** Render both sides as 300-DPI PNGs. */
   async renderSides(tpl: IdCardTemplate, data: IdCardPreviewData): Promise<{ front: Buffer; back: Buffer }> {
+    const photo = await this.imageData(data['employee.photo']);
     const images = {
-      photo: await this.imageData(data['employee.photo']),
+      photo,
+      photoSize: await dataUrlSize(photo),
       logo: await this.imageData(data['tenant.logo'], 400),
       qr: data['qr.verify_url'] ? await qrDataUrl(data['qr.verify_url']) : null,
     };
-    const side = (els: IdCardElement[], bg: string | null) => renderCardSvg({ widthMm: tpl.widthMm, heightMm: tpl.heightMm, elements: els }, data, { ...images, bg });
-    const [front, back] = await Promise.all([
-      svgToPng(side(tpl.front as unknown as IdCardElement[], await this.imageData(tpl.frontBgFileId, 1100))),
-      svgToPng(side(tpl.back as unknown as IdCardElement[], await this.imageData(tpl.backBgFileId, 1100))),
-    ]);
+    const custom: Record<string, string | null> = {};
+    for (const el of [...(tpl.front as unknown as IdCardElement[]), ...(tpl.back as unknown as IdCardElement[])]) {
+      if (el.type === 'IMAGE' && el.fileId && !(el.fileId in custom)) custom[el.fileId] = await this.imageData(el.fileId, 900);
+    }
+    const side = async (els: IdCardElement[], bgFileId: string | null, fit: unknown) => {
+      const bg = await this.imageData(bgFileId, 1100);
+      return svgToPng(renderCardSvg({ widthMm: tpl.widthMm, heightMm: tpl.heightMm, elements: els }, data, { ...images, custom, bg, bgSize: await dataUrlSize(bg), bgFit: (fit as IdCardBgFit | null) ?? DEFAULT_ID_CARD_BG_FIT }));
+    };
+    const [front, back] = await Promise.all([side(tpl.front as unknown as IdCardElement[], tpl.frontBgFileId, tpl.frontBgFit), side(tpl.back as unknown as IdCardElement[], tpl.backBgFileId, tpl.backBgFit)]);
     return { front, back };
   }
 
@@ -335,7 +359,8 @@ export class IdCardsService {
         skipped.push(`${e.fullName}: ${missing.map((m) => MISSING_LABELS[m] ?? m).join(', ')}`);
         continue;
       }
-      const tpl = (c.templateId && (await this.prisma.idCardTemplate.findUnique({ where: { id: c.templateId } }))) || (await this.defaultTemplate());
+      // A card that has not gone to print yet always uses the current default template.
+      const tpl = await this.defaultTemplate();
       const data = await this.cardData(e, c);
       const sides = await this.renderSides(tpl, data);
       const pdf = await this.cardsPdf([{ tpl, ...sides }]);
@@ -370,13 +395,16 @@ export class IdCardsService {
     if (!c) throw notFound('ID card');
     await this.assertCardAccess(c);
     const e = await this.employee(c.employeeId);
-    if (c.printPdfFileId) {
+    // Once a card has gone to print, its saved file is the record of what was printed. Until then the download is drawn
+    // fresh from the current template, so it always matches the designer.
+    if (c.printPdfFileId && !['QUEUED', 'READY'].includes(c.status)) {
       const { data } = await this.storage.read(c.printPdfFileId);
       return { pdf: data, filename: `${e.empCode}-id-card.pdf` };
     }
     const tpl = (c.templateId && (await this.prisma.idCardTemplate.findUnique({ where: { id: c.templateId } }))) || (await this.defaultTemplate());
-    const sides = await this.renderSides(tpl, await this.cardData(e, c));
-    return { pdf: await this.cardsPdf([{ tpl, ...sides }]), filename: `${e.empCode}-id-card-preview.pdf` };
+    const data = c.status === 'READY' ? ((c.dataSnapshot as unknown as IdCardPreviewData | null) ?? (await this.cardData(e, c))) : await this.cardData(e, c);
+    const sides = await this.renderSides(tpl, data);
+    return { pdf: await this.cardsPdf([{ tpl, ...sides }]), filename: `${e.empCode}-id-card${c.status === 'READY' ? '' : '-preview'}.pdf` };
   }
 
   async cardPng(id: string, side: 'front' | 'back'): Promise<Buffer> {

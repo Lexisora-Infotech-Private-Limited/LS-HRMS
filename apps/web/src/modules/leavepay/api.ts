@@ -20,17 +20,23 @@ import type {
   PayrollRunView,
   PayslipDetail,
   PayslipRow,
+  PayslipCanvas,
   SalaryListRow,
   SalaryPreview,
   SalaryPreviewInput,
   SalaryRevisionInput,
+  SalaryTemplateInput,
+  SalaryTemplatePreviewInput,
+  SalaryTemplateRow,
   SalaryView,
   TeamRequestRow,
   UpcomingItem,
 } from '@lexisora/shared';
-import { del, download, get, patch, post } from '@/lib/api';
+import { del, download, get, patch, post, postBlob, put } from '@/lib/api';
 
 /** Leave + payroll API (docs/specs/spec-leavepay.md). */
+
+export type PayslipTemplateView = { design: PayslipCanvas; legacy: boolean; companyLogo: string | null; company: { name: string; address: string | null; pan: string | null } };
 
 export const lpKeys = {
   balances: ['leavepay', 'balances'] as const,
@@ -49,6 +55,8 @@ export const lpKeys = {
   item: (id: string) => ['leavepay', 'payroll-item', id] as const,
   salaries: ['leavepay', 'salaries'] as const,
   salary: (id: string) => ['leavepay', 'salary', id] as const,
+  templates: ['leavepay', 'salary-templates'] as const,
+  payslipTemplate: ['leavepay', 'payslip-template'] as const,
   payslips: ['leavepay', 'payslips'] as const,
   payslip: (id: string) => ['leavepay', 'payslip', id] as const,
   adjustments: ['leavepay', 'adjustments'] as const,
@@ -105,6 +113,14 @@ export const lpApi = {
   salaries: () => get<SalaryListRow[]>('/salary/employees'),
   salary: (employeeId: string) => get<SalaryView>(`/salary/employee/${employeeId}`),
   salaryPreview: (body: SalaryPreviewInput) => post<SalaryPreview>('/salary/preview', body),
+  payslipTemplate: () => get<PayslipTemplateView>('/payslip-template'),
+  savePayslipTemplate: (body: PayslipCanvas) => put<PayslipTemplateView>('/payslip-template', body),
+  previewPayslipPdf: (body: PayslipCanvas) => postBlob('/payslip-template/preview', body),
+  templates: () => get<SalaryTemplateRow[]>('/salary-templates'),
+  createTemplate: (body: SalaryTemplateInput) => post<SalaryTemplateRow>('/salary-templates', body),
+  updateTemplate: (id: string, body: SalaryTemplateInput) => patch<SalaryTemplateRow>(`/salary-templates/${id}`, body),
+  deleteTemplate: (id: string) => del<{ ok: true; deactivated: boolean }>(`/salary-templates/${id}`),
+  previewTemplate: (body: SalaryTemplatePreviewInput) => post<Pick<SalaryPreview, 'grossMonthlyPaise' | 'ctcAnnualPaise' | 'ctcMonthlyPaise' | 'rows' | 'warnings'> & { lowestCtcPaise: number }>('/salary-templates/preview', body),
   revise: (employeeId: string, body: SalaryRevisionInput) => post<SalaryView>(`/salary/employee/${employeeId}/revisions`, body),
   updateProfile: (employeeId: string, body: PayrollProfileInput) => patch<SalaryView>(`/salary/employee/${employeeId}/profile`, body),
   // payslips

@@ -2,10 +2,28 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEven
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
+  DEFAULT_ID_CARD_BG_FIT,
+  DEFAULT_ID_CARD_PHOTO_FRAME,
+  ID_CARD_FONTS,
+  idCardFontAvg,
+  idCardFontCss,
+  TEXT_CASES,
+  TEXT_CASE_LABELS,
+  applyTextCase,
   IDCARD_BINDING_LABELS,
   IDCARD_BINDINGS,
+  idCardBgPlacement,
+  idCardDrawOrder,
+  idCardShrinks,
+  idCardPhotoPlacement,
   formatDate,
   formatTime,
+  idCardFieldLabel,
+  idCardLabelsToText,
+  idCardTextToLabels,
+  layoutIdCardText,
+  type IdCardBgFit,
+  type IdCardPhotoFrame,
   type IdCardBinding,
   type IdCardElement,
   type IdCardPreviewData,
@@ -14,6 +32,12 @@ import {
   type IdCardTemplateDto,
   type IdCardTemplateInput,
 } from '@lexisora/shared';
+import '@fontsource/open-sans/400.css';
+import '@fontsource/open-sans/700.css';
+import '@fontsource/roboto/400.css';
+import '@fontsource/roboto/700.css';
+import '@fontsource/lato/400.css';
+import '@fontsource/lato/700.css';
 import { authUrl, download, fileUrl, uploadFile } from '@/lib/api';
 import { useAction } from '@/lib/query';
 import { useToast } from '@/lib/toast';
@@ -32,7 +56,7 @@ import '../people.css';
 
 type Tab = 'designer' | 'cards' | 'batches';
 type Side = 'front' | 'back';
-type Draft = { name: string; orientation: 'PORTRAIT' | 'LANDSCAPE'; front: IdCardElement[]; back: IdCardElement[]; frontBgFileId: string | null; backBgFileId: string | null };
+type Draft = { name: string; orientation: 'PORTRAIT' | 'LANDSCAPE'; front: IdCardElement[]; back: IdCardElement[]; frontBgFileId: string | null; backBgFileId: string | null; frontBgFit: IdCardBgFit; backBgFit: IdCardBgFit };
 
 const K = {
   templates: [...peopleKeys.idcards, 'templates'] as const,
@@ -44,7 +68,7 @@ const K = {
 };
 const INVALIDATE = [[...peopleKeys.idcards]];
 const DIMS = { PORTRAIT: { w: 53.98, h: 85.6 }, LANDSCAPE: { w: 85.6, h: 53.98 } } as const;
-const FAMILY = { serif: "Georgia, 'Times New Roman', serif", sans: "'Segoe UI', Arial, Helvetica, sans-serif" };
+const FAMILY = { serif: "'Times New Roman', 'Liberation Serif', Times, serif", sans: "Arial, 'Liberation Sans', Helvetica, sans-serif" };
 const PT_TO_MM = 25.4 / 72;
 
 const STATUS_TONE: Record<string, Tone> = { QUEUED: 'outline', READY: 'accent', SENT_TO_PRINT: 'outline', PRINTED: 'accent', ISSUED: 'accent', REVOKED: 'danger', SURRENDERED: 'neutral', REPLACED: 'neutral', VOID: 'neutral' };
@@ -72,14 +96,19 @@ const PALETTE: PaletteItem[] = [
   { key: 'name', label: 'Full name', make: (W) => textEl('Full name', 'employee.full_name', W - 4, 8, font(22, 'serif')) },
   { key: 'designation', label: 'Designation', make: (W) => textEl('Designation', 'employee.designation', W - 4, 5, font(9, 'sans', '#605d5d')) },
   { key: 'code', label: 'Employee ID', make: (W) => textEl('Employee ID', 'employee.emp_code', W - 4, 5, font(9)) },
-  { key: 'blood', label: 'Blood group', make: () => textEl('Blood group', 'employee.blood_group', 30, 5, font(9), 'Blood group: ') },
+  { key: 'blood', label: 'Blood group', make: () => textEl('Blood group', 'employee.blood_group', 30, 5, font(9)) },
   { key: 'qr', label: 'QR code', make: () => ({ type: 'QR', label: 'QR code', binding: 'qr.verify_url', xMm: 0, yMm: 0, wMm: 21, hMm: 21, z: 1 }) },
   { key: 'logo', label: 'Company logo', make: (W) => ({ type: 'LOGO', label: 'Company logo', binding: 'tenant.logo', xMm: 0, yMm: 0, wMm: Math.min(40, W - 4), hMm: 8, z: 1, font: font(13, 'serif') }) },
-  { key: 'emergency', label: 'Emergency contact', make: (W) => textEl('Emergency contact', 'settings.emergency_line', W - 6, 4, font(7.5), 'Emergency: ') },
+  { key: 'dob', label: 'Date of birth', make: () => textEl('Date of birth', 'employee.dob', 30, 5, font(9, 'sans', '#201f1d', 'left')) },
+  { key: 'mobile', label: 'Mobile number', make: () => textEl('Mobile number', 'employee.mobile', 30, 5, font(9, 'sans', '#201f1d', 'left')) },
+  { key: 'address', label: 'Address', make: (W) => textEl('Address', 'employee.address', W - 8, 14, font(8, 'sans', '#201f1d', 'left')) },
+  { key: 'email', label: 'Email', make: (W) => textEl('Email', 'employee.email', W - 8, 5, font(8, 'sans', '#201f1d', 'left')) },
+  { key: 'emergency', label: 'Emergency contact', make: (W) => textEl('Emergency contact', 'settings.emergency_line', W - 6, 4, font(7.5)) },
 ];
 const PALETTE_MORE: PaletteItem[] = [
   { key: 'static', label: 'Static text', make: (W) => textEl('Static text', null, Math.min(40, W - 4), 5, font(8), 'Your text', 'STATIC') },
   { key: 'signature', label: 'Signature', make: (W) => textEl('Signature', null, W - 10, 5, font(7.5), 'Authorised signatory', 'SIGNATURE') },
+  { key: 'image', label: 'Image (upload)', make: () => ({ type: 'IMAGE', label: 'Image', fileId: null, xMm: 0, yMm: 0, wMm: 14, hMm: 14, z: 1 }) },
   { key: 'shape', label: 'Shape', make: () => ({ type: 'SHAPE', label: 'Shape', xMm: 0, yMm: 0, wMm: 20, hMm: 2, fill: '#b68235', z: 0 }) },
 ];
 const ALL_PALETTE = [...PALETTE, ...PALETTE_MORE];
@@ -99,20 +128,38 @@ function fitFontSize(text: string, sizePt: number, widthMm: number): number {
   if (w <= widthMm || !text) return sizePt;
   return Math.max(5, Math.floor(((sizePt * widthMm) / w) * 10) / 10);
 }
+/** Typed text with {{employee values}} filled from the preview employee; a missing value shows as {Label}. */
+function fillPreview(text: string, data: IdCardPreviewData | undefined): { text: string; placeholder: boolean } {
+  let placeholder = false;
+  const out = text.replace(/\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g, (_, k: string) => {
+    const v = (data as Record<string, string | null> | undefined)?.[k];
+    if (v) return v;
+    placeholder = true;
+    return `{${(IDCARD_BINDING_LABELS as Record<string, string>)[k] ?? k}}`;
+  });
+  return { text: out, placeholder };
+}
+/** What the text box shows for a text element: its typed text, with any bound field as [Label]. */
+const editText = (el: IdCardElement) => idCardTextToLabels(`${el.text ?? ''}${el.binding ? `{{${el.binding}}}` : ''}`);
 function elementText(el: IdCardElement, data: IdCardPreviewData | undefined): { text: string; placeholder: boolean } {
-  if (el.type === 'STATIC') return { text: el.text ?? '', placeholder: false };
+  const r = rawElementText(el, data);
+  return r.placeholder || (el.type !== 'TEXT' && el.type !== 'STATIC') ? r : { ...r, text: applyTextCase(r.text, el.textCase) };
+}
+function rawElementText(el: IdCardElement, data: IdCardPreviewData | undefined): { text: string; placeholder: boolean } {
+  if (el.type === 'STATIC') return fillPreview(el.text ?? '', data);
   if (el.type === 'SIGNATURE') return { text: el.text || 'Authorised signatory', placeholder: false };
   if (el.type === 'LOGO') return { text: data?.['tenant.name'] ?? 'Company', placeholder: false };
   if (el.binding) {
     const v = data?.[el.binding];
-    return v ? { text: `${el.text ?? ''}${v}`, placeholder: false } : { text: `${el.text ?? ''}{${IDCARD_BINDING_LABELS[el.binding] ?? el.binding}}`, placeholder: true };
+    const pre = fillPreview(el.text ?? '', data);
+    return v ? { text: `${pre.text}${v}`, placeholder: pre.placeholder } : { text: `${pre.text}{${IDCARD_BINDING_LABELS[el.binding] ?? el.binding}}`, placeholder: true };
   }
-  return { text: el.text ?? '', placeholder: false };
+  return fillPreview(el.text ?? '', data);
 }
 const round1 = (n: number) => Math.round(n * 10) / 10;
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 const newId = (k: string) => `${k}-${Math.random().toString(36).slice(2, 7)}`;
-const toDraft = (t: IdCardTemplateDto): Draft => ({ name: t.name, orientation: t.orientation, front: t.front, back: t.back, frontBgFileId: t.frontBgFileId ?? null, backBgFileId: t.backBgFileId ?? null });
+const toDraft = (t: IdCardTemplateDto): Draft => ({ name: t.name, orientation: t.orientation, front: t.front, back: t.back, frontBgFileId: t.frontBgFileId ?? null, backBgFileId: t.backBgFileId ?? null, frontBgFit: t.frontBgFit ?? DEFAULT_ID_CARD_BG_FIT, backBgFit: t.backBgFit ?? DEFAULT_ID_CARD_BG_FIT });
 const toInput = (d: Draft, isDefault?: boolean): IdCardTemplateInput => ({ ...d, isDefault });
 
 export default function IdCardPage() {
@@ -223,6 +270,9 @@ function Designer({ settings, initialEmployee }: { settings: IdCardSettings | un
   const [editingSettings, setEditingSettings] = useState(false);
   const [vendor, setVendor] = useState('');
   const [bgBusy, setBgBusy] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [bgAdjust, setBgAdjust] = useState(false);
+  const [photoMove, setPhotoMove] = useState(false);
 
   const preview = useQuery({ queryKey: K.preview(employeeId || 'auto'), queryFn: () => peopleApi.idPreviewData(employeeId || null) });
   useEffect(() => {
@@ -246,7 +296,7 @@ function Designer({ settings, initialEmployee }: { settings: IdCardSettings | un
     // Adopt the server's normalised copy so the editor is clean again.
     onSuccess: (r) => setDraft(toDraft(r)),
   });
-  const makeDefault = useAction(() => peopleApi.setDefaultIdTemplate(tpl!.id), { success: `${tpl?.name ?? 'Template'} is now the default template`, invalidate: INVALIDATE });
+  const makeDefault = useAction(() => peopleApi.setDefaultIdTemplate(tpl!.id), { success: `${tpl?.name ?? 'Template'} is now the default template · cards not yet sent to print were moved to it`, invalidate: INVALIDATE });
   const saveVendor = useAction(() => peopleApi.saveIdSettings({ ...(settings as IdCardSettings), printVendorEmail: vendor.trim() }), { success: 'Print vendor saved', invalidate: INVALIDATE });
 
   if (tpls.error) return <ErrorBlock error={tpls.error} retry={() => void tpls.refetch()} />;
@@ -258,6 +308,14 @@ function Designer({ settings, initialEmployee }: { settings: IdCardSettings | un
   const setEls = (fn: (els: IdCardElement[]) => IdCardElement[]) => setDraft((d) => (d ? { ...d, [side]: fn(d[side]) } : d));
   const patchEl = (id: string, p: Partial<IdCardElement>) => setEls((list) => list.map((e) => (e.id === id ? { ...e, ...p } : e)));
   const patchFont = (id: string, p: Partial<Font>) => setEls((list) => list.map((e) => (e.id === id ? { ...e, font: { ...font(10), ...(e.font ?? {}), ...p } } : e)));
+  const dupEl = (id: string) => {
+    const src = els.find((e) => e.id === id);
+    if (!src) return;
+    if (els.length >= 40) return toastError('A side can hold up to 40 elements');
+    const copy = { ...JSON.parse(JSON.stringify(src)), id: newId(src.type.toLowerCase()), xMm: round1(clamp(src.xMm + 2, -5, 100)), yMm: round1(clamp(src.yMm + 2, -5, 100)) } as IdCardElement;
+    setEls((list) => [...list, copy]);
+    setSel(copy.id);
+  };
   const removeEl = (id: string) => {
     setEls((list) => list.filter((e) => e.id !== id));
     setSel(null);
@@ -288,8 +346,20 @@ function Designer({ settings, initialEmployee }: { settings: IdCardSettings | un
     if (!file.type.startsWith('image/')) return toastError('Upload a PNG or JPG image');
     setBgBusy(true);
     try {
+      // A picture close to the card's shape is stretched to match exactly (nothing cut off); a very different one fills the card.
+      const size = await new Promise<{ w: number; h: number } | null>((resolve) => {
+        const url = URL.createObjectURL(file);
+        const im = new Image();
+        im.onload = () => {
+          URL.revokeObjectURL(url);
+          resolve({ w: im.naturalWidth, h: im.naturalHeight });
+        };
+        im.onerror = () => resolve(null);
+        im.src = url;
+      });
+      const close = size ? Math.abs(size.w / size.h / (dims.w / dims.h) - 1) < 0.12 : false;
       const f = await uploadFile(file, 'id-card');
-      setDraft((d) => (d ? { ...d, [side === 'front' ? 'frontBgFileId' : 'backBgFileId']: f.id } : d));
+      setDraft((d) => (d ? { ...d, [side === 'front' ? 'frontBgFileId' : 'backBgFileId']: f.id, [side === 'front' ? 'frontBgFit' : 'backBgFit']: { ...DEFAULT_ID_CARD_BG_FIT, fit: close ? 'STRETCH' : 'FILL' } } : d));
       toast(`${side === 'front' ? 'Front' : 'Back'} background added · publish to apply`);
     } catch (e) {
       toastError(e);
@@ -298,6 +368,8 @@ function Designer({ settings, initialEmployee }: { settings: IdCardSettings | un
     }
   }
   const bgId = side === 'front' ? draft.frontBgFileId : draft.backBgFileId;
+  const bgFit = side === 'front' ? draft.frontBgFit : draft.backBgFit;
+  const setBgFit = (p: Partial<IdCardBgFit>) => setDraft((d) => (d ? { ...d, [side === 'front' ? 'frontBgFit' : 'backBgFit']: { ...(side === 'front' ? d.frontBgFit : d.backBgFit), ...p } } : d));
 
   return (
     <div className="pp-idc">
@@ -323,17 +395,25 @@ function Designer({ settings, initialEmployee }: { settings: IdCardSettings | un
 
       {/* Centre: canvas */}
       <div className="pp-idc-stage">
-        <Seg<Side> value={side} onChange={(v) => { setSide(v); setSel(null); }} options={[{ value: 'front', label: 'Front' }, { value: 'back', label: 'Back' }]} />
+        <Seg<Side> value={side} onChange={(v) => { setSide(v); setSel(null); setEditingId(null); setBgAdjust(false); setPhotoMove(false); }} options={[{ value: 'front', label: 'Front' }, { value: 'back', label: 'Back' }]} />
         <Canvas
           dims={dims}
           els={els}
           sel={sel}
           bgFileId={bgId}
+          bgFit={bgFit}
+          adjusting={bgAdjust}
+          photoEdit={photoMove ? sel : null}
+          onPhotoFrame={(id, photo) => patchEl(id, { photo })}
+          onBgFit={setBgFit}
           data={preview.data?.data}
           qr={preview.data?.qrDataUrl}
-          onSelect={setSel}
+          onSelect={(id) => { setSel(id); setPhotoMove(false); }}
+          editing={editingId}
+          onEdit={setEditingId}
           onPatch={patchEl}
           onDelete={removeEl}
+          onDuplicate={dupEl}
           onDropItem={(key, at) => {
             const item = ALL_PALETTE.find((p) => p.key === key);
             if (item) addEl(item, at);
@@ -363,7 +443,7 @@ function Designer({ settings, initialEmployee }: { settings: IdCardSettings | un
       <div className="stack" style={{ gap: 10 }}>
         <div className="pp-idc-kick">Properties · {selected ? (selected.label ?? selected.type.toLowerCase()) : 'Card'}</div>
         {selected ? (
-          <ElementProps el={selected} cardW={dims.w} cardH={dims.h} onPatch={(p) => patchEl(selected.id, p)} onFont={(p) => patchFont(selected.id, p)} onLayer={(d) => layer(selected.id, d)} onDelete={() => removeEl(selected.id)} />
+          <ElementProps el={selected} photoMoving={photoMove} onPhotoMove={setPhotoMove} cardW={dims.w} cardH={dims.h} onPatch={(p) => patchEl(selected.id, p)} onFont={(p) => patchFont(selected.id, p)} onLayer={(d) => layer(selected.id, d)} onDuplicate={() => dupEl(selected.id)} onDelete={() => removeEl(selected.id)} />
         ) : (
           <div className="field">
             <label htmlFor="idc-name">Template name</label>
@@ -376,7 +456,20 @@ function Designer({ settings, initialEmployee }: { settings: IdCardSettings | un
           {bgId ? (
             <div className="stack" style={{ gap: 6 }}>
               <img src={fileUrl(bgId)} alt="" style={{ width: '100%', height: 60, objectFit: 'cover', border: '1px solid var(--color-divider)', borderRadius: 4 }} />
-              <button className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start' }} onClick={() => setDraft({ ...draft, [side === 'front' ? 'frontBgFileId' : 'backBgFileId']: null })}>Remove background</button>
+              <Seg<IdCardBgFit['fit']> value={bgFit.fit} onChange={(v) => setBgFit({ fit: v })} options={[{ value: 'STRETCH', label: 'Match card' }, { value: 'FILL', label: 'Fill' }, { value: 'FIT', label: 'Whole' }]} />
+              <span className="field-hint">{bgFit.fit === 'STRETCH' ? 'Stretched to the card’s exact size, nothing cut off.' : bgFit.fit === 'FILL' ? 'Covers the card; the edges of the picture may be cut off.' : 'The whole picture is shown; blank bars may appear.'}</span>
+              <label htmlFor="idc-bgzoom" style={{ fontSize: 12 }}>Size · {bgFit.zoom}%</label>
+              <input id="idc-bgzoom" type="range" min={50} max={300} step={1} value={bgFit.zoom} onChange={(e) => setBgFit({ zoom: Number(e.target.value) })} />
+              <button className={`btn btn-sm ${bgAdjust ? 'btn-primary' : 'btn-secondary'}`} style={{ alignSelf: 'flex-start' }} aria-pressed={bgAdjust} onClick={() => { setBgAdjust((v) => !v); setSel(null); setEditingId(null); }}>{bgAdjust ? 'Done moving' : 'Move picture on card'}</button>
+              {bgAdjust && <span className="field-hint">Drag on the card to move the picture. Click Done moving to edit items again.</span>}
+              <label htmlFor="idc-bgx" style={{ fontSize: 12 }}>Left / right · {bgFit.x}</label>
+              <input id="idc-bgx" type="range" min={-100} max={100} step={0.5} value={bgFit.x} onChange={(e) => setBgFit({ x: Number(e.target.value) })} />
+              <label htmlFor="idc-bgy" style={{ fontSize: 12 }}>Up / down · {bgFit.y}</label>
+              <input id="idc-bgy" type="range" min={-100} max={100} step={0.5} value={bgFit.y} onChange={(e) => setBgFit({ y: Number(e.target.value) })} />
+              <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+                <button className="btn btn-ghost btn-sm" onClick={() => setBgFit({ zoom: 100, x: 0, y: 0 })}>Reset size and position</button>
+                <button className="btn btn-ghost btn-sm" onClick={() => { setBgAdjust(false); setDraft({ ...draft, [side === 'front' ? 'frontBgFileId' : 'backBgFileId']: null, [side === 'front' ? 'frontBgFit' : 'backBgFit']: DEFAULT_ID_CARD_BG_FIT }); }}>Remove background</button>
+              </div>
             </div>
           ) : (
             <label className="pp-idc-upload">
@@ -458,27 +551,75 @@ function Canvas({
   els,
   sel,
   bgFileId,
+  bgFit,
+  adjusting,
+  photoEdit,
+  onPhotoFrame,
+  onBgFit,
   data,
   qr,
   onSelect,
+  editing,
+  onEdit,
   onPatch,
   onDelete,
+  onDuplicate,
   onDropItem,
 }: {
   dims: { w: number; h: number };
   els: IdCardElement[];
   sel: string | null;
   bgFileId: string | null;
+  bgFit: IdCardBgFit;
+  adjusting: boolean;
+  photoEdit: string | null;
+  onPhotoFrame: (id: string, f: IdCardPhotoFrame) => void;
+  onBgFit: (p: Partial<IdCardBgFit>) => void;
   data: IdCardPreviewData | undefined;
   qr: string | undefined;
   onSelect: (id: string | null) => void;
+  editing: string | null;
+  onEdit: (id: string | null) => void;
   onPatch: (id: string, p: Partial<IdCardElement>) => void;
   onDelete: (id: string) => void;
+  onDuplicate: (id: string) => void;
   onDropItem: (key: string, at: { x: number; y: number }) => void;
 }) {
   const wrap = useRef<HTMLDivElement>(null);
   const card = useRef<HTMLDivElement>(null);
   const drag = useRef<DragState | null>(null);
+  const lastDown = useRef<{ id: string; t: number }>({ id: '', t: 0 });
+  const bgDrag = useRef<{ x0: number; y0: number; fit: IdCardBgFit } | null>(null);
+  const photoDrag = useRef<{ id: string; x0: number; y0: number; frame: IdCardPhotoFrame; el: IdCardElement } | null>(null);
+  const photoId = data?.['employee.photo'] ?? null;
+  const [photoSize, setPhotoSize] = useState<{ w: number; h: number } | null>(null);
+  useEffect(() => {
+    if (!photoId) {
+      setPhotoSize(null);
+      return;
+    }
+    let alive = true;
+    const im = new Image();
+    im.onload = () => alive && setPhotoSize({ w: im.naturalWidth, h: im.naturalHeight });
+    im.src = fileUrl(photoId) ?? '';
+    return () => {
+      alive = false;
+    };
+  }, [photoId]);
+  const [bgSize, setBgSize] = useState<{ w: number; h: number } | null>(null);
+  useEffect(() => {
+    if (!bgFileId) {
+      setBgSize(null);
+      return;
+    }
+    let alive = true;
+    const im = new Image();
+    im.onload = () => alive && setBgSize({ w: im.naturalWidth, h: im.naturalHeight });
+    im.src = fileUrl(bgFileId) ?? '';
+    return () => {
+      alive = false;
+    };
+  }, [bgFileId]);
   const [avail, setAvail] = useState(420);
   useEffect(() => {
     const el = wrap.current;
@@ -494,6 +635,19 @@ function Canvas({
 
   const down = (e: RPointerEvent<HTMLElement>, el: IdCardElement, mode: 'move' | 'resize') => {
     e.stopPropagation();
+    if (editing === el.id && mode === 'move') return;
+    // A second press on the same text within 400 ms starts typing on it (the browser's own double-click never reaches
+    // the text, because the card holds the pointer while dragging).
+    const now = Date.now();
+    if (mode === 'move' && (el.type === 'TEXT' || el.type === 'STATIC') && lastDown.current.id === el.id && now - lastDown.current.t < 400) {
+      lastDown.current = { id: '', t: 0 };
+      drag.current = null;
+      e.preventDefault();
+      onSelect(el.id);
+      onEdit(el.id);
+      return;
+    }
+    lastDown.current = { id: el.id, t: now };
     e.preventDefault();
     onSelect(el.id);
     card.current?.focus({ preventScroll: true });
@@ -505,6 +659,26 @@ function Canvas({
     drag.current = { id: el.id, mode, x0: e.clientX, y0: e.clientY, orig: el, moved: false };
   };
   const move = (e: RPointerEvent<HTMLDivElement>) => {
+    const bd = bgDrag.current;
+    if (bd) {
+      onBgFit({ x: round1(clamp(bd.fit.x + ((e.clientX - bd.x0) / W) * 100, -100, 100)), y: round1(clamp(bd.fit.y + ((e.clientY - bd.y0) / H) * 100, -100, 100)) });
+      return;
+    }
+    const pd = photoDrag.current;
+    if (pd && photoSize) {
+      // Dragging moves the picture under the frame: the focus point moves the opposite way, by the share of the hidden part.
+      const r = idCardPhotoPlacement(photoSize, { w: pd.el.wMm, h: pd.el.hMm }, pd.frame);
+      const overX = r.w - pd.el.wMm;
+      const overY = r.h - pd.el.hMm;
+      const dx = (e.clientX - pd.x0) / scale;
+      const dy = (e.clientY - pd.y0) / scale;
+      onPhotoFrame(pd.id, {
+        ...pd.frame,
+        fx: overX > 0.01 ? round1(clamp(pd.frame.fx - (dx / overX) * 100, 0, 100)) : pd.frame.fx,
+        fy: overY > 0.01 ? round1(clamp(pd.frame.fy - (dy / overY) * 100, 0, 100)) : pd.frame.fy,
+      });
+      return;
+    }
     const d = drag.current;
     if (!d) return;
     // 1 mm snap: the delta moves in whole millimetres so fine seeded offsets are kept.
@@ -523,6 +697,8 @@ function Canvas({
   };
   const up = (e: RPointerEvent<HTMLDivElement>) => {
     drag.current = null;
+    bgDrag.current = null;
+    photoDrag.current = null;
     try {
       card.current?.releasePointerCapture(e.pointerId);
     } catch {
@@ -530,7 +706,7 @@ function Canvas({
     }
   };
   const key = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (!sel) return;
+    if (!sel || editing) return;
     const el = els.find((x) => x.id === sel);
     if (!el) return;
     const step = e.shiftKey ? 5 : 1;
@@ -542,6 +718,12 @@ function Canvas({
       e.preventDefault();
       const [dx, dy] = nudge[e.key]!;
       onPatch(el.id, { xMm: round1(clamp(el.xMm + dx, -2, dims.w - 1)), yMm: round1(clamp(el.yMm + dy, -2, dims.h - 1)) });
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') {
+      e.preventDefault();
+      onDuplicate(el.id);
+    } else if (e.key === 'Enter' && (el.type === 'TEXT' || el.type === 'STATIC')) {
+      e.preventDefault();
+      onEdit(el.id);
     } else if (e.key === 'Escape') onSelect(null);
   };
   const drop = (e: DragEvent<HTMLDivElement>) => {
@@ -552,7 +734,7 @@ function Canvas({
     onDropItem(k.slice(4), { x: (e.clientX - r.left) / scale, y: (e.clientY - r.top) / scale });
   };
 
-  const sorted = [...els].sort((a, b) => (a.z ?? 0) - (b.z ?? 0));
+  const sorted = idCardDrawOrder(els);
   return (
     <div ref={wrap} style={{ width: '100%', display: 'flex', justifyContent: 'center' }}>
       <div
@@ -561,8 +743,34 @@ function Canvas({
         tabIndex={0}
         role="application"
         aria-label="ID card canvas"
-        style={{ width: W, height: H, borderRadius: 2.5 * scale, backgroundImage: bgFileId ? `url("${fileUrl(bgFileId)}")` : undefined }}
-        onPointerDown={() => onSelect(null)}
+        style={{ width: W, height: H, borderRadius: 2.5 * scale, cursor: adjusting || photoEdit ? 'grab' : undefined, backgroundImage: bgFileId && !bgSize ? `url("${fileUrl(bgFileId)}")` : undefined }}
+        onPointerDown={(e) => {
+          if (adjusting) {
+            e.preventDefault();
+            bgDrag.current = { x0: e.clientX, y0: e.clientY, fit: bgFit };
+            try {
+              card.current?.setPointerCapture(e.pointerId);
+            } catch {
+              /* older browsers */
+            }
+            return;
+          }
+          if (photoEdit) {
+            const target = els.find((x) => x.id === photoEdit);
+            if (target && target.type === 'PHOTO') {
+              e.preventDefault();
+              photoDrag.current = { id: target.id, x0: e.clientX, y0: e.clientY, frame: { ...DEFAULT_ID_CARD_PHOTO_FRAME, ...(target.photo ?? {}) }, el: target };
+              try {
+                card.current?.setPointerCapture(e.pointerId);
+              } catch {
+                /* older browsers */
+              }
+              return;
+            }
+          }
+          onSelect(null);
+          onEdit(null);
+        }}
         onPointerMove={move}
         onPointerUp={up}
         onPointerCancel={up}
@@ -573,15 +781,19 @@ function Canvas({
         }}
         onDrop={drop}
       >
+        {bgFileId && bgSize && (() => {
+          const r = idCardBgPlacement(bgSize, dims, bgFit);
+          return <img src={fileUrl(bgFileId)} alt="" draggable={false} style={{ position: 'absolute', left: r.x * scale, top: r.y * scale, width: r.w * scale, height: r.h * scale, maxWidth: 'none', pointerEvents: 'none', userSelect: 'none' }} />;
+        })()}
         {sorted.map((el) => (
           <div
             key={el.id}
             className={`pp-idc-node${el.id === sel ? ' sel' : ''}`}
-            style={{ left: el.xMm * scale, top: el.yMm * scale, width: el.wMm * scale, height: el.hMm * scale, zIndex: (el.z ?? 0) + 2 }}
+            style={{ left: el.xMm * scale, top: el.yMm * scale, width: el.wMm * scale, height: el.hMm * scale, zIndex: (el.z ?? 0) + 2, pointerEvents: adjusting || photoEdit ? 'none' : undefined }}
             onPointerDown={(e) => down(e, el, 'move')}
             title={el.label ?? undefined}
           >
-            <NodeBody el={el} data={data} qr={qr} scale={scale} />
+            <NodeBody el={el} data={data} qr={qr} scale={scale} editing={editing === el.id} onText={(v) => onPatch(el.id, { text: idCardLabelsToText(v), binding: null })} onStopEdit={() => onEdit(null)} />
             {el.id === sel && <span className="pp-idc-handle" onPointerDown={(e) => down(e, el, 'resize')} aria-label="Resize" />}
           </div>
         ))}
@@ -590,27 +802,67 @@ function Canvas({
   );
 }
 
-function NodeBody({ el, data, qr, scale }: { el: IdCardElement; data: IdCardPreviewData | undefined; qr: string | undefined; scale: number }) {
+/** The employee photo placed in its frame with the chosen zoom and focus (the same maths the printed card uses). */
+function PhotoFrame({ src, wMm, hMm, scale, frame }: { src: string; wMm: number; hMm: number; scale: number; frame: IdCardPhotoFrame }) {
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const im = new Image();
+    im.onload = () => alive && setSize({ w: im.naturalWidth, h: im.naturalHeight });
+    im.src = src;
+    return () => {
+      alive = false;
+    };
+  }, [src]);
+  if (!size) return <img src={src} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />;
+  const r = idCardPhotoPlacement(size, { w: wMm, h: hMm }, frame);
+  return (
+    <div style={{ width: '100%', height: '100%', overflow: 'hidden', position: 'relative' }}>
+      <img src={src} alt="" draggable={false} style={{ position: 'absolute', left: r.x * scale, top: r.y * scale, width: r.w * scale, height: r.h * scale, maxWidth: 'none', display: 'block' }} />
+    </div>
+  );
+}
+
+function NodeBody({ el, data, qr, scale, editing, onText, onStopEdit }: { el: IdCardElement; data: IdCardPreviewData | undefined; qr: string | undefined; scale: number; editing?: boolean; onText?: (v: string) => void; onStopEdit?: () => void }) {
+  if (el.type === 'IMAGE') return el.fileId ? <img src={fileUrl(el.fileId)} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }} /> : <div className="pp-idc-ph">Image</div>;
   if (el.type === 'SHAPE') return <div style={{ width: '100%', height: '100%', background: el.fill ?? '#b68235' }} />;
   if (el.type === 'PHOTO') {
     const id = data?.['employee.photo'];
-    return id ? <img src={fileUrl(id)} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} /> : <div className="pp-idc-ph">Photo</div>;
+    return id ? <PhotoFrame src={fileUrl(id) ?? ''} wMm={el.wMm} hMm={el.hMm} scale={scale} frame={el.photo ?? DEFAULT_ID_CARD_PHOTO_FRAME} /> : <div className="pp-idc-ph">Photo</div>;
   }
   if (el.type === 'QR') return qr ? <img src={qr} alt="QR" draggable={false} style={{ width: '100%', height: '100%', display: 'block' }} /> : <div className="pp-idc-ph">QR</div>;
   if (el.type === 'LOGO' && data?.['tenant.logo']) return <img src={fileUrl(data['tenant.logo'])} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }} />;
   const f = { ...font(10), ...(el.font ?? {}) };
   const { text, placeholder } = elementText(el, data);
-  const lines = text.split('\n');
-  const sizePt = Math.min(...lines.map((l) => fitFontSize(l, f.size, el.wMm)));
+  const layout = layoutIdCardText(text, f.size, el.wMm, el.hMm, idCardShrinks(el), idCardFontAvg(f.family));
+  const sizePt = layout.sizePt;
+  if (editing && onText && (el.type === 'TEXT' || el.type === 'STATIC')) {
+    return (
+      <textarea
+        autoFocus
+        aria-label="Edit text"
+        value={editText(el)}
+        maxLength={400}
+        onPointerDown={(ev) => ev.stopPropagation()}
+        onKeyDown={(ev) => {
+          ev.stopPropagation();
+          if (ev.key === 'Escape') onStopEdit?.();
+        }}
+        onChange={(ev) => onText(ev.target.value)}
+        onBlur={onStopEdit}
+        style={{ width: '100%', height: '100%', resize: 'none', border: 'none', outline: '1px solid var(--color-accent)', background: 'rgba(255,255,255,.92)', padding: 0, margin: 0, overflow: 'hidden', textAlign: f.align, fontFamily: idCardFontCss(f.family), fontWeight: f.weight, fontSize: sizePt * PT_TO_MM * scale, lineHeight: 1.25, color: f.color }}
+      />
+    );
+  }
   const style: CSSProperties = {
     width: '100%',
     height: '100%',
     display: 'flex',
     flexDirection: 'column',
-    justifyContent: el.type === 'SIGNATURE' ? 'flex-start' : 'center',
+    justifyContent: el.type === 'SIGNATURE' || el.valign === 'TOP' ? 'flex-start' : el.valign === 'BOTTOM' ? 'flex-end' : 'center',
     alignItems: f.align === 'left' ? 'flex-start' : f.align === 'right' ? 'flex-end' : 'center',
     textAlign: f.align,
-    fontFamily: FAMILY[f.family],
+    fontFamily: idCardFontCss(f.family),
     fontWeight: f.weight,
     fontSize: sizePt * PT_TO_MM * scale,
     lineHeight: 1.25,
@@ -620,23 +872,85 @@ function NodeBody({ el, data, qr, scale }: { el: IdCardElement; data: IdCardPrev
     borderTop: el.type === 'SIGNATURE' ? '1px solid #d7d3d3' : undefined,
     paddingTop: el.type === 'SIGNATURE' ? scale * 0.6 : undefined,
   };
-  return <div style={style}>{text}</div>;
+  return <div style={style}>{layout.lines.join('\n')}</div>;
 }
 
 // ── Properties panel ──────────────────────────────────────────────────────
 
-function ElementProps({ el, cardW, cardH, onPatch, onFont, onLayer, onDelete }: { el: IdCardElement; cardW: number; cardH: number; onPatch: (p: Partial<IdCardElement>) => void; onFont: (p: Partial<Font>) => void; onLayer: (d: 1 | -1) => void; onDelete: () => void }) {
+/** A number box you can clear and retype: it applies the value once the typed number is in range, and tidies it on leaving the box. */
+function NumField({ id, value, min, max, step, onCommit }: { id: string; value: number; min: number; max: number; step: number; onCommit: (v: number) => void }) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => {
+    if (Number(text) !== value) setText(String(value));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+  return (
+    <input
+      id={id}
+      className="input"
+      type="number"
+      step={step}
+      min={min}
+      max={max}
+      value={text}
+      onChange={(e) => {
+        setText(e.target.value);
+        const v = Number(e.target.value);
+        if (e.target.value.trim() !== '' && Number.isFinite(v) && v >= min && v <= max) onCommit(v);
+      }}
+      onBlur={() => {
+        const v = Number(text);
+        if (text.trim() === '' || !Number.isFinite(v)) return setText(String(value));
+        const c = clamp(v, min, max);
+        onCommit(c);
+        setText(String(c));
+      }}
+    />
+  );
+}
+
+function ElementProps({ el, photoMoving, onPhotoMove, cardW, cardH, onPatch, onFont, onLayer, onDuplicate, onDelete }: { el: IdCardElement; photoMoving: boolean; onPhotoMove: (on: boolean) => void; cardW: number; cardH: number; onPatch: (p: Partial<IdCardElement>) => void; onFont: (p: Partial<Font>) => void; onLayer: (d: 1 | -1) => void; onDuplicate: () => void; onDelete: () => void }) {
   const f = { ...font(10), ...(el.font ?? {}) };
   const isText = ['TEXT', 'STATIC', 'SIGNATURE', 'LOGO'].includes(el.type);
+  const { toastError } = useToast();
+  const [busy, setBusy] = useState(false);
+  const textRef = useRef<HTMLTextAreaElement>(null);
+  async function pickImage(file: File | null) {
+    if (!file) return;
+    if (!/^image\/(png|jpeg)$/.test(file.type)) return toastError('Upload a PNG or JPG image');
+    setBusy(true);
+    try {
+      const up = await uploadFile(file, 'id-card');
+      onPatch({ fileId: up.id });
+    } catch (e) {
+      toastError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+  // Typed text is stored with {{employee values}}; the box shows and accepts them as [Date of birth].
+  const setTyped = (v: string) => onPatch({ text: idCardLabelsToText(v), binding: null });
+  const insertField = (key: string) => {
+    const ta = textRef.current;
+    const cur = editText(el);
+    const start = ta?.selectionStart ?? cur.length;
+    const end = ta?.selectionEnd ?? start;
+    const token = idCardFieldLabel(key);
+    setTyped(cur.slice(0, start) + token + cur.slice(end));
+    setTimeout(() => {
+      ta?.focus();
+      ta?.setSelectionRange(start + token.length, start + token.length);
+    }, 0);
+  };
   const num = (k: 'xMm' | 'yMm' | 'wMm' | 'hMm', label: string, max: number) => (
     <div className="field" style={{ gap: 2 }}>
       <label htmlFor={`idc-${k}`} style={{ fontSize: 11 }}>{label}</label>
-      <input id={`idc-${k}`} className="input" type="number" step={0.5} min={k === 'wMm' || k === 'hMm' ? 0.2 : -5} max={max} value={el[k]} onChange={(e) => { const v = Number(e.target.value); if (Number.isFinite(v)) onPatch({ [k]: round1(clamp(v, k === 'wMm' || k === 'hMm' ? 0.2 : -5, max)) }); }} />
+      <NumField id={`idc-${k}`} step={0.5} min={k === 'wMm' || k === 'hMm' ? 0.2 : -5} max={max} value={el[k]} onCommit={(v) => onPatch({ [k]: round1(v) })} />
     </div>
   );
   return (
     <>
-      {el.type !== 'SHAPE' && el.type !== 'STATIC' && el.type !== 'SIGNATURE' && (
+      {el.type !== 'SHAPE' && el.type !== 'STATIC' && el.type !== 'SIGNATURE' && el.type !== 'TEXT' && el.type !== 'IMAGE' && (
         <div className="field">
           <label htmlFor="idc-binding">Data field</label>
           <select id="idc-binding" className="input" value={el.binding ?? ''} onChange={(e) => onPatch({ binding: (e.target.value || null) as IdCardBinding | null })}>
@@ -647,14 +961,90 @@ function ElementProps({ el, cardW, cardH, onPatch, onFont, onLayer, onDelete }: 
           {el.binding && <span className="field-hint">{IDCARD_BINDING_LABELS[el.binding]}</span>}
         </div>
       )}
-      {(el.type === 'TEXT' || el.type === 'STATIC' || el.type === 'SIGNATURE') && (
+      {el.type === 'PHOTO' && (() => {
+        const fr: IdCardPhotoFrame = { ...DEFAULT_ID_CARD_PHOTO_FRAME, ...(el.photo ?? {}) };
+        const setFr = (p: Partial<IdCardPhotoFrame>) => onPatch({ photo: { ...fr, ...p } });
+        return (
+          <div className="field">
+            <label>Photo framing</label>
+            <Seg<IdCardPhotoFrame['fit']> value={fr.fit} onChange={(v) => setFr({ fit: v })} options={[{ value: 'FILL', label: 'Fill frame' }, { value: 'FIT', label: 'Whole photo' }]} />
+            <span className="field-hint">{fr.fit === 'FILL' ? 'The photo covers the frame; the parts outside are cut off. Zoom and move it to choose what stays.' : 'The whole photo is shown inside the frame, nothing cut off (blank space may appear at the sides).'}</span>
+            <label htmlFor="idc-pzoom" style={{ fontSize: 12 }}>Zoom · {fr.zoom}%</label>
+            <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+              <button className="btn btn-ghost btn-sm" aria-label="Zoom out" onClick={() => setFr({ zoom: clamp(fr.zoom - 10, 100, 400) })}>−</button>
+              <input id="idc-pzoom" style={{ flex: 1 }} type="range" min={100} max={400} step={1} value={fr.zoom} onChange={(e) => setFr({ zoom: Number(e.target.value) })} />
+              <button className="btn btn-ghost btn-sm" aria-label="Zoom in" onClick={() => setFr({ zoom: clamp(fr.zoom + 10, 100, 400) })}>+</button>
+            </div>
+            <button className={`btn btn-sm ${photoMoving ? 'btn-primary' : 'btn-secondary'}`} style={{ alignSelf: 'flex-start' }} aria-pressed={photoMoving} onClick={() => onPhotoMove(!photoMoving)}>{photoMoving ? 'Done moving' : 'Move photo inside frame'}</button>
+            {photoMoving && <span className="field-hint">Drag on the card to slide the photo inside its frame. Click Done moving to edit items again.</span>}
+            <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+              <button className="btn btn-secondary btn-sm" onClick={() => setFr({ fy: 0 })}>Face (top)</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => setFr({ fy: 50 })}>Centre</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => setFr({ fy: 100 })}>Bottom</button>
+              <button className="btn btn-ghost btn-sm" onClick={() => onPatch({ photo: { ...DEFAULT_ID_CARD_PHOTO_FRAME } })}>Reset</button>
+            </div>
+            <label htmlFor="idc-pfy" style={{ fontSize: 12 }}>Up / down · {fr.fy}</label>
+            <input id="idc-pfy" type="range" min={0} max={100} step={1} value={fr.fy} onChange={(e) => setFr({ fy: Number(e.target.value) })} />
+            <label htmlFor="idc-pfx" style={{ fontSize: 12 }}>Left / right · {fr.fx}</label>
+            <input id="idc-pfx" type="range" min={0} max={100} step={1} value={fr.fx} onChange={(e) => setFr({ fx: Number(e.target.value) })} />
+            <span className="field-hint">The size of the frame itself is changed with its corner square, or with Width and Height below.</span>
+          </div>
+        );
+      })()}
+      {(el.type === 'TEXT' || el.type === 'STATIC') && (
         <div className="field">
-          <label htmlFor="idc-text">{el.type === 'TEXT' ? 'Prefix text' : 'Text'}</label>
-          {el.type === 'STATIC' ? (
-            <textarea id="idc-text" className="input" rows={2} maxLength={200} value={el.text ?? ''} onChange={(e) => onPatch({ text: e.target.value })} />
-          ) : (
-            <input id="idc-text" className="input" maxLength={200} value={el.text ?? ''} placeholder={el.type === 'TEXT' ? 'e.g. Emergency: ' : undefined} onChange={(e) => onPatch({ text: e.target.value })} />
-          )}
+          <label htmlFor="idc-text">Text</label>
+          <textarea id="idc-text" ref={textRef} className="input" rows={3} maxLength={400} value={editText(el)} onChange={(e) => setTyped(e.target.value)} />
+          <select className="input" aria-label="Insert employee value" value="" onChange={(e) => e.target.value && insertField(e.target.value)}>
+            <option value="">Insert employee value…</option>
+            {TEXT_BINDINGS.map((b) => (
+              <option key={b} value={b}>{IDCARD_BINDING_LABELS[b]}</option>
+            ))}
+          </select>
+          <span className="field-hint">Type anything you like. A value such as [Blood group] is filled in from each employee's record. You can also double-click the text on the card to type on it. A tall box wraps long text onto several lines.</span>
+        </div>
+      )}
+      {(el.type === 'TEXT' || el.type === 'STATIC') && (
+        <div className="field">
+          <label htmlFor="idc-case">Text case</label>
+          <select id="idc-case" className="input" value={el.textCase ?? 'NONE'} onChange={(e) => onPatch({ textCase: e.target.value as (typeof TEXT_CASES)[number] })}>
+            {TEXT_CASES.map((c) => (
+              <option key={c} value={c}>{TEXT_CASE_LABELS[c]}</option>
+            ))}
+          </select>
+          <span className="field-hint">Applies to the final text for every employee, e.g. UPPERCASE turns “Meera Iyer” into “MEERA IYER”.</span>
+        </div>
+      )}
+      {(el.type === 'TEXT' || el.type === 'STATIC') && (
+        <div className="field">
+          <label>Vertical position in the box</label>
+          <Seg<'TOP' | 'MIDDLE' | 'BOTTOM'> value={el.valign ?? 'MIDDLE'} onChange={(v) => onPatch({ valign: v })} options={[{ value: 'TOP', label: 'Top' }, { value: 'MIDDLE', label: 'Middle' }, { value: 'BOTTOM', label: 'Bottom' }]} />
+          <span className="field-hint">Top keeps the first line level with the top of the box, which suits a multi-line address.</span>
+        </div>
+      )}
+      {(el.type === 'TEXT' || el.type === 'STATIC') && (
+        <label className="radio" style={{ marginTop: 2 }}>
+          <input type="checkbox" checked={idCardShrinks(el)} onChange={(e) => onPatch({ shrink: e.target.checked })} />
+          <span className="dot" style={{ borderRadius: 3 }} />
+          Shrink text to fit the box
+        </label>
+      )}
+      {(el.type === 'TEXT' || el.type === 'STATIC') && <span className="field-hint">{idCardShrinks(el) ? 'The font size is the largest size; long text is made smaller to fit the box. Untick to keep the exact size.' : 'The text keeps exactly the size you set and wraps at the box width. Make the box taller if it runs past the bottom.'}</span>}
+      {el.type === 'SIGNATURE' && (
+        <div className="field">
+          <label htmlFor="idc-text">Text</label>
+          <input id="idc-text" className="input" maxLength={200} value={el.text ?? ''} onChange={(e) => onPatch({ text: e.target.value })} />
+        </div>
+      )}
+      {el.type === 'IMAGE' && (
+        <div className="field">
+          <label>Picture</label>
+          {el.fileId && <img src={fileUrl(el.fileId)} alt="" style={{ width: '100%', height: 70, objectFit: 'contain', border: '1px solid var(--color-divider)', borderRadius: 4, background: '#fff' }} />}
+          <label className="pp-idc-upload">
+            <input type="file" accept="image/png,image/jpeg" style={{ display: 'none' }} disabled={busy} onChange={(e) => { void pickImage(e.target.files?.[0] ?? null); e.target.value = ''; }} />
+            {busy ? 'Uploading…' : el.fileId ? 'Replace picture' : 'Upload picture'}
+          </label>
+          <span className="field-hint">PNG or JPG, for an icon or a logo of your own. It keeps its shape inside the box.</span>
         </div>
       )}
       {isText && (
@@ -662,7 +1052,7 @@ function ElementProps({ el, cardW, cardH, onPatch, onFont, onLayer, onDelete }: 
           <div className="row" style={{ gap: 8 }}>
             <div className="field" style={{ flex: 1 }}>
               <label htmlFor="idc-size">Font size</label>
-              <input id="idc-size" className="input" type="number" min={4} max={40} step={0.5} value={f.size} onChange={(e) => { const v = Number(e.target.value); if (Number.isFinite(v)) onFont({ size: clamp(v, 4, 40) }); }} />
+              <NumField id="idc-size" min={4} max={40} step={0.5} value={f.size} onCommit={(v) => onFont({ size: v })} />
             </div>
             <div className="field" style={{ width: 70 }}>
               <label htmlFor="idc-color">Colour</label>
@@ -671,8 +1061,9 @@ function ElementProps({ el, cardW, cardH, onPatch, onFont, onLayer, onDelete }: 
           </div>
           <div className="row" style={{ gap: 8 }}>
             <select className="input" aria-label="Font" value={f.family} onChange={(e) => onFont({ family: e.target.value as Font['family'] })}>
-              <option value="serif">Serif (heading)</option>
-              <option value="sans">Sans (body)</option>
+              {(Object.keys(ID_CARD_FONTS) as (keyof typeof ID_CARD_FONTS)[]).map((k) => (
+                <option key={k} value={k} style={{ fontFamily: ID_CARD_FONTS[k].css }}>{ID_CARD_FONTS[k].label}</option>
+              ))}
             </select>
             <select className="input" aria-label="Weight" value={f.weight} onChange={(e) => onFont({ weight: e.target.value as Font['weight'] })}>
               <option value="normal">Regular</option>
@@ -698,6 +1089,7 @@ function ElementProps({ el, cardW, cardH, onPatch, onFont, onLayer, onDelete }: 
         <button className="btn btn-ghost btn-sm" onClick={() => onPatch({ xMm: round1((cardW - el.wMm) / 2) })}>Centre</button>
         <button className="btn btn-ghost btn-sm" onClick={() => onLayer(1)}>Forward</button>
         <button className="btn btn-ghost btn-sm" onClick={() => onLayer(-1)}>Back</button>
+        <button className="btn btn-ghost btn-sm" onClick={onDuplicate} title="Copy this item (Ctrl+D)">Duplicate</button>
         <button className="btn btn-ghost btn-sm" onClick={onDelete}>Delete</button>
       </div>
     </>
@@ -736,7 +1128,7 @@ function NewTemplateModal({ current, onClose, onCreated }: { current: Draft; onC
                 const sq = e.type === 'QR' || e.type === 'PHOTO' ? Math.min(w, h) : null;
                 return { ...e, xMm: round1(e.xMm * sx), yMm: round1(e.yMm * sy), wMm: sq && e.type === 'QR' ? sq : w, hMm: sq && e.type === 'QR' ? sq : h };
               });
-        await create.mutateAsync({ name: String(v.name), orientation, front: conv(current.front), back: conv(current.back), frontBgFileId: v.start === 'blank' ? null : current.frontBgFileId, backBgFileId: v.start === 'blank' ? null : current.backBgFileId });
+        await create.mutateAsync({ name: String(v.name), orientation, front: conv(current.front), back: conv(current.back), frontBgFileId: v.start === 'blank' ? null : current.frontBgFileId, backBgFileId: v.start === 'blank' ? null : current.backBgFileId, frontBgFit: v.start === 'blank' ? DEFAULT_ID_CARD_BG_FIT : current.frontBgFit, backBgFit: v.start === 'blank' ? DEFAULT_ID_CARD_BG_FIT : current.backBgFit });
       }}
     />
   );

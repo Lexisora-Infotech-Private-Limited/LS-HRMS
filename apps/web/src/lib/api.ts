@@ -86,6 +86,27 @@ export async function api<T = unknown>(path: string, opts: Opts = {}, retry = tr
   return data as T;
 }
 
+/** POST JSON and get a file back (e.g. a generated PDF). Retries once after refreshing an expired token. */
+export async function postBlob(path: string, body: unknown, retry = true): Promise<Blob> {
+  const headers = new Headers({ 'content-type': 'application/json' });
+  if (accessToken) headers.set('authorization', `Bearer ${accessToken}`);
+  const res = await fetch(buildUrl(path), { method: 'POST', headers, body: JSON.stringify(body), credentials: 'include' });
+  if (res.status === 401 && retry) {
+    if (await refreshSession()) return postBlob(path, body, false);
+    onSessionExpired?.();
+  }
+  if (!res.ok) {
+    let e: Partial<ApiError> = {};
+    try {
+      e = (await res.json()) as Partial<ApiError>;
+    } catch {
+      /* not JSON */
+    }
+    throw new HttpError(res.status, e.code ?? 'ERROR', e.message ?? 'Request failed', e.details);
+  }
+  return res.blob();
+}
+
 export const get = <T>(path: string, query?: Record<string, unknown>) => api<T>(path, { method: 'GET', query });
 export const post = <T>(path: string, body?: unknown) => api<T>(path, { method: 'POST', body: body ?? {} });
 export const put = <T>(path: string, body?: unknown) => api<T>(path, { method: 'PUT', body: body ?? {} });

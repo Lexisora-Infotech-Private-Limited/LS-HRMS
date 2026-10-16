@@ -16,7 +16,7 @@ export async function loadCompensation(prisma: PrismaService, crypto: CryptoServ
   try {
     const sal = await prisma.employeeSalary.findFirst({ where: { employeeId, status: 'ACTIVE' }, orderBy: { effectiveFrom: 'desc' } });
     if (sal) {
-      const struct = (crypto.decryptJson<StructRow[]>(sal.structureEnc) ?? []).filter((r) => !/^(CTC|GROSS|NET|TOTAL|NET_PAY)$/i.test(r.code ?? ''));
+      const struct = (crypto.decryptJson<StructRow[]>(sal.structureEnc) ?? []).filter((r) => !/^(CTC|GROSS|NET|TOTAL|NET_PAY)$/i.test(r.code ?? '') && (r as { kind?: string }).kind !== 'DEDUCTION');
       const rows: ProfilePayRow[] = struct
         .filter((r) => (r.monthlyPaise ?? 0) > 0 || (r.annualPaise ?? 0) > 0)
         .map((r) => ({ component: r.label ?? r.code ?? '—', monthlyPaise: r.monthlyPaise ?? Math.round((r.annualPaise ?? 0) / 12), annualPaise: r.annualPaise ?? (r.monthlyPaise ?? 0) * 12 }));

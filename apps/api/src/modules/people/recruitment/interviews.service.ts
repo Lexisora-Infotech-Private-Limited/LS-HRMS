@@ -208,6 +208,12 @@ export class InterviewsService {
     const app = await this.prisma.jobApplication.findUnique({ where: { id: input.applicationId }, include: { candidate: true, job: true } });
     if (!app) throw badRequest('Pick the candidate', 'APPLICATION_INVALID');
     if (!['SCREENING', 'INTERVIEW'].includes(app.stage)) throw new AppError(409, 'INVALID_STAGE', `${app.candidate.fullName} is at ${app.stage.toLowerCase()} stage`);
+    // A round that isn't on the job's list comes from the form's “Add another round” option: it must be a real
+    // round, and it joins the job's rounds so the job's pipeline stays accurate.
+    if (app.job.roundNames.length && !app.job.roundNames.includes(input.roundName)) {
+      if (!(await this.prisma.interviewRound.findFirst({ where: { name: input.roundName, isActive: true } }))) throw badRequest(`“${input.roundName}” is not an interview round`, 'ROUND_INVALID');
+      await this.prisma.job.update({ where: { id: app.jobId }, data: { roundNames: [...app.job.roundNames, input.roundName] } });
+    }
     const startsAt = istDateTime(input.date, input.time);
     if (input.date < todayKey()) throw badRequest('Pick a date from today onwards');
     const panelIds = [...new Set([input.interviewerId, ...input.panelistIds])];
@@ -329,16 +335,33 @@ export class InterviewsService {
     return this.detail(id);
   }
 
-  async setResult(id: string, result: InterviewResult) {
+  async setResult(id: string, result: InterviewResult, overrideReason?: string | null) {
     const me = requireContext().employeeId;
     const i = await this.load(id);
     const isLead = !!me && i.panelists.some((p) => p.employeeId === me && p.role === 'LEAD');
     if (!this.isRecruiter() && !isLead) throw forbidden('Only recruiters or the lead interviewer can record the result');
     if (i.status === 'CANCELLED') throw new AppError(409, 'CANCELLED', 'This interview was cancelled');
+    let overridden = false;
+    if (result !== 'PENDING') {
+      // Same window as submitting a scorecard: from 15 minutes before the start.
+      if (i.startsAt.getTime() > Date.now() + 15 * 60_000) throw new AppError(409, 'NOT_STARTED', "This interview hasn't started yet. A result can be recorded from 15 minutes before it begins");
+      // A decision (Selected / Rejected) needs every panelist's submitted scorecard behind it. HR may record it without
+      // them, but only with a reason that is kept in the audit trail. "On hold" is not a decision, so it is never blocked.
+      if (result !== 'ON_HOLD') {
+        const waiting = i.panelists.filter((p) => !i.scorecards.some((s) => s.interviewerEmployeeId === p.employeeId && s.status === 'SUBMITTED'));
+        if (waiting.length) {
+          const emps = await this.prisma.employee.findMany({ where: { id: { in: waiting.map((w) => w.employeeId) } }, select: { fullName: true } });
+          const names = emps.map((e) => e.fullName).join(', ');
+          if (!overrideReason?.trim()) throw new AppError(409, 'SCORECARDS_PENDING', `Waiting for scorecards from ${names}. Ask them to submit, or record the result with a reason.`, { pending: emps.map((e) => e.fullName) });
+          if (!this.isRecruiter()) throw forbidden('Only HR can record a result before all scorecards are in');
+          overridden = true;
+        }
+      }
+    }
     // Recording a result completes the interview; "Reset" puts a completed one back to scheduled.
     await this.prisma.interview.update({ where: { id }, data: { result, status: interviewStatusAfterResult(i.status, result) } });
     await this.candidates.recomputeScore(i.applicationId);
-    await this.audit.record({ action: 'interview.result', entity: 'Interview', entityId: id, meta: { result } });
+    await this.audit.record({ action: 'interview.result', entity: 'Interview', entityId: id, meta: { result, ...(overridden ? { overrideWithoutScorecards: true, reason: overrideReason } : {}) } });
     return this.detail(id);
   }
 

@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { z } from 'zod';
 import {
@@ -7,14 +7,20 @@ import {
   payrollHoldSchema,
   payrollProfileSchema,
   payrollRunSchema,
+  payslipCanvasSchema,
   payslipListQuery,
   salaryPreviewSchema,
   salaryRevisionSchema,
+  salaryTemplatePreviewSchema,
+  salaryTemplateSchema,
   type AdjustmentInput,
   type PayrollProfileInput,
   type PayrollRunInput,
+  type PayslipCanvas,
   type SalaryPreviewInput,
   type SalaryRevisionInput,
+  type SalaryTemplateInput,
+  type SalaryTemplatePreviewInput,
 } from '@lexisora/shared';
 import { RequirePerm } from '../../../core/auth/decorators';
 import { ZodPipe } from '../../../core/http/zod.pipe';
@@ -189,5 +195,60 @@ export class SalaryController {
   @RequirePerm('payroll.manage')
   profile(@Param('id') id: string, @Body(new ZodPipe(payrollProfileSchema)) body: PayrollProfileInput) {
     return this.salary.updateProfile(id, body);
+  }
+}
+
+/** Salary structure templates — editable by Admin/CEO and HR (both hold payroll.manage). */
+@Controller('salary-templates')
+@RequirePerm('payroll.manage')
+export class SalaryTemplatesController {
+  constructor(private readonly salary: SalaryService) {}
+
+  @Get()
+  list() {
+    return this.salary.listTemplates();
+  }
+
+  @Post('preview')
+  preview(@Body(new ZodPipe(salaryTemplatePreviewSchema)) body: SalaryTemplatePreviewInput) {
+    return this.salary.previewTemplate(body);
+  }
+
+  @Post()
+  create(@Body(new ZodPipe(salaryTemplateSchema)) body: SalaryTemplateInput) {
+    return this.salary.createTemplate(body);
+  }
+
+  @Patch(':id')
+  update(@Param('id') id: string, @Body(new ZodPipe(salaryTemplateSchema)) body: SalaryTemplateInput) {
+    return this.salary.updateTemplate(id, body);
+  }
+
+  @Delete(':id')
+  remove(@Param('id') id: string) {
+    return this.salary.removeTemplate(id);
+  }
+}
+
+/** Payslip design — one per company, editable by Admin/CEO and HR; applies to payslips generated from then on. */
+@Controller('payslip-template')
+@RequirePerm('payroll.manage')
+export class PayslipTemplateController {
+  constructor(private readonly payslips: PayslipService) {}
+
+  @Get()
+  get() {
+    return this.payslips.designView();
+  }
+
+  @Put()
+  save(@Body(new ZodPipe(payslipCanvasSchema)) body: PayslipCanvas) {
+    return this.payslips.saveTemplate(body);
+  }
+
+  /** A sample payslip PDF in the design being edited (nothing is saved). */
+  @Post('preview')
+  async preview(@Body(new ZodPipe(payslipCanvasSchema)) body: PayslipCanvas, @Res() res: Response) {
+    sendFile(res, await this.payslips.previewPdf(body), 'payslip-preview.pdf', 'application/pdf', true);
   }
 }

@@ -5,3 +5,6 @@ export * from './finance';
 export * from './people';
 export * from './workplace';
 export * from './platform';
+export * from './payslip-design';
+export * from './payslip-canvas';
+export * from './text-case';
