@@ -390,7 +390,9 @@ export class CandidatesService {
     const ctx = requireContext();
     if (!hasPerm(ctx, 'candidates.view') && !hasPerm(ctx, 'candidates.manage') && !hasPerm(ctx, 'jobs.manage')) return [];
     const scope = await this.jobScope();
-    const apps = await this.prisma.jobApplication.findMany({ where: { stage: { in: ['SCREENING', 'INTERVIEW', 'OFFERED'] }, candidate: { anonymisedAt: null }, ...(scope ? { job: scope } : {}) }, include: { candidate: { select: { fullName: true } }, job: { select: { title: true } } }, orderBy: { stageChangedAt: 'desc' }, take: 300 });
-    return apps.map((a) => ({ value: a.id, label: `${a.candidate.fullName} · ${a.job.title}` }));
+    const apps = await this.prisma.jobApplication.findMany({ where: { stage: { in: ['SCREENING', 'INTERVIEW', 'OFFERED'] }, candidate: { anonymisedAt: null }, ...(scope ? { job: scope } : {}) }, include: { candidate: { select: { fullName: true } }, job: { select: { title: true, roundNames: true } } }, orderBy: { stageChangedAt: 'desc' }, take: 300 });
+    // The schedule-interview form offers only each job's own rounds, pre-selecting the next one not yet scheduled.
+    const done = await this.prisma.interview.findMany({ where: { applicationId: { in: apps.map((a) => a.id) }, status: { not: 'CANCELLED' } }, select: { applicationId: true, roundName: true } });
+    return apps.map((a) => ({ value: a.id, label: `${a.candidate.fullName} · ${a.job.title}`, rounds: a.job.roundNames, used: done.filter((d) => d.applicationId === a.id).map((d) => d.roundName) }));
   }
 }

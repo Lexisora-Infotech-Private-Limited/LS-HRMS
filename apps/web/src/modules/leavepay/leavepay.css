@@ -24,3 +24,14 @@
   .lp-two { grid-template-columns: 1fr; }
   .lp-kv { grid-template-columns: 1fr; }
 }
+
+/* Payslip design canvas */
+.pd-stage { border: 1px solid var(--color-divider); border-radius: 4px; padding: 16px 8px; background: var(--color-neutral-100); min-width: 0; overflow: auto; }
+.pd-page { position: relative; flex: none; background: #fff; box-shadow: var(--shadow-md); outline: none; overflow: hidden; touch-action: none; color: #201f1d; }
+.pd-page:focus-visible { box-shadow: var(--shadow-md), 0 0 0 2px var(--color-accent); }
+.pd-node { position: absolute; cursor: move; user-select: none; touch-action: none; }
+.pd-node:hover { outline: 1px dotted var(--color-neutral-500); }
+.pd-node.sel { outline: 1px dashed var(--color-accent-700); outline-offset: 1px; }
+.pd-handle { position: absolute; right: -4px; bottom: -4px; width: 9px; height: 9px; background: var(--color-accent); border: 1px solid #fff; cursor: nwse-resize; z-index: 2; }
+.pd-ph { width: 100%; height: 100%; border: 1px dashed #9a9696; display: grid; place-items: center; font-size: 11px; color: #9a9696; box-sizing: border-box; }
+.pd-empty { color: #b8b4b4; font-style: italic; }

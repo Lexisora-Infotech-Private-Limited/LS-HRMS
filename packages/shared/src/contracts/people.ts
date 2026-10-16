@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { TEXT_CASES } from './text-case';
 
 /**
  * Shared request/response contracts for the People domain: employees, masters, profile,
@@ -182,14 +183,29 @@ export const EMPLOYEE_CSV_HEADERS = [
   'personal_email',
   'branch',
 ] as const;
-export type ImportRowError = { row: number; field?: string; message: string };
+/** The columns of the Excel / CSV employee import. Required columns have a red heading in the Excel template, optional ones black. */
+export const EMPLOYEE_IMPORT_COLUMNS = [
+  { key: 's_no', header: 'S.No', required: false, hint: 'Serial number of the row. It is shown next to any problem so you can find the row quickly. If you leave it empty, the row position is used.', example: '1' },
+  { key: 'full_name', header: 'Full Name', required: true, hint: "The employee's full name", example: 'Aditya Kulkarni' },
+  { key: 'official_email', header: 'Official Email', required: true, hint: 'Work email address. It must be unique.', example: 'aditya.kulkarni@company.com' },
+  { key: 'phone', header: 'Phone', required: true, hint: 'At least 10 digits, for example +91 98250 11111', example: '+91 98250 11111' },
+  { key: 'department', header: 'Department', required: true, hint: 'Must match a department name (choose from the list)', example: 'Development' },
+  { key: 'designation', header: 'Designation', required: true, hint: 'Must match a designation name (choose from the list)', example: 'React Developer' },
+  { key: 'joining_date', header: 'Joining Date', required: true, hint: 'DD-MM-YYYY or YYYY-MM-DD', example: '12-10-2026' },
+  { key: 'manager_email', header: 'Manager Email', required: false, hint: 'Official email of the reporting manager. Optional.', example: 'neha.kapoor@company.com' },
+  { key: 'employment_type', header: 'Employment Type', required: false, hint: 'Full-time (default), Intern or Contract', example: 'Full-time' },
+  { key: 'work_mode', header: 'Work Mode', required: false, hint: 'Office (default), Remote or Hybrid', example: 'Office' },
+  { key: 'personal_email', header: 'Personal Email', required: false, hint: 'Personal email address. Optional.', example: 'aditya.k@gmail.com' },
+  { key: 'branch', header: 'Branch', required: false, hint: 'Must match a branch name if given. Optional.', example: 'Ahmedabad' },
+] as const;
+export type ImportRowError = { row: number; sNo?: string; field?: string; message: string };
 export type ImportPreview = {
   id: string;
   filename: string;
   totalRows: number;
   validRows: number;
   errors: ImportRowError[];
-  preview: { row: number; fullName: string; officialEmail: string; department: string; employmentType: string; ok: boolean }[];
+  preview: { row: number; sNo?: string; fullName: string; officialEmail: string; department: string; employmentType: string; ok: boolean }[];
   status: string;
   importedRows: number;
 };
@@ -566,7 +582,11 @@ export const scorecardSchema = z.object({
   submit: z.boolean().default(true),
 });
 export type ScorecardInput = z.infer<typeof scorecardSchema>;
-export const interviewResultSchema = z.object({ result: z.enum(INTERVIEW_RESULTS) });
+export const interviewResultSchema = z.object({
+  result: z.enum(INTERVIEW_RESULTS),
+  /** HR only: why a Selected/Rejected result is recorded while panel scorecards are still missing. */
+  overrideReason: z.string().trim().min(5, 'Give a short reason (at least 5 characters)').max(300).optional().nullable(),
+});
 export type InterviewRow = { id: string; candidate: string; candidateId: string; applicationId: string; jobTitle: string; round: string; interviewer: string; interviewerIds: string[]; startsAt: string; when: string; mode: string; modeLabel: string; status: string; result: string; resultLabel: string; isPanelist: boolean; scorecardStatus: string | null };
 export type InterviewDetail = InterviewRow & {
   durationMin: number;
@@ -703,6 +723,10 @@ export const IDCARD_BINDINGS = [
   'employee.photo',
   'employee.emergency_contact',
   'employee.joining_date',
+  'employee.dob',
+  'employee.mobile',
+  'employee.email',
+  'employee.address',
   'employee.code_blood',
   'card.serial',
   'qr.verify_url',
@@ -713,12 +737,63 @@ export const IDCARD_BINDINGS = [
   'settings.emergency_line',
 ] as const;
 export type IdCardBinding = (typeof IDCARD_BINDINGS)[number];
+/** How the employee's photo sits in its frame: zoom, and the point of the picture kept in view (0 = top / left, 50 = middle, 100 = bottom / right). */
+export const idCardPhotoFrameSchema = z.object({
+  /** FILL covers the frame (the picture's edges may be cut); FIT shows the whole picture inside it. */
+  fit: z.enum(['FILL', 'FIT']).default('FILL'),
+  zoom: z.number().min(100).max(400).default(100),
+  fx: z.number().min(0).max(100).default(50),
+  fy: z.number().min(0).max(100).default(20),
+});
+export type IdCardPhotoFrame = z.infer<typeof idCardPhotoFrameSchema>;
+/** Faces sit near the top of most photos, so the default keeps the top of the picture in view. */
+export const DEFAULT_ID_CARD_PHOTO_FRAME: IdCardPhotoFrame = { fit: 'FILL', zoom: 100, fx: 50, fy: 0 };
+/** Where the photo is drawn inside its frame (mm, relative to the frame's top-left corner; the frame clips it). */
+export function idCardPhotoPlacement(img: { w: number; h: number }, box: { w: number; h: number }, f: IdCardPhotoFrame): { x: number; y: number; w: number; h: number } {
+  const s = (f.fit === 'FIT' ? Math.min(box.w / img.w, box.h / img.h) : Math.max(box.w / img.w, box.h / img.h)) * (f.zoom / 100);
+  const w = img.w * s;
+  const h = img.h * s;
+  return { x: (box.w - w) * (f.fx / 100), y: (box.h - h) * (f.fy / 100), w, h };
+}
+/** Items on the same layer are drawn shapes first, then pictures and photos, then text, QR codes and logos, so a big photo never covers a name. */
+export const idCardLayerRank = (type: string): number => (type === 'SHAPE' ? 0 : type === 'PHOTO' || type === 'IMAGE' ? 1 : 2);
+export const idCardDrawOrder = <T extends { type: string; z?: number | null }>(els: T[]): T[] => [...els].sort((a, b) => (a.z ?? 0) - (b.z ?? 0) || idCardLayerRank(a.type) - idCardLayerRank(b.type));
+/** Whether a text item shrinks to fit its box: its own setting, else yes for employee fields and the logo's name fallback, no for typed text. */
+export const idCardShrinks = (el: { type: string; binding?: string | null; shrink?: boolean | null }): boolean => el.shrink ?? ((el.type === 'TEXT' && !!el.binding) || el.type === 'LOGO');
+/**
+ * Fonts an ID card can use. Each one is installed on the server and loaded in the designer, so the printed card matches
+ * the designer. `avg` is the average letter width (in em) used to wrap and fit text.
+ */
+export const ID_CARD_FONTS = {
+  sans: { label: 'Arial', css: "Arial, 'Liberation Sans', Helvetica, sans-serif", avg: 0.52 },
+  serif: { label: 'Times New Roman', css: "'Times New Roman', 'Liberation Serif', Times, serif", avg: 0.52 },
+  courier: { label: 'Courier New', css: "'Courier New', 'Liberation Mono', Courier, monospace", avg: 0.6 },
+  calibri: { label: 'Calibri', css: "Calibri, Carlito, 'Segoe UI', sans-serif", avg: 0.49 },
+  cambria: { label: 'Cambria', css: "Cambria, Caladea, Georgia, serif", avg: 0.52 },
+  opensans: { label: 'Open Sans', css: "'Open Sans', sans-serif", avg: 0.55 },
+  roboto: { label: 'Roboto', css: "Roboto, sans-serif", avg: 0.5 },
+  lato: { label: 'Lato', css: "Lato, sans-serif", avg: 0.5 },
+} as const;
+export type IdCardFontKey = keyof typeof ID_CARD_FONTS;
+export const idCardFontCss = (k: string | null | undefined): string => (ID_CARD_FONTS as Record<string, { css: string }>)[k ?? 'sans']?.css ?? ID_CARD_FONTS.sans.css;
+export const idCardFontAvg = (k: string | null | undefined): number => (ID_CARD_FONTS as Record<string, { avg: number }>)[k ?? 'sans']?.avg ?? 0.52;
+export const ID_CARD_FONT_KEYS = ['sans', 'serif', 'courier', 'calibri', 'cambria', 'opensans', 'roboto', 'lato'] as const;
 export const idCardElementSchema = z.object({
   id: z.string().min(1),
-  type: z.enum(['TEXT', 'PHOTO', 'QR', 'LOGO', 'STATIC', 'SHAPE', 'SIGNATURE']),
+  type: z.enum(['TEXT', 'PHOTO', 'QR', 'LOGO', 'STATIC', 'SHAPE', 'SIGNATURE', 'IMAGE']),
   label: z.string().optional(),
   binding: z.enum(IDCARD_BINDINGS).optional().nullable(),
-  text: z.string().max(200).optional().nullable(),
+  text: z.string().max(400).optional().nullable(),
+  /** TEXT / STATIC: letter case applied to the final text (as saved, UPPERCASE, lowercase, Title Case). */
+  textCase: z.enum(TEXT_CASES).optional().nullable(),
+  /** TEXT / STATIC: where the text sits in a tall box (default MIDDLE). */
+  valign: z.enum(['TOP', 'MIDDLE', 'BOTTOM']).optional().nullable(),
+  /** TEXT / STATIC: shrink the text so it fits its box (default: on for employee fields such as names, off for typed text). */
+  shrink: z.boolean().optional().nullable(),
+  /** PHOTO: how the picture is framed. */
+  photo: idCardPhotoFrameSchema.optional().nullable(),
+  /** IMAGE: a picture the company uploaded (an icon, a logo variant…). */
+  fileId: z.string().optional().nullable(),
   xMm: z.number().min(-5).max(100),
   yMm: z.number().min(-5).max(100),
   wMm: z.number().min(0.2).max(100),
@@ -729,13 +804,37 @@ export const idCardElementSchema = z.object({
       weight: z.enum(['normal', 'bold']).default('normal'),
       color: z.string().regex(/^#[0-9a-fA-F]{6}$/).default('#201f1d'),
       align: z.enum(['left', 'center', 'right']).default('center'),
-      family: z.enum(['serif', 'sans']).default('sans'),
+      family: z.enum(ID_CARD_FONT_KEYS).default('sans'),
     })
     .optional(),
   fill: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().nullable(),
   z: z.number().int().default(0),
 });
 export type IdCardElement = z.infer<typeof idCardElementSchema>;
+/** How a card's background picture sits on the card: FILL covers it (may crop), FIT shows it whole, STRETCH matches the card exactly; then zoom and move. */
+export const idCardBgFitSchema = z.object({
+  fit: z.enum(['FILL', 'FIT', 'STRETCH']).default('FILL'),
+  zoom: z.number().min(50).max(300).default(100),
+  x: z.number().min(-100).max(100).default(0),
+  y: z.number().min(-100).max(100).default(0),
+});
+export type IdCardBgFit = z.infer<typeof idCardBgFitSchema>;
+export const DEFAULT_ID_CARD_BG_FIT: IdCardBgFit = { fit: 'FILL', zoom: 100, x: 0, y: 0 };
+/** Where the picture is drawn on the card, in mm (x / y can be negative or run past the card, the card clips it). */
+export function idCardBgPlacement(img: { w: number; h: number }, card: { w: number; h: number }, f: IdCardBgFit): { x: number; y: number; w: number; h: number } {
+  const z = f.zoom / 100;
+  let w: number;
+  let h: number;
+  if (f.fit === 'STRETCH') {
+    w = card.w * z;
+    h = card.h * z;
+  } else {
+    const s = f.fit === 'FIT' ? Math.min(card.w / img.w, card.h / img.h) : Math.max(card.w / img.w, card.h / img.h);
+    w = img.w * s * z;
+    h = img.h * s * z;
+  }
+  return { x: (card.w - w) / 2 + (f.x / 100) * card.w, y: (card.h - h) / 2 + (f.y / 100) * card.h, w, h };
+}
 export const idCardTemplateSchema = z.object({
   name: z.string().trim().min(2).max(60),
   orientation: z.enum(['PORTRAIT', 'LANDSCAPE']).default('PORTRAIT'),
@@ -743,6 +842,8 @@ export const idCardTemplateSchema = z.object({
   back: z.array(idCardElementSchema).max(40),
   frontBgFileId: z.string().optional().nullable(),
   backBgFileId: z.string().optional().nullable(),
+  frontBgFit: idCardBgFitSchema.optional().nullable(),
+  backBgFit: idCardBgFitSchema.optional().nullable(),
   isDefault: z.boolean().optional(),
 });
 export type IdCardTemplateInput = z.infer<typeof idCardTemplateSchema>;
@@ -861,6 +962,10 @@ export const IDCARD_BINDING_LABELS: Record<IdCardBinding, string> = {
   'employee.photo': 'Photo',
   'employee.emergency_contact': 'Emergency contact (personal)',
   'employee.joining_date': 'Joining date',
+  'employee.dob': 'Date of birth',
+  'employee.mobile': 'Mobile number',
+  'employee.email': 'Email',
+  'employee.address': 'Address',
   'employee.code_blood': 'Employee ID · Blood group',
   'card.serial': 'Card serial',
   'qr.verify_url': 'QR verify link',
@@ -870,6 +975,49 @@ export const IDCARD_BINDING_LABELS: Record<IdCardBinding, string> = {
   'settings.return_address': 'Return address',
   'settings.emergency_line': 'Emergency line',
 };
+/** Typed text on an ID card can hold employee values as {{employee.dob}}; the editor shows and accepts them as [Date of birth]. */
+const IDCARD_LABEL_TO_KEY = new Map(Object.entries(IDCARD_BINDING_LABELS).map(([k, l]) => [l.toLowerCase(), k]));
+export const idCardFieldLabel = (key: string): string => `[${(IDCARD_BINDING_LABELS as Record<string, string>)[key] ?? key}]`;
+export const idCardTextToLabels = (text: string): string => text.replace(/\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g, (m, k: string) => ((IDCARD_BINDING_LABELS as Record<string, string>)[k] ? idCardFieldLabel(k) : m));
+export const idCardLabelsToText = (text: string): string => text.replace(/\[([^\][]{1,60})\]/g, (m, l: string) => (IDCARD_LABEL_TO_KEY.has(l.trim().toLowerCase()) ? `{{${IDCARD_LABEL_TO_KEY.get(l.trim().toLowerCase())}}}` : m));
+/** Fill {{field}} in typed text from the card data (an unknown or empty field becomes blank). */
+export const fillIdCardText = (text: string, data: Record<string, string | null | undefined>): string => text.replace(/\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g, (_, k: string) => data[k] ?? '');
+/**
+ * Lay typed card text out in its box (mm): when the box is tall enough for two lines the text wraps at word
+ * boundaries (an address); otherwise a long line is shrunk to fit its width (a name). Used by both the editor and
+ * the PNG / PDF renderer so they always agree.
+ */
+export function layoutIdCardText(raw: string, sizePt: number, wMm: number, hMm: number, shrink = true, avg = 0.52): { lines: string[]; sizePt: number } {
+  const MM = 25.4 / 72;
+  const width = (t: string, s: number) => t.length * s * avg * MM;
+  const wrap = (s: number) => {
+    const out: string[] = [];
+    for (const para of raw.split('\n')) {
+      let cur = '';
+      for (const word of para.split(/\s+/).filter(Boolean)) {
+        const next = cur ? `${cur} ${word}` : word;
+        if (cur && width(next, s) > wMm) {
+          out.push(cur);
+          cur = word;
+        } else cur = next;
+      }
+      out.push(cur);
+    }
+    return out;
+  };
+  const lineH = (s: number) => s * MM * 1.25;
+  // Not shrinking: the size is exactly what was chosen. The text wraps at the box width and may run past the box's height.
+  if (!shrink) return { lines: wrap(sizePt), sizePt };
+  if (hMm >= lineH(sizePt) * 2 - 0.01) {
+    for (let s = sizePt; s >= 5; s = Math.round((s - 0.5) * 10) / 10) {
+      const lines = wrap(s);
+      if (lines.length * lineH(s) <= hMm + 0.01 || s <= 5) return { lines, sizePt: s };
+    }
+  }
+  const lines = raw.split('\n');
+  const fit = Math.min(...lines.map((l) => (!l || width(l, sizePt) <= wMm ? sizePt : Math.max(5, Math.floor(((sizePt * wMm) / width(l, sizePt)) * 10) / 10))));
+  return { lines, sizePt: fit };
+}
 /** Indian FY half-year for a date: H1 = Apr–Sep, H2 = Oct–Mar ("H1 FY26-27"). */
 export function suggestAppraisalCycle(d: string): { name: string; from: string; to: string } {
   const [y, m] = d.split('-').map(Number) as [number, number];

@@ -1,0 +1,6 @@
+-- AlterTable
+ALTER TABLE "SalaryTemplate" ADD COLUMN     "active" BOOLEAN NOT NULL DEFAULT true,
+ADD COLUMN     "maxCtcPaise" INTEGER,
+ADD COLUMN     "minCtcPaise" INTEGER,
+ADD COLUMN     "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ADD COLUMN     "updatedByName" TEXT;

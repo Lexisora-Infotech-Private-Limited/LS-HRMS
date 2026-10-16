@@ -1,6 +1,6 @@
 import sharp from 'sharp';
 import QRCode from 'qrcode';
-import type { IdCardElement } from '@lexisora/shared';
+import { applyTextCase, fillIdCardText, idCardBgPlacement, idCardFontAvg, idCardFontCss, idCardDrawOrder, idCardShrinks, idCardPhotoPlacement, layoutIdCardText, DEFAULT_ID_CARD_BG_FIT, DEFAULT_ID_CARD_PHOTO_FRAME, type IdCardBgFit, type IdCardElement } from '@lexisora/shared';
 
 /**
  * Card rendering shared by ID cards and visiting cards: template elements (mm) → SVG →
@@ -11,11 +11,12 @@ import type { IdCardElement } from '@lexisora/shared';
 export const PX_PER_MM_300DPI = 300 / 25.4;
 export const PT_PER_MM = 72 / 25.4;
 
-export type CardImages = { photo?: string | null; qr?: string | null; logo?: string | null; bg?: string | null };
+export type CardImages = { photo?: string | null; photoSize?: { w: number; h: number } | null; qr?: string | null; logo?: string | null; bg?: string | null; /** the background picture's own size and how it sits on the card */ bgSize?: { w: number; h: number } | null; bgFit?: IdCardBgFit | null; /** uploaded pictures by file id, for IMAGE elements */ custom?: Record<string, string | null> };
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[c]!);
 
-const FAMILY = { serif: "Georgia, 'Times New Roman', serif", sans: "'Segoe UI', Arial, Helvetica, sans-serif" };
+// Arial and Times New Roman (Liberation on the server has identical letter widths), so the designer and the printed card agree.
+const FAMILY = { serif: "'Times New Roman', 'Liberation Serif', Times, serif", sans: "Arial, 'Liberation Sans', Helvetica, sans-serif" };
 
 /** Rough text width in mm for auto-shrinking long names (avg glyph ≈ 0.52 em). */
 export function estimateTextWidthMm(text: string, sizePt: number): number {
@@ -28,15 +29,36 @@ export function fitFontSize(text: string, sizePt: number, widthMm: number): numb
   return Math.max(5, Math.floor((sizePt * widthMm) / w * 10) / 10);
 }
 
+/** A date as dd/mm/yyyy for the card (from a yyyy-mm-dd key). */
+export function cardDate(dateKey: string | null | undefined): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateKey ?? '');
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : null;
+}
+
+/** A mobile number without the India country code: "+91 98250 14525" and "919825014525" become "98250 14525" and "9825014525". */
+export function cardMobile(phone: string | null | undefined): string | null {
+  const t = (phone ?? '').trim();
+  if (!t) return null;
+  const stripped = t.replace(/^(\+|00)\s*91[\s-]*/, '');
+  if (stripped !== t) return stripped || null;
+  const digits = t.replace(/\D/g, '');
+  return digits.length === 12 && digits.startsWith('91') ? digits.slice(2) : t;
+}
+
 /** Resolve an element's display text: `text` acts as a label prefix for bound fields. */
 export function elementText(el: IdCardElement, data: Record<string, string | null | undefined>): string {
-  if (el.type === 'STATIC') return el.text ?? '';
+  const t = rawElementText(el, data);
+  return el.type === 'TEXT' || el.type === 'STATIC' ? applyTextCase(t, el.textCase) : t;
+}
+
+function rawElementText(el: IdCardElement, data: Record<string, string | null | undefined>): string {
+  if (el.type === 'STATIC') return fillIdCardText(el.text ?? '', data);
   if (el.type === 'SIGNATURE') return el.text || 'Authorised signatory';
   if (el.binding) {
     const v = data[el.binding];
-    return v ? `${el.text ?? ''}${v}` : '';
+    return v ? `${fillIdCardText(el.text ?? '', data)}${v}` : '';
   }
-  return el.text ?? '';
+  return fillIdCardText(el.text ?? '', data);
 }
 
 export function renderCardSvg(
@@ -49,8 +71,13 @@ export function renderCardSvg(
   const H = Math.round(side.heightMm * pxPerMm);
   const m = (v: number) => (v * pxPerMm).toFixed(2);
   const parts: string[] = [`<rect x="0" y="0" width="${W}" height="${H}" fill="#ffffff"/>`];
-  if (images.bg) parts.push(`<image href="${images.bg}" x="0" y="0" width="${W}" height="${H}" preserveAspectRatio="xMidYMid slice"/>`);
-  const els = [...side.elements].sort((a, b) => (a.z ?? 0) - (b.z ?? 0));
+  if (images.bg) {
+    if (images.bgSize) {
+      const r = idCardBgPlacement(images.bgSize, { w: side.widthMm, h: side.heightMm }, images.bgFit ?? DEFAULT_ID_CARD_BG_FIT);
+      parts.push(`<image href="${images.bg}" x="${m(r.x)}" y="${m(r.y)}" width="${m(r.w)}" height="${m(r.h)}" preserveAspectRatio="none"/>`);
+    } else parts.push(`<image href="${images.bg}" x="0" y="0" width="${W}" height="${H}" preserveAspectRatio="xMidYMid slice"/>`);
+  }
+  const els = idCardDrawOrder(side.elements);
   for (const el of els) {
     const x = el.xMm;
     const y = el.yMm;
@@ -61,7 +88,12 @@ export function renderCardSvg(
         parts.push(`<rect x="${m(x)}" y="${m(y)}" width="${m(w)}" height="${m(h)}" fill="${el.fill ?? '#b68235'}"/>`);
         break;
       case 'PHOTO':
-        if (images.photo) {
+        if (images.photo && images.photoSize) {
+          const r = idCardPhotoPlacement(images.photoSize, { w, h }, el.photo ?? DEFAULT_ID_CARD_PHOTO_FRAME);
+          const cid = `ph-${el.id.replace(/[^A-Za-z0-9_-]/g, '')}`;
+          parts.push(`<clipPath id="${cid}"><rect x="${m(x)}" y="${m(y)}" width="${m(w)}" height="${m(h)}"/></clipPath>`);
+          parts.push(`<image href="${images.photo}" x="${m(x + r.x)}" y="${m(y + r.y)}" width="${m(r.w)}" height="${m(r.h)}" preserveAspectRatio="none" clip-path="url(#${cid})"/>`);
+        } else if (images.photo) {
           parts.push(`<image href="${images.photo}" x="${m(x)}" y="${m(y)}" width="${m(w)}" height="${m(h)}" preserveAspectRatio="xMidYMid slice"/>`);
         } else {
           parts.push(`<rect x="${m(x)}" y="${m(y)}" width="${m(w)}" height="${m(h)}" fill="none" stroke="#9a9696" stroke-dasharray="6 5" stroke-width="2"/>`);
@@ -72,6 +104,11 @@ export function renderCardSvg(
         if (images.qr) parts.push(`<image href="${images.qr}" x="${m(x)}" y="${m(y)}" width="${m(w)}" height="${m(h)}"/>`);
         else parts.push(`<rect x="${m(x)}" y="${m(y)}" width="${m(w)}" height="${m(h)}" fill="none" stroke="#9a9696" stroke-dasharray="6 5" stroke-width="2"/>`);
         break;
+      case 'IMAGE': {
+        const src = el.fileId ? images.custom?.[el.fileId] : null;
+        if (src) parts.push(`<image href="${src}" x="${m(x)}" y="${m(y)}" width="${m(w)}" height="${m(h)}" preserveAspectRatio="xMidYMid meet"/>`);
+        break;
+      }
       case 'LOGO':
         if (images.logo) {
           parts.push(`<image href="${images.logo}" x="${m(x)}" y="${m(y)}" width="${m(w)}" height="${m(h)}" preserveAspectRatio="xMidYMid meet"/>`);
@@ -88,17 +125,17 @@ export function renderCardSvg(
           parts.push(`<line x1="${m(x)}" y1="${m(y)}" x2="${m(x + w)}" y2="${m(y)}" stroke="#d7d3d3" stroke-width="2"/>`);
         }
         if (!raw) break;
-        const lines = raw.split('\n');
-        const sizePt = lines.length === 1 ? fitFontSize(raw, font.size, w) : Math.min(...lines.map((l) => fitFontSize(l, font.size, w)));
+        const { lines, sizePt } = layoutIdCardText(raw, font.size, w, h, idCardShrinks(el), idCardFontAvg(font.family));
         const sizeMm = sizePt * (25.4 / 72);
         const anchor = font.align === 'left' ? 'start' : font.align === 'right' ? 'end' : 'middle';
         const tx = font.align === 'left' ? x : font.align === 'right' ? x + w : x + w / 2;
         const lineH = sizeMm * 1.25;
-        const top = el.type === 'SIGNATURE' ? y + 1 : y + h / 2 - (lineH * (lines.length - 1)) / 2;
+        const va = el.valign ?? 'MIDDLE';
+        const top = el.type === 'SIGNATURE' ? y + 1 : va === 'TOP' ? y + lineH / 2 : va === 'BOTTOM' ? y + h - lineH / 2 - lineH * (lines.length - 1) : y + h / 2 - (lineH * (lines.length - 1)) / 2;
         lines.forEach((ln, i) => {
           const ty = top + i * lineH;
           parts.push(
-            `<text x="${m(tx)}" y="${m(ty)}" font-family="${font.family === 'serif' ? FAMILY.serif : FAMILY.sans}" font-size="${m(sizeMm)}" font-weight="${font.weight}" fill="${font.color}" text-anchor="${anchor}" dominant-baseline="${el.type === 'SIGNATURE' ? 'hanging' : 'middle'}">${esc(ln)}</text>`,
+            `<text x="${m(tx)}" y="${m(ty)}" font-family="${idCardFontCss(font.family)}" font-size="${m(sizeMm)}" font-weight="${font.weight}" fill="${font.color}" text-anchor="${anchor}" dominant-baseline="${el.type === 'SIGNATURE' ? 'hanging' : 'middle'}">${esc(ln)}</text>`,
           );
         });
         break;
@@ -110,6 +147,17 @@ export function renderCardSvg(
 
 export async function svgToPng(svg: string): Promise<Buffer> {
   return sharp(Buffer.from(svg), { density: 72 }).png().toBuffer();
+}
+
+/** Pixel size of an image given as a data URL (null if it can't be read). */
+export async function dataUrlSize(url: string | null): Promise<{ w: number; h: number } | null> {
+  if (!url) return null;
+  try {
+    const meta = await sharp(Buffer.from(url.slice(url.indexOf(',') + 1), 'base64')).metadata();
+    return meta.width && meta.height ? { w: meta.width, h: meta.height } : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function qrDataUrl(text: string): Promise<string> {

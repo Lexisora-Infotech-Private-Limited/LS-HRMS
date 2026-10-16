@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import type { EsiSettings, PfSettings } from '@lexisora/shared';
 import type { PayrollItemStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { currentTenantId } from '../../../core/context/request-context';
@@ -112,6 +113,7 @@ export class PayrollEngineService {
       const sal = salaries.get(e.id);
       const errors: string[] = [];
       const structure = sal ? this.salary.earningLines(sal) : [];
+      const customDeductions = sal ? this.salary.deductionLines(sal) : [];
       if (!sal) errors.push('No salary structure');
       else if (!structure.length) errors.push('Salary structure could not be read');
 
@@ -128,6 +130,9 @@ export class PayrollEngineService {
           period: opts.period,
           payType: sal!.payType,
           structure,
+          customDeductions,
+          pfConfig: sal ? ((sal as { pfConfig?: unknown }).pfConfig as PfSettings | null) ?? null : null,
+          esiConfig: sal ? ((sal as { esiConfig?: unknown }).esiConfig as EsiSettings | null) ?? null : null,
           grossFixedPaise: sal!.grossMonthlyPaise,
           days: { workingDays: days.workingDays, eligibleDays: days.eligibleDays, paidLeaveDays: days.paidLeaveDays, unpaidLeaveDays: days.unpaidLeaveDays, absentDays: days.absentDays, projectedDays: days.projectedDays },
           idle: { apply: deductIdle, rawMinutes: days.idleMinutes, allowanceMinutes: allowance, shiftNetMinutes: cal.shiftNetMinutes },

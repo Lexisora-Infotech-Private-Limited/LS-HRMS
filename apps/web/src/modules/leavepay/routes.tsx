@@ -7,6 +7,8 @@ const LeavePage = lazy(() => import('./pages/LeavePage'));
 const LeaveSetupPage = lazy(() => import('./pages/LeaveSetupPage'));
 const PayslipsPage = lazy(() => import('./pages/PayslipsPage'));
 const PayrollPage = lazy(() => import('./pages/PayrollPage'));
+const SalaryStructuresPage = lazy(() => import('./pages/SalaryStructuresPage'));
+const PayslipDesignPage = lazy(() => import('./pages/PayslipDesignPage'));
 
 const s = (el: ReactNode) => <Suspense fallback={<Loading />}>{el}</Suspense>;
 
@@ -16,4 +18,6 @@ export const routes: RouteObject[] = [
   { path: 'leave-setup', element: guard('leave.manage', s(<LeaveSetupPage />)) },
   { path: 'payslips', element: guard('payslips.self', s(<PayslipsPage />)) },
   { path: 'payroll', element: guard('payroll.manage', s(<PayrollPage />)) },
+  { path: 'salary-structures', element: guard('payroll.manage', s(<SalaryStructuresPage />)) },
+  { path: 'payslip-design', element: guard('payroll.manage', s(<PayslipDesignPage />)) },
 ];

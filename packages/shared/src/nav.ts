@@ -65,6 +65,8 @@ export const NAV: NavGroup[] = [
     items: [
       { id: 'payslips', label: 'My payslips', path: '/payslips', permission: 'payslips.self' },
       { id: 'payroll', label: 'Payroll run', path: '/payroll', permission: 'payroll.manage' },
+      { id: 'salary-structures', label: 'Salary structures', path: '/salary-structures', permission: 'payroll.manage' },
+      { id: 'payslip-design', label: 'Payslip design', path: '/payslip-design', permission: 'payroll.manage' },
       { id: 'ledger', label: 'Ledger', path: '/ledger', permission: ['ledger.manage', 'ledger.hrvoucher'] },
       { id: 'invoices', label: 'GST invoices', path: '/invoices', permission: 'invoices.manage' },
       { id: 'purchases', label: 'Purchases & input GST', path: '/purchases', permission: 'purchases.manage' },
