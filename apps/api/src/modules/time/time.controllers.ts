@@ -19,6 +19,7 @@ import {
   idCheckPatchSchema,
   idCheckSchema,
   idleSpanSchema,
+  lateReasonSchema,
   locationSchema,
   outsideHoursSchema,
   periodLockSchema,
@@ -56,7 +57,7 @@ import { AppError, badRequest } from '../../core/http/errors';
 import { ZodPipe } from '../../core/http/zod.pipe';
 import { OrgService } from '../../core/org/org.service';
 import { defaultLockUpTo, lockRangeError } from './lib/compliance';
-import { istHm, istKeyOf, monthOf, monthRange } from './lib/time-utils';
+import { istHm, istKeyOf, monthOf, monthRange, shortDur } from './lib/time-utils';
 import { ApprovalService } from './services/approval.service';
 import { AttendanceService } from './services/attendance.service';
 import { BiometricService } from './services/biometric.service';
@@ -101,17 +102,30 @@ export class AttendanceController {
       clientEventId: idem ? idem.slice(0, 80) : null,
       ip: req.ip ?? null,
       userAgent: (req.headers['user-agent'] as string) ?? null,
+      lateReason: body.lateReason ?? null,
+      lateAck: body.lateAck ?? false,
     });
     const at = res.direction === 'IN' ? res.session.startedAt : (res.session.endedAt ?? new Date());
     const today = await this.attendance.today(employeeId);
+    const l = today.late;
+    const count = l.lateAllowed > 0 ? ` · late ${l.lateCount} of ${l.lateAllowed} allowed` : '';
+    const late = res.direction === 'IN' && l.isLate ? ` · late by ${shortDur(l.lateByMinutes)}${l.lateOverLimit ? ` · late ${l.lateCount} this month (${l.lateAllowed} allowed), first half is half-day leave` : `${count}${l.lateHalfDay ? ' (half day)' : ''}`}` : '';
     return {
       ok: true,
       direction: res.direction,
       at: at.toISOString(),
       source: 'WEB',
-      message: res.direction === 'IN' ? `Punched in at ${istHm(at)} · web` : 'Punched out · day summary saved',
+      message: res.direction === 'IN' ? `Punched in at ${istHm(at)}${late}` : 'Punched out · day summary saved',
       today,
     };
+  }
+
+  /** Add or change why I was late on a day (biometric / desktop punch-ins can't ask at the time). */
+  @Put('me/days/:date/late-reason')
+  @RequirePerm('attendance.self')
+  lateReason(@Param('date') date: string, @Body(new ZodPipe(lateReasonSchema)) body: { reason: string }) {
+    if (!dateKey.safeParse(date).success) throw badRequest('Use YYYY-MM-DD');
+    return this.attendance.setLateReason(this.org.myEmployeeId(), date, body.reason);
   }
 
   /** Idle time the web app saw while punched in, with the reason picked on return (Break / Meeting / Other). */
@@ -642,6 +656,13 @@ export class TimesheetsController {
   @RequirePerm('timesheet.self')
   submit(@Param('id') id: string, @Body(new ZodPipe(submitTimesheetSchema)) body: { expectedVersion?: number; confirmEmpty?: boolean }) {
     return this.sheets.submit(id, body);
+  }
+
+  /** "Refresh from tracker": idempotent rebuild of the week from tracker time (never changes a submitted week). */
+  @Post(':id/refresh')
+  @RequirePerm('timesheet.self')
+  refresh(@Param('id') id: string) {
+    return this.sheets.refresh(id);
   }
 
   @Post(':id/recall')

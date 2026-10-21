@@ -19,7 +19,7 @@ import { NotificationsService } from '../../core/notifications/notifications.ser
 import { OrgService } from '../../core/org/org.service';
 import { badRequest, forbidden, notFound } from '../../core/http/errors';
 import { hasPerm } from '../../core/auth/decorators';
-import { requireContext, type RequestContext } from '../../core/context/request-context';
+import { getContext, requireContext, type RequestContext } from '../../core/context/request-context';
 import { IngestService } from './ingest.service';
 import { addDays, dateKeyOf, dbDate, weekStartOf } from './tracker.rules';
 
@@ -167,10 +167,24 @@ export class ReviewService {
     return (await this.claimRows([updated], s))[0]!;
   }
 
-  /** Implicit approval: when a timesheet is approved, pending claims of that week become APPROVED. */
+  /**
+   * Implicit approval: when a timesheet is approved, pending claims of that week become APPROVED —
+   * except claims the approver rejected inside the approval UI (TimesheetItemDecision), whose
+   * idle.claimDecided may not have been applied yet (both fire in the same request).
+   */
   async approvePendingForWeek(employeeId: string, weekStart: string) {
     const range = { gte: dbDate(weekStartOf(weekStart)), lte: dbDate(addDays(weekStartOf(weekStart), 6)) };
-    const pending = await this.prisma.idleClaim.findMany({ where: { employeeId, status: 'PENDING', workDate: range } });
+    const open = await this.prisma.idleClaim.findMany({ where: { employeeId, status: 'PENDING', workDate: range } });
+    if (!open.length) return 0;
+    const rejected = new Set(
+      (
+        await this.prisma.timesheetItemDecision.findMany({
+          where: { itemType: 'IDLE_CLAIM', refId: { in: open.map((p) => p.id) }, decision: 'REJECTED' },
+          select: { refId: true },
+        })
+      ).map((d) => d.refId),
+    );
+    const pending = open.filter((p) => !rejected.has(p.id));
     if (!pending.length) return 0;
     await this.prisma.idleClaim.updateMany({ where: { id: { in: pending.map((p) => p.id) } }, data: { status: 'APPROVED', decidedAt: new Date(), comment: 'Approved with the timesheet' } });
     const dates = [...new Set(pending.map((p) => dateKeyOf(p.workDate)))];
@@ -178,6 +192,25 @@ export class ReviewService {
     for (const p of pending) this.events.emit('idle.claimDecided', { claimId: p.id, employeeId, workDate: dateKeyOf(p.workDate), status: 'APPROVED' });
     this.events.emit('tracker.segmentsIngested', { employeeId, workDates: dates });
     return pending.length;
+  }
+
+  /**
+   * A decision made in the timesheet approval UI (idle.claimDecided, source 'approval'): applied here
+   * like decideClaim when the claim is still pending, so the tracker's day summary follows.
+   */
+  async applyApprovalDecision(p: { claimId: string; status: string; note?: string | null }) {
+    if (p.status !== 'APPROVED' && p.status !== 'REJECTED') return;
+    const c = await this.prisma.idleClaim.findUnique({ where: { id: p.claimId } });
+    if (!c || c.status !== 'PENDING') return;
+    const ctx = getContext();
+    await this.prisma.idleClaim.update({
+      where: { id: c.id },
+      data: { status: p.status, decidedAt: new Date(), decidedByUserId: ctx?.userId ?? null, comment: p.note?.trim() || null },
+    });
+    const dateKey = dateKeyOf(c.workDate);
+    await this.ingest.projectDay(c.employeeId, dateKey);
+    await this.audit.record({ action: 'idle.claim.decided', entity: 'IdleClaim', entityId: c.id, meta: { status: p.status, minutes: c.minutes, employeeId: c.employeeId, workDate: dateKey, source: 'approval' } });
+    this.events.emit('tracker.segmentsIngested', { employeeId: c.employeeId, workDates: [dateKey] });
   }
 
   async pendingClaimCount(ctx: RequestContext) {

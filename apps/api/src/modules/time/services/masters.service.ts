@@ -12,6 +12,7 @@ import type {
   ShiftInput,
   ShiftRow,
 } from '@lexisora/shared';
+import { holidayLocationsOverlap } from '@lexisora/shared';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { AuditService } from '../../../core/audit/audit.service';
 import { NotificationsService } from '../../../core/notifications/notifications.service';
@@ -90,7 +91,10 @@ export class MastersService {
       name: input.name,
       ...v,
       graceMinutes: input.graceMinutes,
-      halfDayIfLateByMinutes: input.halfDayIfLateByMinutes === undefined ? 120 : input.halfDayIfLateByMinutes,
+      halfDayIfLateByMinutes: input.halfDayIfLateByMinutes === undefined ? 120 : input.halfDayIfLateByMinutes || null,
+      earlyOutGraceMinutes: input.earlyOutGraceMinutes ?? 15,
+      lateMarksAllowed: input.lateMarksAllowed ?? 0,
+      lateMarksAllowedFrom: input.lateMarksAllowed ? dateOf(istKeyOf(new Date())) : null,
       isDefault: makeDefault,
       archivedAt: null,
     };
@@ -110,17 +114,29 @@ export class MastersService {
         ...(input.name ? { name: input.name } : {}),
         ...v,
         ...(input.graceMinutes !== undefined ? { graceMinutes: input.graceMinutes } : {}),
-        ...(input.halfDayIfLateByMinutes !== undefined ? { halfDayIfLateByMinutes: input.halfDayIfLateByMinutes } : {}),
+        ...(input.halfDayIfLateByMinutes !== undefined ? { halfDayIfLateByMinutes: input.halfDayIfLateByMinutes || null } : {}),
+        ...(input.earlyOutGraceMinutes !== undefined ? { earlyOutGraceMinutes: input.earlyOutGraceMinutes } : {}),
+        // A new monthly late limit takes effect today: earlier days keep what they were.
+        ...(input.lateMarksAllowed !== undefined && input.lateMarksAllowed !== s.lateMarksAllowed
+          ? { lateMarksAllowed: input.lateMarksAllowed, lateMarksAllowedFrom: input.lateMarksAllowed ? dateOf(istKeyOf(new Date())) : null }
+          : {}),
         ...(input.isDefault !== undefined ? { isDefault: input.isDefault || s.isDefault } : {}),
       },
     });
     const diff: Record<string, unknown> = {};
-    for (const k of ['name', 'startMinute', 'endMinute', 'graceMinutes', 'breakMinutes', 'weeklyOffDays', 'minFullDayMinutes', 'minHalfDayMinutes', 'halfDayIfLateByMinutes'] as const) {
+    for (const k of ['name', 'startMinute', 'endMinute', 'graceMinutes', 'breakMinutes', 'weeklyOffDays', 'minFullDayMinutes', 'minHalfDayMinutes', 'halfDayIfLateByMinutes', 'earlyOutGraceMinutes', 'lateMarksAllowed'] as const) {
       if (JSON.stringify(s[k]) !== JSON.stringify(saved[k])) diff[k] = { from: s[k], to: saved[k] };
     }
     await this.audit.record({ action: 'shift.updated', entity: 'Shift', entityId: id, meta: diff as any });
     const counts = await this.currentShiftMap();
-    return toShiftRow(saved, [...counts.values()].filter((x) => x === id).length);
+    const holders = [...counts.entries()].filter(([, sid]) => sid === id).map(([emp]) => emp);
+    // Timing / grace / thresholds / the monthly late limit changed: recompute this month's days of
+    // everyone on the shift (a late beyond the new limit becomes a half day from today on).
+    if (holders.length && Object.keys(diff).some((k) => k !== 'name')) {
+      const today = istKeyOf(new Date());
+      await this.jobs.enqueue('time.recomputeRange', { tenantId: requireContext().tenantId, employeeIds: holders, from: `${today.slice(0, 7)}-01`, to: today });
+    }
+    return toShiftRow(saved, holders.length);
   }
 
   async archiveShift(id: string) {
@@ -395,20 +411,31 @@ export class MastersService {
     return groupHolidays(rows).slice(0, limit);
   }
 
+  /** The holiday already on `date` for any of these locations (one holiday per date and location). */
+  private async clashOn(date: string, locationIds: string[], exceptId?: string): Promise<Holiday | null> {
+    const same = await this.prisma.holiday.findMany({ where: { date: dateOf(date), ...(exceptId ? { id: { not: exceptId } } : {}) } });
+    return same.find((h) => holidayLocationsOverlap(h.locationIds, locationIds)) ?? null;
+  }
+
   async createHoliday(input: HolidayInput) {
     const from = input.date;
     const to = input.endDate && input.endDate > from ? input.endDate : from;
+    const locs = input.locationIds ?? [];
+    // Refuse the whole request when any of its dates already has a holiday for these locations.
+    const clashes: string[] = [];
+    for (let d = from; d <= to; d = addDays(d, 1)) {
+      const c = await this.clashOn(d, locs);
+      if (c) clashes.push(`${dm(d)} is already ${c.name}`);
+    }
+    if (clashes.length) throw new AppError(409, 'HOLIDAY_CLASH', `${clashes.join('; ')} · one holiday per date — edit or delete that one instead`, { fieldErrors: { date: [clashes[0]!] } });
     const created: Holiday[] = [];
     for (let d = from; d <= to; d = addDays(d, 1)) {
-      const exists = await this.prisma.holiday.findFirst({ where: { date: dateOf(d), name: input.name } });
-      if (exists) continue;
       created.push(
         await this.prisma.holiday.create({
           data: { date: dateOf(d), name: input.name, type: input.type ?? 'MANDATORY', calendar: input.calendar || `National ${from.slice(0, 4)}`, locationIds: input.locationIds ?? [] } as any,
         }),
       );
     }
-    if (!created.length) throw new AppError(409, 'DUPLICATE', 'This holiday is already on the calendar');
     await this.audit.record({ action: 'holiday.created', entity: 'Holiday', entityId: created[0]!.id, meta: { name: input.name, from, to } });
     await this.recomputeIfPast(from, to);
     return { ok: true, count: created.length };
@@ -417,6 +444,8 @@ export class MastersService {
   async updateHoliday(id: string, input: Partial<HolidayInput>) {
     const h = await this.prisma.holiday.findFirst({ where: { id } });
     if (!h) throw notFound('Holiday');
+    const clash = await this.clashOn(input.date ?? keyOf(h.date), input.locationIds ?? h.locationIds, id);
+    if (clash) throw new AppError(409, 'HOLIDAY_CLASH', `${dm(input.date ?? keyOf(h.date))} is already ${clash.name} · one holiday per date`, { fieldErrors: { date: [`Already ${clash.name}`] } });
     const saved = await this.prisma.holiday.update({
       where: { id },
       data: {
@@ -446,31 +475,38 @@ export class MastersService {
     const list = (BUILTIN_HOLIDAYS[year] ?? []).filter((h) => h.calendars.includes(calendar));
     if (!list.length) throw new AppError(404, 'NO_LIST', `No built-in ${calendar} list for ${year}`);
     let n = 0;
+    let skipped = 0;
     for (const h of list) {
-      const exists = await this.prisma.holiday.findFirst({ where: { date: dateOf(h.date), name: h.name } });
-      if (exists) continue;
+      // Dates that already have a holiday are kept as they are.
+      if (await this.clashOn(h.date, [])) {
+        skipped++;
+        continue;
+      }
       await this.prisma.holiday.create({ data: { date: dateOf(h.date), name: h.name, type: h.type, calendar: `${calendar} ${year}`, locationIds: [] } as any });
       n++;
     }
-    await this.audit.record({ action: 'holiday.imported', entity: 'Holiday', meta: { year, calendar, added: n } });
-    return { ok: true, count: n };
+    await this.audit.record({ action: 'holiday.imported', entity: 'Holiday', meta: { year, calendar, added: n, skipped } });
+    return { ok: true, count: n, skipped };
   }
 
   async copyHolidays(fromYear: number, toYear: number) {
     if (fromYear === toYear) throw badRequest('Pick a different year');
     const rows = await this.prisma.holiday.findMany({ where: { date: { gte: dateOf(`${fromYear}-01-01`), lte: dateOf(`${fromYear}-12-31`) } } });
     let n = 0;
+    let skipped = 0;
     for (const h of rows) {
       const k = keyOf(h.date);
       const target = `${toYear}${k.slice(4)}`;
       if (target.endsWith('02-29')) continue;
-      const exists = await this.prisma.holiday.findFirst({ where: { date: dateOf(target), name: h.name } });
-      if (exists) continue;
+      if (await this.clashOn(target, h.locationIds)) {
+        skipped++;
+        continue;
+      }
       await this.prisma.holiday.create({ data: { date: dateOf(target), name: h.name, type: h.type, calendar: h.calendar.replace(String(fromYear), String(toYear)), locationIds: h.locationIds } as any });
       n++;
     }
-    await this.audit.record({ action: 'holiday.copied', entity: 'Holiday', meta: { fromYear, toYear, added: n } });
-    return { ok: true, count: n };
+    await this.audit.record({ action: 'holiday.copied', entity: 'Holiday', meta: { fromYear, toYear, added: n, skipped } });
+    return { ok: true, count: n, skipped };
   }
 
   private async recomputeIfPast(from: string, to: string) {
@@ -511,6 +547,9 @@ export function toShiftRow(s: Shift, employees: number): ShiftRow {
     minFullDayMinutes: s.minFullDayMinutes,
     minHalfDayMinutes: s.minHalfDayMinutes,
     halfDayIfLateByMinutes: s.halfDayIfLateByMinutes,
+    earlyOutGraceMinutes: s.earlyOutGraceMinutes,
+    lateMarksAllowed: s.lateMarksAllowed,
+    lateMarksAllowedFrom: s.lateMarksAllowedFrom ? keyOf(s.lateMarksAllowedFrom) : null,
   };
 }
 

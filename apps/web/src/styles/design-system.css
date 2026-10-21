@@ -127,7 +127,8 @@ figure { margin: 0; }
 .btn-sm { font-size: 12.5px; padding: 5px 10px; }
 
 /* — forms — */
-.field > label, .field-label {
+/* A checkbox field's own <label class="radio"> keeps its box (see FieldInput). */
+.field > label:not(.radio), .field-label {
   display: block; font-size: 12px; margin-bottom: 5px;
   color: color-mix(in srgb, var(--color-text) 70%, transparent);
 }

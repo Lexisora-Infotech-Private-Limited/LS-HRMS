@@ -1,13 +1,16 @@
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
-import { BOARD_COLUMNS, TASK_STATUS_LABELS, type BoardView, type TaskStatusKey } from '@lexisora/shared';
+import { BOARD_COLUMNS, TASK_STATUS_LABELS, sortBoardCards, type BoardView, type TaskStatusKey } from '@lexisora/shared';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { AuditService } from '../../../core/audit/audit.service';
 import { NotificationsService } from '../../../core/notifications/notifications.service';
-import { currentTenantId } from '../../../core/context/request-context';
+import { currentTenantId, requireContext } from '../../../core/context/request-context';
+import { hasPerm } from '../../../core/auth/decorators';
 import { AppError, badRequest, conflict, forbidden, notFound } from '../../../core/http/errors';
 import { WorkAccessService } from '../work-access.service';
 import { WorkEvents } from '../work-events.service';
+import { WorkMetricsService } from '../projects/work-metrics.service';
+import { TaskTimerService } from '../tasks/task-timer.service';
 import { toCard } from '../tasks/task-mapper';
 import { DAY_MS } from '../work.rules';
 
@@ -29,6 +32,8 @@ export class BoardsService {
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
     private readonly events: WorkEvents,
+    private readonly metrics: WorkMetricsService,
+    private readonly timer: TaskTimerService,
   ) {}
 
   private async load(projectId: string, departmentId: string) {
@@ -54,15 +59,36 @@ export class BoardsService {
       ],
     };
     if (includeDone) statuses.push('DONE');
-    const tasks = await this.prisma.task.findMany({ where, orderBy: [{ rank: 'asc' }, { number: 'asc' }] });
-    const allocated = await this.prisma.boardMember.findMany({ where: { projectId, departmentId } });
-    const names = await this.access.names([...tasks.map((t) => t.assigneeEmployeeId), ...allocated.map((m) => m.employeeId), dept.leadEmployeeId]);
-    const cards = tasks.map((t) => toCard(t, names, rights, v.employeeId));
+    const now = new Date();
+    const tasks = await this.prisma.task.findMany({ where });
+    const taskIds = tasks.map((t) => t.id);
+    const [allocated, spent, running] = await Promise.all([
+      this.prisma.boardMember.findMany({ where: { projectId, departmentId } }),
+      this.metrics.spentSecondsByTask(taskIds),
+      this.timer.running(taskIds, now),
+    ]);
+    const names = await this.access.names([
+      ...tasks.map((t) => t.assigneeEmployeeId),
+      ...allocated.map((m) => m.employeeId),
+      ...[...running.values()].map((r) => r.employeeId),
+      dept.leadEmployeeId,
+    ]);
     const members = [
       ...(dept.leadEmployeeId ? [{ employeeId: dept.leadEmployeeId, name: names.get(dept.leadEmployeeId) ?? '—', isLead: true }] : []),
       ...allocated.filter((m) => m.employeeId !== dept.leadEmployeeId).map((m) => ({ employeeId: m.employeeId, name: names.get(m.employeeId) ?? '—', isLead: false })),
     ];
+    const boardPeople = project.isSystem
+      ? new Set((await this.prisma.projectMember.findMany({ where: { projectId }, select: { employeeId: true } })).map((m) => m.employeeId))
+      : new Set(members.map((m) => m.employeeId));
     const locked = ['ARCHIVED', 'COMPLETED', 'CANCELLED'].includes(project.status);
+    const cards = tasks.map((t) =>
+      toCard(t, names, rights, v.employeeId, {
+        spentSeconds: t.openingLoggedMinutes * 60 + (spent.byTask.get(t.id) ?? 0),
+        timer: running.get(t.id) ?? null,
+        boardPeople,
+        locked,
+      }),
+    );
     return {
       project: { id: project.id, key: project.key, name: project.name, status: project.status as BoardView['project']['status'], locked },
       board: {
@@ -75,10 +101,13 @@ export class BoardsService {
         canManage: rights.canAllocate,
       },
       columns: statuses.map((s) => {
-        const list = cards.filter((c) => c.status === s);
-        return { status: s, label: TASK_STATUS_LABELS[s], count: list.length, cards: locked ? list.map((c) => ({ ...c, canMove: false })) : list };
+        const list = sortBoardCards(cards.filter((c) => c.status === s));
+        return { status: s, label: TASK_STATUS_LABELS[s], count: list.length, cards: list };
       }),
       members,
+      serverNow: now.toISOString(),
+      viewer: { employeeId: v.employeeId, name: v.name, canManage: rights.canManage },
+      canCreate: hasPerm(requireContext(), 'tasks.manage') && rights.canView && !locked,
     };
   }
 

@@ -2,12 +2,15 @@ import { Injectable } from '@nestjs/common';
 import type { EsiSettings, PfSettings } from '@lexisora/shared';
 import type { PayrollItemStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
+import { SettingsService } from '../../../core/settings/settings.service';
 import { currentTenantId } from '../../../core/context/request-context';
+import { DEFAULT_LEAVE_SETTINGS, LEAVE_SETTINGS_KEY } from '../leave/leave.common';
 import { addDays, dd, dk, fyPriorPeriods, monthBounds, todayKey, type DateKey } from '../common/dates';
 import { WorkCalendarService } from '../common/calendar.service';
 import { leaveSummaryLabel } from '../leave/leave-calc';
+import { countsAsLateMark } from '../../time/lib/day-calc';
 import { calculateItem, type CalcAdjustment, type CalcResult } from './payroll-calc';
-import { classifyDays, GATE_OK, timesheetGate, type AttendanceOnDay, type DayClassResult, type LeaveOnDay } from './payroll-days';
+import { classifyDays, GATE_OK, latePenaltyLabel, latePenaltySplit, NO_LATE_PENALTY, timesheetGate, type AttendanceOnDay, type DayClassResult, type LatePenalty, type LeaveOnDay } from './payroll-days';
 import { SalaryService, resolveProfile } from './salary.service';
 
 export type EngineOptions = { period: string; lockDate: DateKey; includeIdle: boolean; employeeIds?: string[]; today?: DateKey };
@@ -27,6 +30,7 @@ export type EngineRow = {
   ptStateCode: string;
   grossFixedPaise: number;
   days: DayClassResult;
+  late: LatePenalty;
   leaveLabel: string;
   idleRaw: number;
   idleAllowance: number;
@@ -51,7 +55,31 @@ export class PayrollEngineService {
     private readonly prisma: PrismaService,
     private readonly calendar: WorkCalendarService,
     private readonly salary: SalaryService,
+    private readonly settings: SettingsService,
   ) {}
+
+  /** Leave type late-mark penalties come out of before LOP (leave settings latePenaltyLeaveCode, CL by default). */
+  async latePenaltyType(): Promise<{ id: string } | null> {
+    const code = (await this.settings.get(LEAVE_SETTINGS_KEY, DEFAULT_LEAVE_SETTINGS)).latePenaltyLeaveCode || 'CL';
+    return this.prisma.leaveType.findFirst({ where: { code, active: true }, select: { id: true } });
+  }
+
+  /**
+   * Free late marks a month, from each employee's shift on `date` — resolved like PolicyService.shiftFor
+   * (assignment covering the date → Employee.shiftId → tenant default).
+   */
+  private async lateMarksAllowed(emps: { id: string; shiftId: string | null }[], date: DateKey): Promise<Map<string, number>> {
+    const [assigns, shifts] = await Promise.all([
+      this.prisma.shiftAssignment.findMany({ where: { employeeId: { in: emps.map((e) => e.id) }, effectiveFrom: { lte: dd(date) }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: dd(date) } }] }, orderBy: { effectiveFrom: 'desc' }, select: { employeeId: true, shiftId: true } }),
+      this.prisma.shift.findMany({ orderBy: { createdAt: 'asc' }, select: { id: true, isDefault: true, archivedAt: true, lateMarksAllowed: true } }),
+    ]);
+    const byId = new Map(shifts.map((s) => [s.id, s.lateMarksAllowed]));
+    const live = shifts.filter((s) => !s.archivedAt);
+    const fallback = (live.find((s) => s.isDefault) ?? live[0])?.lateMarksAllowed ?? 0;
+    const assigned = new Map<string, string>();
+    for (const a of assigns) if (!assigned.has(a.employeeId)) assigned.set(a.employeeId, a.shiftId);
+    return new Map(emps.map((e) => [e.id, byId.get(assigned.get(e.id) ?? e.shiftId ?? '') ?? fallback]));
+  }
 
   async compute(opts: EngineOptions): Promise<EngineRow[]> {
     const b = monthBounds(opts.period);
@@ -73,7 +101,7 @@ export class PayrollEngineService {
       this.salary.effectiveOn(ids, b.end),
       this.calendar.forEmployees(ids, b.start, b.end),
       this.prisma.leaveRequestDay.findMany({ where: { employeeId: { in: ids }, active: true, date: { gte: dd(b.start), lte: dd(b.end) }, dayKind: 'WORKING' }, include: { request: { select: { leaveType: { select: { code: true } } } } } }),
-      this.prisma.attendanceDay.findMany({ where: { employeeId: { in: ids }, date: { gte: dd(b.start), lte: dd(lock) } }, select: { employeeId: true, date: true, status: true, presentFraction: true, idleDeductibleMinutes: true } }),
+      this.prisma.attendanceDay.findMany({ where: { employeeId: { in: ids }, date: { gte: dd(b.start), lte: dd(lock) } }, select: { employeeId: true, date: true, status: true, presentFraction: true, idleDeductibleMinutes: true, isLate: true, lateExcused: true, lateHalfDay: true } }),
       this.prisma.trackerDaySummary.findMany({ where: { employeeId: { in: ids }, workDate: { gte: dd(b.start), lte: dd(lock) } }, select: { employeeId: true, idleDeductedSec: true } }),
       this.prisma.attendancePolicy.findMany(),
       this.prisma.timesheet.findMany({ where: { weekEnd: { gte: dd(b.start) }, weekStart: { lte: dd(lock) } }, select: { employeeId: true, status: true } }),
@@ -87,6 +115,12 @@ export class PayrollEngineService {
       ? await this.prisma.payrollItem.findMany({ where: { runId: { in: priorRuns.map((r) => r.id) }, employeeId: { in: ids }, status: { in: ['FINALIZED', 'PAID'] } }, select: { employeeId: true, runId: true, taxableMonthlyPaise: true, tdsPaise: true, pfEePaise: true, ptPaise: true } })
       : [];
     const runPeriod = new Map(priorRuns.map((r) => [r.id, r.period]));
+
+    // Late-mark penalties come out of CL first, then LOP (spec-time B5).
+    const cl = await this.latePenaltyType();
+    const clRows = cl ? await this.prisma.leaveBalance.findMany({ where: { employeeId: { in: ids }, leaveTypeId: cl.id, year: Number(b.end.slice(0, 4)) }, select: { employeeId: true, available: true } }) : [];
+    const clAvailable = new Map(clRows.map((x) => [x.employeeId, x.available]));
+    const lateAllowed = await this.lateMarksAllowed(emps, lock);
 
     const out: EngineRow[] = [];
     for (const e of emps) {
@@ -106,6 +140,10 @@ export class PayrollEngineService {
       const policy = policies.find((p) => p.audience === (e.workMode === 'OFFICE' ? 'OFFICE' : 'REMOTE'));
       const deductIdle = opts.includeIdle && (policy?.deductIdleFromPayroll ?? true) && !prof.idleDeductionExempt;
       const allowance = policy?.monthlyIdleAllowanceMinutes ?? 60;
+      const lateMarks = attRows.filter((x) => x.employeeId === e.id && countsAsLateMark(x)).length;
+      const late = policy
+        ? latePenaltySplit({ lateMarks, allowed: lateAllowed.get(e.id) ?? 0, perPenalty: policy.lateMarksPerPenalty, penaltyDays: policy.latePenaltyDays, source: policy.latePenaltySource, leaveAvailable: clAvailable.get(e.id) ?? 0 })
+        : NO_LATE_PENALTY;
 
       // Interns keep intern task sheets instead of weekly timesheets (NOT_REQUIRED).
       const gate = timesheetGate({ required: e.employmentType !== 'INTERN', statuses: sheets.filter((s) => s.employeeId === e.id).map((s) => s.status) });
@@ -134,7 +172,7 @@ export class PayrollEngineService {
           pfConfig: sal ? ((sal as { pfConfig?: unknown }).pfConfig as PfSettings | null) ?? null : null,
           esiConfig: sal ? ((sal as { esiConfig?: unknown }).esiConfig as EsiSettings | null) ?? null : null,
           grossFixedPaise: sal!.grossMonthlyPaise,
-          days: { workingDays: days.workingDays, eligibleDays: days.eligibleDays, paidLeaveDays: days.paidLeaveDays, unpaidLeaveDays: days.unpaidLeaveDays, absentDays: days.absentDays, projectedDays: days.projectedDays },
+          days: { workingDays: days.workingDays, eligibleDays: days.eligibleDays, paidLeaveDays: days.paidLeaveDays, unpaidLeaveDays: days.unpaidLeaveDays, absentDays: days.absentDays, projectedDays: days.projectedDays, latePenaltyLopDays: late.lopDays },
           idle: { apply: deductIdle, rawMinutes: days.idleMinutes, allowanceMinutes: allowance, shiftNetMinutes: cal.shiftNetMinutes },
           profile: { pfEnabled: prof.pfEnabled, pfCeilingOpted: prof.pfCeilingOpted, esiMode: prof.esiMode, ptStateCode: prof.ptStateCode, taxRegime: prof.taxRegime, gender: e.gender, declarations: prof.declarations },
           tax: {
@@ -169,7 +207,8 @@ export class PayrollEngineService {
         ptStateCode: prof.ptStateCode,
         grossFixedPaise: sal?.grossMonthlyPaise ?? 0,
         days,
-        leaveLabel: leaveSummaryLabel(days.leaveSummary),
+        late,
+        leaveLabel: [leaveSummaryLabel(days.leaveSummary), latePenaltyLabel(late)].filter((x) => x && x !== '0').join(' · ') || '0',
         idleRaw: days.idleMinutes,
         idleAllowance: allowance,
         shiftNetMinutes: cal.shiftNetMinutes,
@@ -199,6 +238,9 @@ export class PayrollEngineService {
         paidLeaveDays: r.days.paidLeaveDays,
         unpaidLeaveDays: r.days.unpaidLeaveDays,
         absentDays: r.days.absentDays,
+        lateMarks: r.late.lateMarks,
+        latePenaltyLeaveDays: r.late.leaveDays,
+        latePenaltyLopDays: r.late.lopDays,
         lopDays: c?.lopDays ?? 0,
         paidDays: c?.paidDays ?? 0,
         projectedDays: r.days.projectedDays,

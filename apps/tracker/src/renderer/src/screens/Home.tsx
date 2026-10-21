@@ -188,7 +188,7 @@ function SummaryTab({ s }: { s: ViewState }) {
       <div className="tw-kpis">
         <Kpi value={s.worked} label="Worked" />
         <Kpi value={s.breakTime} label="Break" />
-        <Kpi value={s.idleTime} label="Idle" />
+        <Kpi value={s.idleTime} label="Idle" note={s.idleClaimed ? `incl. ${s.idleClaimed} sent for PL review` : null} />
       </div>
       <Timeline bars={sum.timeline} />
       <div className="tw-kicker">By task</div>
@@ -227,11 +227,12 @@ function SummaryTab({ s }: { s: ViewState }) {
   );
 }
 
-function Kpi({ value, label }: { value: string; label: string }) {
+function Kpi({ value, label, note }: { value: string; label: string; note?: string | null }) {
   return (
     <div className="tw-kpi">
       <div className="tw-kpi-num">{value}</div>
       {label}
+      {note && <div className="tw-kpi-note">{note}</div>}
     </div>
   );
 }

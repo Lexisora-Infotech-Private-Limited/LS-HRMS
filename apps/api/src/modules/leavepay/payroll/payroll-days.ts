@@ -3,8 +3,9 @@
  *   eligible working days, paid leave, unpaid leave, absence LOP, projected days after the
  *   attendance lock, and deducted idle minutes (idle on LOP days is dropped).
  */
-import type { CalendarFn } from '../leave/leave-calc';
+import { fmtDays, type CalendarFn } from '../leave/leave-calc';
 import { eachDay, maxKey, minKey, monthBounds, type DateKey } from '../common/dates';
+import { latePenaltyDays } from '../../time/lib/day-calc';
 
 export type LeaveOnDay = { units: number; isPaid: boolean; code: string };
 export type AttendanceOnDay = { status: string; presentFraction: number; idleDeductibleMinutes: number };
@@ -100,6 +101,27 @@ export function classifyDays(inp: DayClassInput): DayClassResult {
     leaveSummary: [...summary].map(([code, days]) => ({ code, days: r2(days) })).sort((a, c) => a.code.localeCompare(c.code)),
     idleMinutes: Math.round(idle),
   };
+}
+
+export type LatePenalty = { lateMarks: number; days: number; leaveDays: number; lopDays: number };
+export const NO_LATE_PENALTY: LatePenalty = { lateMarks: 0, days: 0, leaveDays: 0, lopDays: 0 };
+
+/**
+ * Late-mark penalty for the month (spec-time B5): after the shift's `allowed` free marks, every
+ * `perPenalty` late marks cost `penaltyDays`.
+ * LEAVE_THEN_LOP takes it from the CL balance in half days while it lasts; the rest is LOP.
+ */
+export function latePenaltySplit(p: { lateMarks: number; allowed?: number; perPenalty: number; penaltyDays: number; source: string; leaveAvailable: number }): LatePenalty {
+  const days = p.source === 'NONE' ? 0 : latePenaltyDays(p.lateMarks, p.perPenalty, p.penaltyDays, p.allowed ?? 0);
+  const leaveDays = p.source === 'LEAVE_THEN_LOP' ? Math.min(days, Math.floor(Math.max(0, p.leaveAvailable) * 2) / 2) : 0;
+  return { lateMarks: p.lateMarks, days: r2(days), leaveDays: r2(leaveDays), lopDays: r2(days - leaveDays) };
+}
+
+/** Payslip "Leave" suffix, e.g. "late penalty 0.5 CL + 1 LOP". */
+export function latePenaltyLabel(p: LatePenalty): string | null {
+  if (p.days <= 0) return null;
+  const parts = [p.leaveDays > 0 ? `${fmtDays(p.leaveDays)} CL` : null, p.lopDays > 0 ? `${fmtDays(p.lopDays)} LOP` : null].filter(Boolean);
+  return `late penalty ${parts.join(' + ')}`;
 }
 
 export type GateInput = { required: boolean; statuses: string[] };

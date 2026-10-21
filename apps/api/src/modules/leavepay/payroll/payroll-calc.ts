@@ -37,6 +37,8 @@ export type CalcInput = {
     unpaidLeaveDays: number;
     absentDays: number;
     projectedDays: number;
+    /** Part of the late-mark penalty that is not covered by CL. */
+    latePenaltyLopDays?: number;
   };
   idle: { apply: boolean; rawMinutes: number; allowanceMinutes: number; shiftNetMinutes: number };
   profile: { pfEnabled: boolean; pfCeilingOpted: boolean; esiMode: string; ptStateCode: string; taxRegime: Regime; gender?: string | null; declarations?: Declarations | null };
@@ -90,9 +92,10 @@ export function calculateItem(input: CalcInput): CalcResult {
   if (!input.structure.length || input.grossFixedPaise <= 0) errors.push('No salary structure');
   if (WD <= 0) errors.push('No working days in the period');
 
-  const lopDays = r2(input.days.unpaidLeaveDays + input.days.absentDays);
+  const latePenaltyLop = input.days.latePenaltyLopDays ?? 0;
+  const lopDays = r2(input.days.unpaidLeaveDays + input.days.absentDays + latePenaltyLop);
   const paidDays = Math.max(0, r2(input.days.eligibleDays - lopDays));
-  trace.push(`Working days ${WD}; eligible ${input.days.eligibleDays}; paid leave ${input.days.paidLeaveDays}; LOP ${lopDays} → paid days ${paidDays}`);
+  trace.push(`Working days ${WD}; eligible ${input.days.eligibleDays}; paid leave ${input.days.paidLeaveDays}; LOP ${lopDays}${latePenaltyLop ? ` (incl. late-mark penalty ${latePenaltyLop})` : ''} → paid days ${paidDays}`);
 
   // Earnings (prorated on paid days).
   let order = 0;

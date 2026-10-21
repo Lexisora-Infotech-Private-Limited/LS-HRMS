@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { RegularizationRow } from '@lexisora/shared';
 import { Card, ConfirmDialog, Empty, ErrorBlock, Loading, Modal, Pills, Tag, toneFor } from '@/components/ui';
-import { post } from '@/lib/api';
+import { fileUrl, post } from '@/lib/api';
 import { useAction } from '@/lib/query';
 import { stamp, tk, useMyRegs, useRegs } from '../api';
 import '../time.css';
@@ -48,8 +48,14 @@ export function CorrectionsPanel() {
               <div>
                 {r.dateLabel} · {r.typeLabel}
                 {(r.requestedIn || r.requestedOut) && <span className="faint"> · corrected in {r.requestedIn ?? '—'} · out {r.requestedOut ?? '—'}</span>}
+                {r.status === 'PENDING' && (r.recordedIn || r.recordedOut) && <span className="faint"> · recorded in {r.recordedIn ?? '—'} · out {r.recordedOut ?? '—'}</span>}
               </div>
               <div className="muted">“{r.reason}”</div>
+              {r.attachmentFileId && (
+                <a className="faint" style={{ fontSize: 12 }} href={fileUrl(r.attachmentFileId)} target="_blank" rel="noreferrer">
+                  View attachment
+                </a>
+              )}
               <div className="faint" style={{ fontSize: 12 }}>
                 Requested {stamp(r.createdAt)} · approver {r.approverName ?? 'HR'}
                 {r.decidedByName && ` · ${STATUS_LABEL[r.status]?.toLowerCase() ?? 'decided'} by ${r.decidedByName}`}
@@ -96,8 +102,10 @@ function DecisionDialog({ row, action, onClose }: { row: RegularizationRow; acti
         <div className="note">
           {row.dateLabel} · {row.typeLabel}
           {(row.requestedIn || row.requestedOut) && ` · in ${row.requestedIn ?? '—'} · out ${row.requestedOut ?? '—'}`}
+          {(row.recordedIn || row.recordedOut) && <div className="faint" style={{ marginTop: 4 }}>Recorded now: in {row.recordedIn ?? '—'} · out {row.recordedOut ?? '—'}</div>}
           <div className="muted" style={{ marginTop: 4 }}>“{row.reason}”</div>
         </div>
+        {approve && row.type === 'LATE_EXCUSE' && <div className="faint" style={{ fontSize: 12.5 }}>The late mark is removed; a half day booked for this late arrival is given back automatically.</div>}
         {approve && row.type !== 'LATE_EXCUSE' && <div className="faint" style={{ fontSize: 12.5 }}>The day's existing punches are superseded by the corrected times (source: Regularization).</div>}
         <div className="field">
           <label htmlFor="reg-comment">{approve ? 'Comment (optional)' : 'Reason for rejecting'}</label>
@@ -112,11 +120,14 @@ function DecisionDialog({ row, action, onClose }: { row: RegularizationRow; acti
 export function MyCorrections() {
   const q = useMyRegs();
   const [cancel, setCancel] = useState<RegularizationRow | null>(null);
+  const [all, setAll] = useState(false);
   const act = useAction((id: string) => post(`/regularizations/${id}/cancel`), { success: 'Correction request withdrawn', invalidate: [tk.all], onSuccess: () => setCancel(null) });
+  if (q.isError) return <ErrorBlock error={q.error} retry={() => void q.refetch()} />;
   if (!q.data?.length) return null;
+  const shown = all ? q.data : q.data.slice(0, 6);
   return (
     <Card kicker="My correction requests">
-      {q.data.slice(0, 6).map((r) => (
+      {shown.map((r) => (
         <div key={r.id} className="time-item" style={{ alignItems: 'center' }}>
           <span>
             {r.dateLabel} · {r.typeLabel}
@@ -129,6 +140,11 @@ export function MyCorrections() {
           </span>
         </div>
       ))}
+      {q.data.length > 6 && (
+        <button className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start' }} onClick={() => setAll(!all)}>
+          {all ? 'Show fewer' : `Show all ${q.data.length}`}
+        </button>
+      )}
       {cancel && (
         <ConfirmDialog
           title="Withdraw this correction request?"

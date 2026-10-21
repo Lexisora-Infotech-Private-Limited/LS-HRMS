@@ -396,7 +396,7 @@ function HolidayTab() {
       {error && <ErrorBlock error={error} retry={() => void refetch()} />}
       <DataTable columns={cols} rows={data?.items} rowKey={(h) => h.id} loading={isLoading} empty={`No holidays have been published for ${y} yet.`} />
       <p className="faint" style={{ fontSize: 12.5, margin: 0 }}>
-        Mandatory holidays are paid days off for everyone; optional (restricted) holidays can be taken against your leave plan. The list is maintained by HR under Attendance → Holidays.
+        Mandatory holidays are paid days off for everyone; optional (restricted) holidays can be taken against your leave plan. The list is maintained by HR under Leave setup → Holidays.
       </p>
     </div>
   );

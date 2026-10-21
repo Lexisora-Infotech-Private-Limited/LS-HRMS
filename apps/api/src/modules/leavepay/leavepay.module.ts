@@ -10,6 +10,7 @@ import { WorkCalendarService } from './common/calendar.service';
 import { LeaveLedgerService } from './leave/leave-ledger.service';
 import { LeaveRequestsService } from './leave/leave-requests.service';
 import { LeaveAdminService } from './leave/leave-admin.service';
+import { LeaveLateArrivalService, type DayComputed } from './leave/leave-late-arrival.service';
 import { LeaveController } from './leave/leave.controller';
 import { LeaveJobs } from './leave/leave.jobs';
 import { SalaryService } from './payroll/salary.service';
@@ -27,7 +28,7 @@ import { periodLabel } from './common/dates';
 @Module({
   imports: [TimeModule],
   controllers: [LeaveController, PayrollController, PayslipsController, SalaryController, SalaryTemplatesController, PayslipTemplateController],
-  providers: [WorkCalendarService, LeaveLedgerService, LeaveRequestsService, LeaveAdminService, LeaveJobs, SalaryService, PayrollEngineService, PayrollService, PayslipService, PeriodLockPort],
+  providers: [WorkCalendarService, LeaveLedgerService, LeaveRequestsService, LeaveAdminService, LeaveLateArrivalService, LeaveJobs, SalaryService, PayrollEngineService, PayrollService, PayslipService, PeriodLockPort],
   exports: [LeaveRequestsService, SalaryService],
 })
 export class LeavepayModule implements OnModuleInit {
@@ -40,6 +41,7 @@ export class LeavepayModule implements OnModuleInit {
     private readonly requests: LeaveRequestsService,
     private readonly admin: LeaveAdminService,
     private readonly payroll: PayrollService,
+    private readonly lateArrival: LeaveLateArrivalService,
   ) {}
 
   onModuleInit() {
@@ -78,9 +80,17 @@ export class LeavepayModule implements OnModuleInit {
     });
 
     this.events.on('employee.created', async (p: { employeeId: string }) => this.admin.onEmployeeCreated(p.employeeId));
-    this.events.on('timesheet.approved', async (p: { employeeId: string; weekStart: string | Date }) => {
+    this.events.on('timesheet.approved', async (p: { timesheetId: string; employeeId: string; weekStart: string | Date }) => {
       const wk = typeof p.weekStart === 'string' ? p.weekStart.slice(0, 10) : p.weekStart.toISOString().slice(0, 10);
       await this.payroll.onTimesheetApproved(p.employeeId, wk);
+    });
+    // Late by the shift's half-day threshold → half-day leave (booked / removed with the day).
+    this.events.on('attendance.dayComputed', async (p: DayComputed) => {
+      await this.lateArrival.sync(p);
+    });
+    // Hours on a weekly off / holiday in an approved timesheet → comp-off.
+    this.events.on('timesheet.approved', async (p: { timesheetId: string }) => {
+      await this.admin.creditCompOffFromTimesheet(p.timesheetId);
     });
   }
 }

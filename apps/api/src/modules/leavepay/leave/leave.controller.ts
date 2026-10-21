@@ -163,6 +163,12 @@ export class LeaveController {
   }
 
   // ── comp-off ──
+  @Get('comp-off/rules')
+  @RequirePerm('leave.self', 'leave.manage')
+  compOffRules() {
+    return this.admin.compOffRules();
+  }
+
   @Post('comp-off/requests')
   @RequirePerm('leave.self')
   requestCompOff(@Body(new ZodPipe(compOffRequestSchema)) body: CompOffRequestInput) {

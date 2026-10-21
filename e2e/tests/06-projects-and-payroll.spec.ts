@@ -9,7 +9,7 @@ test.describe('Projects, board, payroll & payslips', () => {
     await expect(page.locator('main')).toContainText('Atlas CRM');
     await expect(page.locator('main')).toContainText('Nimbus Retail');
     await page.goto('/board');
-    for (const col of ['Open', 'WIP', 'Dev Completed', 'QA']) await expect(page.locator('main')).toContainText(col);
+    for (const col of ['Open', 'Allotted', 'In progress', 'Dev completed', 'QA', 'timer runs here']) await expect(page.locator('main')).toContainText(col);
   });
 
   test('HR sees the payroll run with KPIs', async ({ page }) => {

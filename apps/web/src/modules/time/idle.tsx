@@ -9,9 +9,10 @@ import { dur, timeOf, useToday } from './api';
 
 /**
  * Web idle detection while punched in (spec-time: auto-idle after `autoIdleMinutes` without input).
- *  - IdleWatcher (app shell): after N minutes with no input the open idle span starts; on the first
- *    input after that it asks what you were doing (Break / Meeting / Others + reason) and saves the
- *    span, which the day timeline shows in the idle colour with that reason on hover.
+ *  - IdleWatcher (app shell): after N minutes with no input the open idle span starts and the dialog
+ *    opens at once, asking what you were doing (Break / Meeting / Others + reason). Your first input
+ *    marks when you came back; the saved span shows on the day timeline in the idle colour with that
+ *    reason on hover.
  *  - useIdlePending(): the open idle span (live overlay on your own timeline).
  * Input is seen system-wide when the browser grants idle detection (Chrome / Edge, https or
  * localhost); otherwise only while an HRMS tab is visible. HRMS tabs share state via localStorage.
@@ -211,8 +212,8 @@ export function IdleWatcher() {
   const thresholdMs = Math.max(1, today?.idleThresholdMinutes ?? 5) * 60_000;
   const systemWide = useIdleEngine(emp, watch, thresholdMs, today?.openSessionStart ?? null);
   const pending = useIdlePending();
-  if (!emp || !pending || pending.back === null) return null;
-  return <IdleReasonDialog key={pending.clientId} emp={emp} pending={{ ...pending, back: pending.back }} systemWide={systemWide} />;
+  if (!emp || !pending) return null;
+  return <IdleReasonDialog key={pending.clientId} emp={emp} pending={pending} systemWide={systemWide} />;
 }
 
 const CHOICES: { reason: Exclude<IdleSpanReason, 'OTHER'>; label: string }[] = [
@@ -220,26 +221,39 @@ const CHOICES: { reason: Exclude<IdleSpanReason, 'OTHER'>; label: string }[] = [
   { reason: 'MEETING', label: 'Meeting' },
 ];
 
-/** "You were idle for 18m": Break / Meeting save at once; Others asks for the reason first. No dismiss. */
-function IdleReasonDialog({ emp, pending, systemWide }: { emp: string; pending: PendingIdle & { back: number }; systemWide: boolean }) {
+/**
+ * Opens as soon as the idle span starts ("You've been idle for 3m", counting up) and turns into
+ * "You were idle for 3m" once you are back. Break / Meeting save at once; Others asks for the
+ * reason first. No dismiss.
+ */
+function IdleReasonDialog({ emp, pending, systemWide }: { emp: string; pending: PendingIdle; systemWide: boolean }) {
   const qc = useQueryClient();
   const { toast, toastError } = useToast();
   const [other, setOther] = useState(false);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+  const away = pending.back === null;
+  useEffect(() => {
+    if (!away) return;
+    const t = window.setInterval(() => setNow(Date.now()), 15_000);
+    return () => window.clearInterval(t);
+  }, [away]);
   const from = timeOf(new Date(pending.since).toISOString());
-  const to = timeOf(new Date(pending.back).toISOString());
-  const minutes = Math.max(1, Math.round((pending.back - pending.since) / 60_000));
+  const to = away ? null : timeOf(new Date(pending.back!).toISOString());
+  const minutes = Math.max(1, Math.round(((pending.back ?? now) - pending.since) / 60_000));
   const noteOk = note.trim().length >= 3;
 
   const save = async (reason: IdleSpanReason) => {
     if (busy || (reason === 'OTHER' && !noteOk)) return;
+    // The click's own mousedown has already marked you back; fall back to now just in case.
+    const back = current?.back ?? Date.now();
     setBusy(true);
     try {
       const r = await post<IdleSpanResult>('/attendance/me/idle', {
         clientId: pending.clientId,
         startedAt: new Date(pending.since).toISOString(),
-        endedAt: new Date(pending.back).toISOString(),
+        endedAt: new Date(back).toISOString(),
         reason,
         ...(reason === 'OTHER' ? { note: note.trim() } : {}),
       });
@@ -257,9 +271,9 @@ function IdleReasonDialog({ emp, pending, systemWide }: { emp: string; pending: 
   };
 
   return (
-    <Modal title={`You were idle for ${dur(minutes)}`} onClose={() => undefined}>
+    <Modal title={away ? `You've been idle for ${dur(minutes)}` : `You were idle for ${dur(minutes)}`} onClose={() => undefined}>
       <div className="dialog-body">
-        No activity from {from} to {to}. What were you doing? It shows on your attendance timeline with this reason.
+        {away ? `No activity since ${from}.` : `No activity from ${from} to ${to}.`} What were you doing? It shows on your attendance timeline with this reason.
       </div>
       {other ? (
         <div className="stack" style={{ gap: 10 }}>

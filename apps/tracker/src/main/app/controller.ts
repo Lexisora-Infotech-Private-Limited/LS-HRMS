@@ -81,7 +81,11 @@ const SOCKET = {
   attendancePunched: 'attendance.punched',
   tasksUpdated: 'tasks.updated',
   syncNow: 'command.syncNow',
+  switchTask: 'command.switchTask',
 } as const;
+
+/** From the task board (TrackerSwitchCommand): start `taskId`, or stop `ifActive` when taskId is null. */
+type SwitchCommand = { taskId?: string | null; ifActive?: string | null; key?: string | null; by?: string | null };
 
 const ok = (message?: string): CommandResult => (message ? { ok: true, message } : { ok: true });
 const fail = (code: string, error: string, meta?: Record<string, unknown>): CommandResult => ({ ok: false, code, error, ...(meta ? { meta } : {}) });
@@ -111,6 +115,8 @@ export class TrackerController {
   private readonly sync: SyncService;
   readonly log: DiagLog;
   private readonly identity = deviceIdentity();
+  /** A task-board switch that arrived while the idle dialog was open; applied after the choice. */
+  private pendingSwitch: SwitchCommand | null = null;
   private engine: TrackerEngine;
   private rt: RealtimeClient | null = null;
 
@@ -322,6 +328,16 @@ export class TrackerController {
     }
   }
 
+  /** Lock screen showing (Windows / macOS); null when the OS can't tell. */
+  private screenLocked(): boolean | null {
+    try {
+      const st = powerMonitor.getSystemIdleState(1);
+      return st === 'locked' ? true : st === 'unknown' ? null : false;
+    } catch {
+      return null;
+    }
+  }
+
   private onTick() {
     if (this.shuttingDown) return;
     const now = this.now();
@@ -336,7 +352,7 @@ export class TrackerController {
       }
       // While a forward clock jump is unconfirmed (it may be sleep without a suspend signal) the
       // idle detector waits: skipped ticks cost nothing, worked time comes from segment spans.
-      if (!this.clock.unsettled) this.handleOutput(this.engine.tick(now, idleSec));
+      if (!this.clock.unsettled) this.handleOutput(this.engine.tick(now, idleSec, this.screenLocked()));
       if (now - this.lastSave > 15_000) {
         this.saveSnapshot();
         this.saveCache();
@@ -391,9 +407,10 @@ export class TrackerController {
       if (!(kind === 'RESUME' && this.catchUpSleep(now))) this.handleOutput(this.engine.unlock(now, kind));
       if (this.engine.status !== 'OUT') this.log.add(kind === 'UNLOCK' ? 'Screen unlocked' : 'PC resumed');
       this.lastTickWall = now;
-      if (kind === 'RESUME' && this.creds) {
+      if (this.creds) {
+        // Report the state right away (the task board shows Running / Paused from it).
         void this.heartbeat();
-        void this.refreshToday();
+        if (kind === 'RESUME') void this.refreshToday();
       }
     }
     this.push();
@@ -511,6 +528,7 @@ export class TrackerController {
     rt.on(SOCKET.attendancePunched, () => void this.refreshToday());
     rt.on(SOCKET.tasksUpdated, () => void this.refreshTasks());
     rt.on(SOCKET.syncNow, () => void this.sync.flush());
+    rt.on(SOCKET.switchTask, (p: SwitchCommand | null) => void this.remoteSwitch(p));
     rt.onStatus = (connected) => {
       if (connected) void this.refreshToday();
     };
@@ -521,7 +539,8 @@ export class TrackerController {
   private async heartbeat() {
     if (!this.creds) return;
     try {
-      const status = this.engine.status === 'OUT' ? 'OUT' : this.engine.prompting ? 'IDLE' : this.engine.status;
+      // Away (locked / asleep) isn't timing anything either — the task board shows the task as paused.
+      const status = this.engine.status === 'OUT' ? 'OUT' : this.engine.prompting || this.engine.away ? 'IDLE' : this.engine.status;
       const r = await this.api.heartbeat({
         status,
         taskId: this.engine.activeTaskId,
@@ -535,6 +554,47 @@ export class TrackerController {
     } catch {
       /* connectivity is tracked by onOutcome */
     }
+  }
+
+  /**
+   * The task board moved a card (server command): moving it to In progress starts its timer here
+   * (on punch-in / after the break if I'm out or on a break); moving it out stops it.
+   */
+  private async remoteSwitch(p: SwitchCommand | null) {
+    if (!p || this.view !== 'home') return;
+    if (!p.taskId) {
+      if (p.ifActive) this.stopTask(p.ifActive, p.by ? `moved on the task board by ${p.by}` : 'moved on the task board');
+      return;
+    }
+    await this.refreshTasks(); // the card may have only just become In progress / mine
+    const t = this.cache.tasks.find((x) => x.id === p.taskId);
+    if (!t || this.engine.activeTaskId === t.id) return;
+    if (this.engine.prompting) {
+      this.pendingSwitch = p;
+      return;
+    }
+    this.handleOutput(this.engine.switchTask(this.now(), t.id));
+    const when = this.engine.status === 'OUT' ? ' · starts when you punch in' : this.engine.status === 'BREAK' ? ' · starts when your break ends' : '';
+    const msg = `Timer on ${t.key}${when} · from the task board`;
+    this.log.add(msg);
+    this.opts.shell.notify('Lexisora Tracker', msg);
+    this.saveSnapshot();
+    this.push();
+  }
+
+  /** Stop timing `taskId` if it is the active task (time goes to "No task" until I pick one). */
+  private stopTask(taskId: string, reason: string) {
+    if (this.engine.activeTaskId !== taskId) return;
+    if (this.engine.prompting) {
+      this.pendingSwitch = { taskId: null, ifActive: taskId };
+      return;
+    }
+    const key = this.taskKey(taskId);
+    this.handleOutput(this.engine.switchTask(this.now(), null));
+    this.log.add(`${key} timer stopped · ${reason}`);
+    if (this.engine.status !== 'OUT') this.opts.shell.notify('Lexisora Tracker', `${key} timer stopped · ${reason}`);
+    this.saveSnapshot();
+    this.push();
   }
 
   private async refreshPolicy(announce: boolean) {
@@ -563,6 +623,9 @@ export class TrackerController {
       const tasks = await this.api.tasks();
       this.cache.tasks = tasks;
       for (const t of tasks) this.cache.known[t.id] = { key: t.key, title: t.title, projectName: t.projectName };
+      // The active card left my list (out of In progress, done, reassigned): stop timing it.
+      const active = this.engine.activeTaskId;
+      if (active && !tasks.some((t) => t.id === active)) this.stopTask(active, 'no longer In progress for you');
       if (!this.engine.activeTaskId && tasks[0] && this.engine.status === 'OUT') this.engine.switchTask(this.now(), tasks[0].id);
       this.saveCache();
       this.push();
@@ -1250,9 +1313,14 @@ export class TrackerController {
     if (!this.engine.prompting) return fail('NO_IDLE', 'There is no idle time to classify');
     if (resolution === 'WORKING' && this.cache.policy && !this.cache.policy.idleClaimsAllowed) return fail('CLAIMS_OFF', 'Idle claims are turned off by HR');
     const out = this.engine.resolveIdle(this.now(), resolution, note || undefined);
-    const idleSeg = out.segments[0];
-    const mins = idleSeg ? Math.max(1, Math.round((idleSeg.endedAt - idleSeg.startedAt) / 60_000)) : 0;
+    const idleMs = out.segments.filter((s) => s.resolution).reduce((sum, s) => sum + (s.endedAt - s.startedAt), 0);
+    const mins = idleMs ? Math.max(1, Math.round(idleMs / 60_000)) : 0;
     this.handleOutput(out);
+    if (this.pendingSwitch) {
+      const cmd = this.pendingSwitch;
+      this.pendingSwitch = null;
+      void this.remoteSwitch(cmd);
+    }
     const msg =
       resolution === 'WORKING'
         ? 'Idle marked as work · sent for PL review'
@@ -1506,7 +1574,9 @@ export class TrackerController {
     const segs = this.engine.segments;
     const local: readonly Segment[] = b ? segs.filter((s) => this.store.queue.has(s.clientId) || s.clientId in this.cache.acks) : segs;
     const delta = computeTotals(local, live);
-    const totals = b ? combine({ workedSeconds: b.workedSeconds, breakSeconds: b.breakSeconds, idleSeconds: b.idleSeconds, screenshots: b.screenshots, byTask: b.byTask }, delta) : delta;
+    const totals = b
+      ? combine({ workedSeconds: b.workedSeconds, breakSeconds: b.breakSeconds, idleSeconds: b.idleSeconds, idlePendingSeconds: b.idlePendingSeconds, screenshots: b.screenshots, byTask: b.byTask }, delta)
+      : delta;
     const day = this.engine.dayKey;
     const pendingShots = this.store.queue.pending('shot').filter((e) => istDayKey(Date.parse((e.payload as ScreenshotMeta).capturedAt)) === day).length;
     const ackedShots = Object.values(this.cache.acks).filter(([, shot]) => shot).length;
@@ -1559,6 +1629,7 @@ export class TrackerController {
       worked: hm(day.totals.workedSec),
       breakTime: hm(day.totals.breakSec),
       idleTime: hm(day.totals.idleSec),
+      idleClaimed: day.totals.claimedSec >= 60 ? hm(day.totals.claimedSec) : null,
       tasks: vm.taskRows(tasks, day.totals.perTask, activeId),
       showTaskSearch: tasks.length > 8,
       activeTask: active ? { id: active.id, key: active.key, title: active.title } : null,

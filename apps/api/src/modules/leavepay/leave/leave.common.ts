@@ -11,7 +11,11 @@ export const DEFAULT_LEAVE_SETTINGS: LeaveSettings = {
   compOffFullDayMinMinutes: 420,
   compOffRequestWindowDays: 30,
   teamOverlapWarnPct: 30,
+  latePenaltyLeaveCode: 'CL',
 };
+
+/** autoReason of the half-day leave attendance books for a late arrival. */
+export const LATE_ARRIVAL = 'LATE_ARRIVAL';
 
 /** Active statuses whose days block the calendar (overlap) and feed sandwich coverage. */
 export const ACTIVE_STATUSES = ['PENDING', 'APPROVED', 'CANCELLATION_PENDING'] as const;
@@ -44,6 +48,7 @@ export type RequestWithRefs = {
   createdAt: Date;
   decidedAt: Date | null;
   decisionNote: string | null;
+  autoReason?: string | null;
   employee: { fullName: string; empCode: string; department: { name: string } | null };
   leaveType: { code: string; name: string };
 };
@@ -56,6 +61,8 @@ export function toRequestRow(r: RequestWithRefs, approverName: string | null, vi
   const isApprover = !!viewer.employeeId && viewer.employeeId === r.approverEmployeeId && !own;
   const canDecide = (isApprover || (viewer.isHr && !own));
   const from = dk(r.fromDate);
+  // A late-arrival half day is undone by excusing the late mark (or by HR), not by the employee.
+  const ownCanChange = own && !r.autoReason;
   return {
     id: r.id,
     requestNo: r.requestNo,
@@ -79,10 +86,11 @@ export function toRequestRow(r: RequestWithRefs, approverName: string | null, vi
     appliedOn: r.createdAt.toISOString(),
     decidedAt: r.decidedAt?.toISOString() ?? null,
     decisionNote: r.decisionNote,
+    autoReason: r.autoReason ?? null,
     can: {
-      withdraw: own && status === 'PENDING',
-      cancel: (own || viewer.isHr) && status === 'APPROVED' && (from > viewer.today || viewer.isHr),
-      requestCancel: own && !viewer.isHr && status === 'APPROVED' && from <= viewer.today,
+      withdraw: ownCanChange && status === 'PENDING',
+      cancel: (ownCanChange || viewer.isHr) && status === 'APPROVED' && (from > viewer.today || viewer.isHr),
+      requestCancel: ownCanChange && !viewer.isHr && status === 'APPROVED' && from <= viewer.today,
       approve: canDecide && status === 'PENDING',
       reject: canDecide && status === 'PENDING',
       decideCancellation: canDecide && status === 'CANCELLATION_PENDING',

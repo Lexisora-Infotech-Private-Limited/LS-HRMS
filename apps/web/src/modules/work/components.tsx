@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { WORK_DOC_KINDS, formatDate, type ProjectDocumentRow } from '@lexisora/shared';
 import { download, uploadFile } from '@/lib/api';
 import { useAction } from '@/lib/query';
@@ -167,45 +168,58 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-/** FORMS.task — "Add task" (controlled so Module/Assignee follow the chosen project). */
-export function AddTaskModal({ projectId, departmentId, onClose }: { projectId?: string; departmentId?: string; onClose: () => void }) {
-  const lk = useLookups(['projects', 'teams', 'employees']);
-  const projects = opts(lk.data, 'projects');
-  const teams = opts(lk.data, 'teams');
-  const [v, setV] = useState<Record<string, string>>({ title: '', projectId: projectId ?? '', moduleName: '', assigneeEmployeeId: '', estimatedHours: '', dueDate: '', departmentId: departmentId ?? '', description: '' });
+/**
+ * FORMS.task — "Add task" on a team board: title, module, assignee (blank = Open), estimate, due date.
+ * The board and project come from the board being viewed; the key (AT-112) comes from the API.
+ * Only board members can be assigned (the lead may pick anyone on the board; others only themselves).
+ */
+export function AddTaskModal({
+  projectId,
+  departmentId,
+  members,
+  me,
+  canAssignOthers,
+  onClose,
+}: {
+  projectId: string;
+  departmentId: string;
+  members: { employeeId: string; name: string; isLead: boolean }[];
+  me: string | null;
+  canAssignOthers: boolean;
+  onClose: () => void;
+}) {
+  const projectQ = useQuery({ queryKey: workKeys.project(projectId), queryFn: () => workApi.project(projectId) });
+  const modules = (projectQ.data?.modules ?? []).filter((m) => !m.isArchived).map((m) => ({ value: m.name, label: m.name }));
+  const assignees = (canAssignOthers ? members : members.filter((m) => m.employeeId === me)).map((m) => ({ value: m.employeeId, label: m.name }));
+  const [v, setV] = useState<Record<string, string>>({ title: '', moduleName: '', assigneeEmployeeId: '', estimatedHours: '', dueDate: '' });
   const [err, setErr] = useState<string | null>(null);
-  const pid = v.projectId || projects[0]?.value || '';
-  const dept = v.departmentId || teams[0]?.value || '';
-  const detail = useProjectModules(pid);
   const add = useAction(workApi.createTask, {
-    success: (r) => (r.warning ? `Task added · ${r.key} · ${r.warning}` : 'Task added'),
-    invalidate: [['work', 'board'], workKeys.projects],
+    success: (r) => (r.warning ? `Task added · ${r.key} · ${r.warning}` : `Task added · ${r.key}`),
+    invalidate: [['work', 'board', projectId], workKeys.projects],
     onSuccess: () => onClose(),
   });
   const set = (k: string) => (x: string) => setV((s) => ({ ...s, [k]: x }));
-  const assignees = detail.assignees.length ? detail.assignees : opts(lk.data, 'employees');
   function submit() {
     if (v.title.trim().length < 2) return setErr('Title is required');
-    if (!pid) return setErr('Project is required');
-    if (!dept) return setErr('Team board is required');
-    const est = v.estimatedHours ? Number(v.estimatedHours.replace(/h$/i, '')) : null;
-    if (est != null && (Number.isNaN(est) || est < 0.25)) return setErr('Estimated hours must be at least 0.25');
+    const raw = (v.estimatedHours ?? '').trim().replace(/h$/i, '');
+    const est = Number(raw);
+    if (!raw || !Number.isFinite(est) || est <= 0) return setErr('Estimate is required and must be more than 0 hours');
+    if (est > 200) return setErr('Estimate over 200h — split the task');
     setErr(null);
     add.mutate({
       title: v.title.trim(),
-      projectId: pid,
+      projectId,
+      departmentId,
       moduleName: v.moduleName || null,
       assigneeEmployeeId: v.assigneeEmployeeId || null,
       estimatedHours: est,
       dueDate: v.dueDate || null,
-      departmentId: dept,
-      description: v.description || null,
     });
   }
   const f = (name: string, label: string, type: FieldDef['type'], extra: Partial<FieldDef> = {}) => (
     <div className={`field${extra.span === 2 ? ' span-2' : ''}`}>
       <label htmlFor={`f-${name}`}>{label}</label>
-      <FieldInput f={{ name, label, type, ...extra }} value={name === 'projectId' ? pid : name === 'departmentId' ? dept : v[name]} onChange={set(name)} />
+      <FieldInput f={{ name, label, type, ...extra }} value={v[name]} onChange={set(name)} />
     </div>
   );
   return (
@@ -220,39 +234,14 @@ export function AddTaskModal({ projectId, departmentId, onClose }: { projectId?:
       }
     >
       <form className="form-grid" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-        {f('title', 'Title', 'text', { span: 2 })}
-        {f('projectId', 'Project', 'select', { options: projects, required: true })}
-        {f('moduleName', 'Module', 'select', { options: detail.modules.map((m) => ({ value: m, label: m })), placeholder: 'No module' })}
-        {f('assigneeEmployeeId', 'Assignee', 'select', { options: assignees, placeholder: 'Unassigned' })}
-        {f('estimatedHours', 'Estimated hours', 'text', { placeholder: '8' })}
+        {f('title', 'Title', 'text', { span: 2, required: true })}
+        {f('moduleName', 'Module', 'select', { options: modules, placeholder: 'No module' })}
+        {f('assigneeEmployeeId', 'Assignee', 'select', { options: assignees, placeholder: 'Unassigned (Open)' })}
+        {f('estimatedHours', 'Estimate (hours)', 'text', { placeholder: 'e.g. 8 or 1.5', required: true })}
         {f('dueDate', 'Due date', 'date')}
-        {f('departmentId', 'Team board', 'select', { options: teams, required: true })}
-        {f('description', 'Description', 'area', { span: 2 })}
         <button type="submit" hidden />
       </form>
       {err && <div className="field-error" role="alert">{err}</div>}
     </Modal>
   );
-}
-
-/** Modules + member options of a project (for the Add task form). */
-function useProjectModules(projectId: string) {
-  const [state, setState] = useState<{ modules: string[]; assignees: { value: string; label: string }[] }>({ modules: [], assignees: [] });
-  useEffect(() => {
-    let live = true;
-    if (!projectId) return;
-    workApi
-      .project(projectId)
-      .then((p) => {
-        if (!live) return;
-        const assignees = p.members.map((m) => ({ value: m.employeeId, label: m.name }));
-        if (p.leadEmployeeId && !assignees.some((a) => a.value === p.leadEmployeeId)) assignees.unshift({ value: p.leadEmployeeId, label: p.leadName ?? 'Lead' });
-        setState({ modules: p.modules.filter((m) => !m.isArchived).map((m) => m.name), assignees });
-      })
-      .catch(() => live && setState({ modules: [], assignees: [] }));
-    return () => {
-      live = false;
-    };
-  }, [projectId]);
-  return state;
 }

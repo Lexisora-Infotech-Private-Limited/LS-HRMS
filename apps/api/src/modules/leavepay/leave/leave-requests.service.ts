@@ -30,6 +30,7 @@ import { LeaveLedgerService } from './leave-ledger.service';
 import {
   ACTIVE_STATUSES,
   DEFAULT_LEAVE_SETTINGS,
+  LATE_ARRIVAL,
   LEAVE_SETTINGS_KEY,
   requestDatesLabel,
   requestInclude,
@@ -38,7 +39,9 @@ import {
   type Viewer,
 } from './leave.common';
 
-type ApplyCore = Omit<LeaveApplyInput, 'notifyEmployeeIds'> & { notifyEmployeeIds?: string[] };
+export type ApplyCore = Omit<LeaveApplyInput, 'notifyEmployeeIds'> & { notifyEmployeeIds?: string[] };
+
+const LATE_HALF_DAY_LOCKED = 'This half day was booked for a late arrival · ask your manager to excuse the late mark (My attendance → Fix) and it is removed automatically';
 
 type Computed = {
   preview: LeavePreview;
@@ -114,6 +117,11 @@ export class LeaveRequestsService {
     return b.available;
   }
 
+  /** Available balance of a (non comp-off) type in a leave year. */
+  availableFor(employeeId: string, leaveTypeId: string, year: number): Promise<number> {
+    return this.balanceAvailable(employeeId, leaveTypeId, year);
+  }
+
   // ── balances / history / upcoming ─────────────────────────────────────
 
   async balances(employeeId: string, year = yearOf(todayKey())): Promise<LeaveBalanceView[]> {
@@ -141,6 +149,12 @@ export class LeaveRequestsService {
         if (t.accrualFrequency === 'MONTHLY' && more > 0 && year === yearOf(today)) metas.push(`${fmtDays(more)} more accruing by Dec`);
       }
       if (b.pending > 0) metas.push(`${fmtDays(b.pending)} pending approval`);
+      // Late-mark penalties booked by payroll (see PayrollService.bookLatePenalties).
+      const penalty = await this.prisma.leaveLedgerEntry.aggregate({ where: { employeeId, leaveTypeId: t.id, leaveYear: year, batchId: { startsWith: 'late-penalty:' } }, _sum: { days: true } });
+      if ((penalty._sum.days ?? 0) < 0) metas.push(`${fmtDays(-(penalty._sum.days ?? 0))} taken for late marks`);
+      // Half days attendance booked for late arrivals (LeaveLateArrivalService).
+      const lateHalf = await this.prisma.leaveRequest.aggregate({ where: { employeeId, leaveTypeId: t.id, autoReason: LATE_ARRIVAL, status: { in: ['APPROVED', 'CANCELLATION_PENDING'] }, fromDate: { gte: dd(`${year}-01-01`), lte: dd(`${year}-12-31`) } }, _sum: { days: true } });
+      if ((lateHalf._sum.days ?? 0) > 0) metas.push(`${fmtDays(lateHalf._sum.days ?? 0)} for late arrival`);
       out.push({ leaveTypeId: t.id, code: t.code, name: t.name, available, total, pending: b.pending, availed: b.availed, opening: b.opening, isCompOff: t.isCompOff, allowHalfDay: t.allowHalfDay, meta: metas.length ? metas.join(' · ') : null });
     }
     return out;
@@ -179,7 +193,7 @@ export class LeaveRequestsService {
 
   // ── preview / apply ───────────────────────────────────────────────────
 
-  private async compute(employeeId: string, input: ApplyCore, opts: { onBehalf: boolean; excludeRequestId?: string }): Promise<Computed> {
+  private async compute(employeeId: string, input: ApplyCore, opts: { onBehalf: boolean; excludeRequestId?: string; system?: boolean }): Promise<Computed> {
     const today = todayKey();
     const emp = await this.prisma.employee.findUnique({ where: { id: employeeId }, select: { id: true, fullName: true, managerId: true, userId: true, employmentType: true, status: true, exitDate: true } });
     if (!emp) throw notFound('Employee');
@@ -286,7 +300,8 @@ export class LeaveRequestsService {
     }
 
     const approver = await this.resolveApprover(emp);
-    if (!approver) blocks.push('No approver is configured; ask HR to set your Reporting Manager');
+    // System-booked requests are approved at once and need no approver.
+    if (!approver && !opts.system) blocks.push('No approver is configured; ask HR to set your Reporting Manager');
 
     const balanceAfter = round2(available - paid);
     const parts = [`${fmtDays(ex.totalDays)} ${ex.totalDays === 1 ? 'day' : 'days'}`];
@@ -336,8 +351,8 @@ export class LeaveRequestsService {
     return req;
   }
 
-  private async create(employeeId: string, input: ApplyCore, opts: { onBehalf: boolean }): Promise<LeaveRequestRow> {
-    const c = await this.compute(employeeId, input, opts);
+  private async create(employeeId: string, input: ApplyCore, opts: { onBehalf: boolean; system?: { autoReason: string } }): Promise<LeaveRequestRow> {
+    const c = await this.compute(employeeId, input, { ...opts, system: !!opts.system });
     if (c.preview.blocks.length) throw new AppError(422, 'LEAVE_BLOCKED', c.preview.blocks[0]!, { blocks: c.preview.blocks });
     if (c.type.documentRequiredAfterDays && c.preview.totalDays > c.type.documentRequiredAfterDays && !input.attachmentFileId && !opts.onBehalf) {
       throw new AppError(422, 'LEAVE_BLOCKED', `Attach a supporting document for more than ${fmtDays(c.type.documentRequiredAfterDays)} days`);
@@ -346,9 +361,9 @@ export class LeaveRequestsService {
     const year = yearOf(input.fromDate);
     const requestNo = await this.seq.next('leave.request', { prefix: `LV-${year}-`, pad: 5, period: String(year) });
     const single = input.fromDate === input.toDate;
-    const approver = c.preview.approver!;
+    const approver = c.preview.approver;
     const approverRow = await this.resolveApprover(c.emp);
-    const notify = [...new Set((input.notifyEmployeeIds ?? []).filter((x) => x !== approver.id && x !== employeeId))];
+    const notify = [...new Set((input.notifyEmployeeIds ?? []).filter((x) => x !== approver?.id && x !== employeeId))];
     const req = await this.prisma.leaveRequest.create({
       data: {
         requestNo,
@@ -367,8 +382,9 @@ export class LeaveRequestsService {
         reason: input.reason || null,
         attachmentFileId: input.attachmentFileId ?? null,
         status: 'PENDING',
-        approverEmployeeId: approver.id,
-        approverSource: opts.onBehalf ? 'HR_ON_BEHALF' : (approverRow?.source ?? 'RM'),
+        approverEmployeeId: approver?.id ?? null,
+        approverSource: opts.system ? 'SYSTEM' : opts.onBehalf ? 'HR_ON_BEHALF' : (approverRow?.source ?? 'RM'),
+        autoReason: opts.system?.autoReason ?? null,
         notifyEmployeeIds: notify,
         appliedByUserId: ctx.userId ?? null,
       } as any,
@@ -377,7 +393,7 @@ export class LeaveRequestsService {
     await this.recomputeYears(employeeId, c.type.id, c.days);
     await this.audit.record({ action: opts.onBehalf ? 'leave.request.applied_on_behalf' : 'leave.request.submitted', entity: 'LeaveRequest', entityId: req.id, meta: { requestNo, days: req.days, type: c.type.code, from: input.fromDate, to: input.toDate } });
     const label = `${c.type.name} · ${requestDatesLabel(req.fromDate, req.toDate, req.halfDay)} (${fmtDays(req.days)} ${req.days === 1 ? 'day' : 'days'})`;
-    if (!opts.onBehalf) {
+    if (!opts.onBehalf && approver) {
       const approverUsers = await this.notifications.usersForEmployees([approver.id]);
       await this.notifications.notify({ userIds: approverUsers, type: 'leave.request', title: `Time-off request from ${c.emp.fullName}`, body: `${label}${req.reason ? ` · ${req.reason}` : ''}`, link: '/leave?tab=team', from: c.emp.fullName, email: true });
       const ccUsers = await this.notifications.usersForEmployees(notify);
@@ -462,7 +478,28 @@ export class LeaveRequestsService {
     await this.prisma.payrollItem.updateMany({ where: { runId: { in: runs.map((r) => r.id) }, employeeId, status: { in: ['READY', 'TIMESHEET_PENDING', 'ON_HOLD'] } }, data: { status: 'STALE' } });
   }
 
-  async approve(id: string, comment?: string, opts?: { onBehalf?: boolean }): Promise<LeaveRequestRow> {
+  /**
+   * A request the system books for an employee and approves at once (the late-arrival half day).
+   * Runs without an approver; `by` is shown as the decider.
+   */
+  async applySystem(employeeId: string, input: ApplyCore, autoReason: string, by: string): Promise<LeaveRequestRow> {
+    const req = await this.create(employeeId, input, { onBehalf: true, system: { autoReason } });
+    return this.approve(req.id, undefined, { onBehalf: true, system: { by } });
+  }
+
+  /** Undo a system-booked request (its reason went away: late mark excused, punch corrected). */
+  async cancelSystem(id: string, reason: string): Promise<void> {
+    const r = await this.load(id);
+    if (r.status === 'PENDING') {
+      await this.prisma.leaveRequest.update({ where: { id }, data: { status: 'WITHDRAWN', decidedAt: new Date(), cancelReason: reason, version: { increment: 1 } } });
+      await this.recomputeYears(r.employeeId, r.leaveTypeId, (r.dayBreakdown as BreakdownDay[]) ?? []);
+      this.events.emit('leave.decided', { requestId: r.id, employeeId: r.employeeId, status: 'WITHDRAWN' });
+    } else if (r.status === 'APPROVED' || r.status === 'CANCELLATION_PENDING') {
+      await this.doCancel(r, reason);
+    }
+  }
+
+  async approve(id: string, comment?: string, opts?: { onBehalf?: boolean; system?: { by: string } }): Promise<LeaveRequestRow> {
     const r = await this.load(id);
     if (r.status !== 'PENDING') throw new AppError(409, 'LEAVE_STATE', 'This request is no longer pending');
     this.assertDecider(r, opts);
@@ -476,7 +513,7 @@ export class LeaveRequestsService {
       if (res.shortfall > 0) throw new AppError(422, 'LEAVE_BLOCKED', 'Not enough comp-off balance left for this request');
       consumed = res.consumed;
     }
-    const upd = await this.prisma.leaveRequest.updateMany({ where: { id, version: r.version, status: 'PENDING' }, data: { status: 'APPROVED', decidedAt: new Date(), decidedByName: ctx.userName ?? 'HR', decisionNote: comment || null, version: { increment: 1 } } });
+    const upd = await this.prisma.leaveRequest.updateMany({ where: { id, version: r.version, status: 'PENDING' }, data: { status: 'APPROVED', decidedAt: new Date(), decidedByName: opts?.system?.by ?? ctx.userName ?? 'HR', decisionNote: comment || null, version: { increment: 1 } } });
     if (!upd.count) throw new AppError(409, 'CONFLICT', 'This request was changed by someone else; refresh and try again');
     await this.prisma.leaveRequestDay.createMany({
       data: days.map((d) => ({ requestId: r.id, employeeId: r.employeeId, leaveTypeId: r.leaveTypeId, date: dd(d.date), session: d.session, dayKind: d.kind, units: d.units, isSandwich: d.isSandwich, isPaid: d.isPaid, leaveYear: yearOf(d.date), active: true })) as any,
@@ -494,9 +531,12 @@ export class LeaveRequestsService {
     }
     await this.recomputeYears(r.employeeId, r.leaveTypeId, days);
     await this.markPayrollStale(r.employeeId, days.map((d) => d.date));
-    await this.audit.record({ action: opts?.onBehalf ? 'leave.request.approved_on_behalf' : 'leave.request.approved', entity: 'LeaveRequest', entityId: r.id, meta: { from: 'PENDING', to: 'APPROVED', days: r.days } });
-    const users = await this.notifications.usersForEmployees([r.employeeId]);
-    await this.notifications.notify({ userIds: users, type: 'leave.decided', title: `Your ${r.leaveType.name.toLowerCase()} (${requestDatesLabel(r.fromDate, r.toDate, r.halfDay)}) was approved`, body: comment || undefined, link: '/leave', from: ctx.userName ?? 'Reporting Manager', email: true });
+    await this.audit.record({ action: opts?.system ? 'leave.request.system_booked' : opts?.onBehalf ? 'leave.request.approved_on_behalf' : 'leave.request.approved', entity: 'LeaveRequest', entityId: r.id, meta: { from: 'PENDING', to: 'APPROVED', days: r.days } });
+    // System bookings send their own, specific notification.
+    if (!opts?.system) {
+      const users = await this.notifications.usersForEmployees([r.employeeId]);
+      await this.notifications.notify({ userIds: users, type: 'leave.decided', title: `Your ${r.leaveType.name.toLowerCase()} (${requestDatesLabel(r.fromDate, r.toDate, r.halfDay)}) was approved`, body: comment || undefined, link: '/leave', from: ctx.userName ?? 'Reporting Manager', email: true });
+    }
     this.events.emit('leave.decided', { requestId: r.id, employeeId: r.employeeId, status: 'APPROVED' });
     return (await this.rows([await this.prisma.leaveRequest.findUniqueOrThrow({ where: { id }, include: requestInclude })]))[0]!;
   }
@@ -520,6 +560,7 @@ export class LeaveRequestsService {
     const r = await this.load(id);
     const me = requireContext().employeeId;
     if (r.employeeId !== me) throw forbidden('Only the applicant can withdraw a request');
+    if (r.autoReason) throw forbidden(LATE_HALF_DAY_LOCKED);
     if (r.status !== 'PENDING') throw new AppError(409, 'LEAVE_STATE', 'Only pending requests can be withdrawn');
     await this.prisma.leaveRequest.update({ where: { id }, data: { status: 'WITHDRAWN', decidedAt: new Date(), version: { increment: 1 } } });
     await this.recomputeYears(r.employeeId, r.leaveTypeId, (r.dayBreakdown as BreakdownDay[]) ?? []);
@@ -537,6 +578,7 @@ export class LeaveRequestsService {
     const isHr = hasPerm(ctx, 'leave.manage');
     const own = r.employeeId === ctx.employeeId;
     if (!own && !isHr) throw forbidden();
+    if (r.autoReason && !isHr) throw forbidden(LATE_HALF_DAY_LOCKED);
     if (r.status === 'PENDING' && own) return this.withdraw(id);
     if (r.status !== 'APPROVED') throw new AppError(409, 'LEAVE_STATE', 'Only approved requests can be cancelled');
     if (isHr || dk(r.fromDate) > todayKey()) return this.doCancel(r, reason);
@@ -651,6 +693,7 @@ export class LeaveRequestsService {
           appliedOn: g.createdAt.toISOString(),
           decidedAt: null,
           decisionNote: null,
+          autoReason: null,
           can: { withdraw: false, cancel: false, requestCancel: false, approve: true, reject: true, decideCancellation: false },
           kind: 'COMP_OFF',
           balanceAfter: null,

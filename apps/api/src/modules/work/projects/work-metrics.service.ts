@@ -3,7 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { NotificationsService } from '../../../core/notifications/notifications.service';
 import { currentTenantId, runAsTenant } from '../../../core/context/request-context';
-import { computeHealth, computeProgress, type ProjectStatus, type TaskStatus } from '../work.rules';
+import { computeHealth, computeProgress, crossedEstimate, type ProjectStatus, type TaskStatus } from '../work.rules';
 import { todayDate } from '../work.util';
 
 type Delegate = { findMany: (args: any) => Promise<any[]> } | undefined;
@@ -11,10 +11,15 @@ type Delegate = { findMany: (args: any) => Promise<any[]> } | undefined;
 /**
  * Logged minutes, progress and health.
  *
- * Tracked time comes from the time domain's TimesheetCell (finalMinutes of lines tagged with a task)
- * and, for days without a timesheet cell, the tracker's ActivitySegment (WORK / IDLE_WORK / claimed idle).
- * Both are spine models read directly via Prisma (read-only). `openingLoggedMinutes` holds hours logged
- * before tracking went live. Recomputed nightly and on read (throttled).
+ * Time spent on a task (idle excluded) =
+ *     Σ tracker WORK segments on the task (exact seconds — the live source the desktop tracker shows)
+ *   + Σ over the task's timesheet cells of (finalMinutes − trackedMinutes)
+ *       → what the timesheet counts beyond tracker work: approved idle claims, accepted outside hours,
+ *         manual adjustments (positive or negative)
+ *   + openingLoggedMinutes (hours logged before tracking went live).
+ * So a day the employee edited down to 0 stays 0, and claims waiting for review don't count yet.
+ * ActivitySegment / TimesheetCell are spine models read directly via Prisma (read-only).
+ * Recomputed nightly, on task changes and on read (throttled).
  */
 @Injectable()
 export class WorkMetricsService {
@@ -32,16 +37,29 @@ export class WorkMetricsService {
     return d && typeof d.findMany === 'function' ? d : undefined;
   }
 
-  /** Tracked minutes per task, keyed by taskId (and per task+employee+date for interns). */
-  async trackedByTask(taskIds: string[]): Promise<{ byTask: Map<string, number>; byTaskEmpDay: Map<string, number> }> {
+  /**
+   * Seconds spent per task (without openingLoggedMinutes), and per `${taskId}|${employeeId}|${date}`.
+   * See the class comment for the formula.
+   */
+  async spentSecondsByTask(taskIds: string[]): Promise<{ byTask: Map<string, number>; byTaskEmpDay: Map<string, number> }> {
     const byTask = new Map<string, number>();
     const byTaskEmpDay = new Map<string, number>();
     if (!taskIds.length) return { byTask, byTaskEmpDay };
-    const covered = new Set<string>();
-    const add = (k: string, taskId: string, min: number) => {
-      byTaskEmpDay.set(k, (byTaskEmpDay.get(k) ?? 0) + min);
-      byTask.set(taskId, (byTask.get(taskId) ?? 0) + min);
+    const add = (taskId: string, employeeId: string, date: Date, sec: number) => {
+      if (!sec) return;
+      const k = `${taskId}|${employeeId}|${date.toISOString().slice(0, 10)}`;
+      byTaskEmpDay.set(k, (byTaskEmpDay.get(k) ?? 0) + sec);
+      byTask.set(taskId, (byTask.get(taskId) ?? 0) + sec);
     };
+    try {
+      const segD = this.delegate('activitySegment');
+      if (segD) {
+        const segs = await segD.findMany({ where: { taskId: { in: taskIds }, kind: 'WORK' }, select: { taskId: true, employeeId: true, workDate: true, durationSec: true } });
+        for (const s of segs) add(s.taskId, s.employeeId, s.workDate as Date, s.durationSec ?? 0);
+      }
+    } catch (e) {
+      this.log.debug(`tracker read skipped: ${(e as Error).message}`);
+    }
     try {
       const lineD = this.delegate('timesheetLine');
       const cellD = this.delegate('timesheetCell');
@@ -52,40 +70,26 @@ export class WorkMetricsService {
           const sheets = await sheetD.findMany({ where: { id: { in: [...new Set(lines.map((l) => l.timesheetId))] } }, select: { id: true, employeeId: true } });
           const empOf = new Map(sheets.map((s) => [s.id, s.employeeId as string]));
           const lineOf = new Map(lines.map((l) => [l.id, l]));
-          const cells = await cellD.findMany({ where: { lineId: { in: lines.map((l) => l.id) } }, select: { lineId: true, date: true, finalMinutes: true } });
+          const cells = await cellD.findMany({ where: { lineId: { in: lines.map((l) => l.id) } }, select: { lineId: true, date: true, finalMinutes: true, trackedMinutes: true } });
           for (const c of cells) {
             const l = lineOf.get(c.lineId);
-            if (!l || !c.finalMinutes) continue;
-            const k = `${l.taskId}|${empOf.get(l.timesheetId)}|${(c.date as Date).toISOString().slice(0, 10)}`;
-            covered.add(k);
-            add(k, l.taskId, c.finalMinutes);
+            const emp = l ? empOf.get(l.timesheetId) : undefined;
+            if (!l || !emp) continue;
+            add(l.taskId, emp, c.date as Date, ((c.finalMinutes ?? 0) - (c.trackedMinutes ?? 0)) * 60);
           }
         }
       }
     } catch (e) {
       this.log.debug(`timesheet read skipped: ${(e as Error).message}`);
     }
-    try {
-      const segD = this.delegate('activitySegment');
-      if (segD) {
-        const segs = await segD.findMany({
-          where: { taskId: { in: taskIds }, OR: [{ kind: { in: ['WORK', 'IDLE_WORK'] } }, { kind: 'IDLE', idleResolution: 'CLAIMED_WORK' }] },
-          select: { taskId: true, employeeId: true, workDate: true, durationSec: true },
-        });
-        const acc = new Map<string, { taskId: string; sec: number }>();
-        for (const s of segs) {
-          const k = `${s.taskId}|${s.employeeId}|${(s.workDate as Date).toISOString().slice(0, 10)}`;
-          if (covered.has(k)) continue;
-          const cur = acc.get(k) ?? { taskId: s.taskId, sec: 0 };
-          cur.sec += s.durationSec ?? 0;
-          acc.set(k, cur);
-        }
-        for (const [k, v] of acc) add(k, v.taskId, Math.round(v.sec / 60));
-      }
-    } catch (e) {
-      this.log.debug(`tracker read skipped: ${(e as Error).message}`);
-    }
     return { byTask, byTaskEmpDay };
+  }
+
+  /** Spent minutes per task (and per task+employee+date for interns), without openingLoggedMinutes. */
+  async trackedByTask(taskIds: string[]): Promise<{ byTask: Map<string, number>; byTaskEmpDay: Map<string, number> }> {
+    const s = await this.spentSecondsByTask(taskIds);
+    const min = (m: Map<string, number>) => new Map([...m].map(([k, sec]) => [k, Math.max(0, Math.round(sec / 60))]));
+    return { byTask: min(s.byTask), byTaskEmpDay: min(s.byTaskEmpDay) };
   }
 
   /** Minutes on project-level timesheet lines without a task (count towards the project only). */
@@ -109,7 +113,7 @@ export class WorkMetricsService {
     if (!project) return;
     const tasks = await this.prisma.task.findMany({
       where: { projectId },
-      select: { id: true, status: true, estimatedMinutes: true, isStanding: true, loggedMinutes: true, openingLoggedMinutes: true },
+      select: { id: true, key: true, title: true, departmentId: true, assigneeEmployeeId: true, status: true, estimatedMinutes: true, isStanding: true, loggedMinutes: true, openingLoggedMinutes: true },
     });
     const { byTask } = await this.trackedByTask(tasks.map((t) => t.id));
     let logged = project.openingLoggedMinutes + (await this.projectOnlyMinutes(projectId));
@@ -117,6 +121,9 @@ export class WorkMetricsService {
       const m = t.openingLoggedMinutes + (byTask.get(t.id) ?? 0);
       logged += m;
       if (m !== t.loggedMinutes) await this.prisma.task.update({ where: { id: t.id }, data: { loggedMinutes: m } });
+      if (!t.isStanding && t.status !== 'DONE' && t.status !== 'CANCELLED' && crossedEstimate(t.loggedMinutes, m, t.estimatedMinutes)) {
+        await this.notifyOverEstimate(project, t, m).catch((e) => this.log.warn(`over-estimate notice ${t.key}: ${(e as Error).message}`));
+      }
     }
     const progressPct = project.isSystem ? 0 : computeProgress(tasks.map((t) => ({ status: t.status as TaskStatus, estimatedMinutes: t.estimatedMinutes, isStanding: t.isStanding })), project.estimatedMinutes);
     const { health, reason } = project.isSystem
@@ -137,6 +144,25 @@ export class WorkMetricsService {
       });
     }
     this.lastProjectRun.set(projectId, Date.now());
+  }
+
+  /** Logged time reached the estimate: tell the assignee and the project lead (once per crossing). */
+  private async notifyOverEstimate(
+    project: { id: string; leadEmployeeId: string | null },
+    t: { id: string; key: string; title: string; departmentId: string | null; assigneeEmployeeId: string | null; estimatedMinutes: number | null },
+    loggedMinutes: number,
+  ) {
+    const hours = (m: number) => `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ''}`;
+    const userIds = await this.notifications.usersForEmployees([...new Set([t.assigneeEmployeeId, project.leadEmployeeId])]);
+    if (!userIds.length) return;
+    await this.notifications.notify({
+      userIds,
+      type: 'task.overEstimate',
+      title: `${t.key} reached its estimate: ${hours(loggedMinutes)} of ${hours(t.estimatedMinutes ?? 0)}`,
+      body: `${t.title} · re-estimate or wrap it up`,
+      link: `/board?project=${project.id}&board=${t.departmentId ?? ''}&task=${t.id}`,
+      from: 'Projects',
+    });
   }
 
   async recomputeProjectIfStale(projectId: string, maxAgeMs = 60_000) {

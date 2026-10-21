@@ -283,6 +283,45 @@ export function consumeCompOff(
   return { consumed, shortfall: round2(left) };
 }
 
+export type CompOffRule = { fullDayMinutes: number; halfDayMinutes: number };
+
+/** Comp-off a day of work on a weekly off / holiday earns: 1 from the full-day threshold, ½ from the half-day threshold. */
+export function compOffUnitsFor(minutes: number, rule: CompOffRule): number {
+  if (minutes >= rule.fullDayMinutes) return 1;
+  if (minutes >= rule.halfDayMinutes) return 0.5;
+  return 0;
+}
+
+/** Weekly offs / holidays in an approved timesheet that earn comp-off (`minutesByDate` = the day's total across rows). */
+export function compOffEarned(minutesByDate: Map<DateKey, number>, calendar: CalendarFn, rule: CompOffRule): { date: DateKey; minutes: number; units: number; kind: DayKind; holidayName?: string }[] {
+  const out: { date: DateKey; minutes: number; units: number; kind: DayKind; holidayName?: string }[] = [];
+  for (const [date, minutes] of [...minutesByDate].sort(([a], [b]) => (a < b ? -1 : 1))) {
+    const day = calendar(date);
+    if (day.kind === 'WORKING') continue;
+    const units = compOffUnitsFor(minutes, rule);
+    if (units > 0) out.push({ date, minutes, units, kind: day.kind, ...(day.holidayName ? { holidayName: day.holidayName } : {}) });
+  }
+  return out;
+}
+
+export type AutoCompOffPlan = { action: 'CREATE' } | { action: 'APPROVE_PENDING'; grantId: string } | { action: 'TOP_UP'; grantId: string; delta: number } | { action: 'SKIP'; reason: string };
+
+/**
+ * What an approved timesheet does to the worked date's comp-off. Idempotent: re-approving the
+ * same week only tops up, a pending request for the date is approved with the earned units,
+ * and a timesheet grant HR cancelled stays cancelled.
+ */
+export function planAutoCompOff(grants: { id: string; status: string; units: number; source: string }[], units: number, expiresOn: DateKey, today: DateKey): AutoCompOffPlan {
+  if (units <= 0) return { action: 'SKIP', reason: 'not enough hours' };
+  if (expiresOn < today) return { action: 'SKIP', reason: 'would already be expired' };
+  const live = grants.find((g) => g.status !== 'REJECTED' && g.status !== 'CANCELLED');
+  if (!live) return grants.some((g) => g.status === 'CANCELLED' && g.source === 'TIMESHEET') ? { action: 'SKIP', reason: 'cancelled by HR' } : { action: 'CREATE' };
+  if (live.status === 'PENDING') return { action: 'APPROVE_PENDING', grantId: live.id };
+  if (live.status === 'EXPIRED') return { action: 'SKIP', reason: 'expired' };
+  if (live.units >= units) return { action: 'SKIP', reason: 'already credited' };
+  return { action: 'TOP_UP', grantId: live.id, delta: round2(units - live.units) };
+}
+
 export function round2(x: number): number {
   return Math.round(x * 100) / 100;
 }

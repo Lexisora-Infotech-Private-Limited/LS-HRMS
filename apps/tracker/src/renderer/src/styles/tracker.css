@@ -483,6 +483,11 @@ img {
   line-height: 1.2;
   font-variant-numeric: tabular-nums;
 }
+.tw-kpi-note {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--color-neutral-600);
+}
 .tw-timeline {
   display: flex;
   height: 18px;

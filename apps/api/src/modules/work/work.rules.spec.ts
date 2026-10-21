@@ -1,12 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
+  allowedMoves,
   boardAccess,
   branchName,
   canMoveTask,
   computeHealth,
   computeProgress,
+  crossedEstimate,
+  gitNote,
   meanScore,
   moveMessage,
+  timerAction,
+  timerStartMessage,
+  timerStopMessage,
   mrTitle,
   nextWorkingDay,
   planTransition,
@@ -22,6 +28,16 @@ import { StubGitAdapter } from './adapters/git-stub.adapter';
 const now = new Date('2026-09-29T06:00:00Z');
 const d = (k: string) => new Date(`${k}T00:00:00Z`);
 const H = (h: number) => h * 60;
+
+describe('estimate reached', () => {
+  it('fires once, when logged time crosses 100% of the estimate', () => {
+    expect(crossedEstimate(H(7.5), H(8), H(8))).toBe(true);
+    expect(crossedEstimate(H(7), H(9), H(8))).toBe(true);
+    expect(crossedEstimate(H(8), H(9), H(8))).toBe(false); // already over: no repeat
+    expect(crossedEstimate(H(6), H(7), H(8))).toBe(false);
+    expect(crossedEstimate(0, H(3), null)).toBe(false); // no estimate
+  });
+});
 
 describe('planTransition — git side effects', () => {
   const base = { hasRepo: true, assigneeEmployeeId: 'e1', moverEmployeeId: 'e1', startedAt: null, now };
@@ -69,20 +85,84 @@ describe('planTransition — git side effects', () => {
 });
 
 describe('moveMessage — wireframe toasts', () => {
-  it('Dev Completed with a synced MR', () => {
+  it('Dev completed with a synced MR', () => {
     expect(moveMessage('AT-102', 'DEV_COMPLETED', { action: 'mr', status: 'SYNCED', branch: 'feature/at-102' })).toBe(
-      'AT-102 → Dev Completed · pushed to GitLab (feature/at-102)',
+      'AT-102 → Dev completed · pushed to GitLab (feature/at-102)',
     );
   });
-  it('WIP with a new branch', () => {
+  it('In progress with a new branch', () => {
     expect(moveMessage('AT-103', 'WIP', { action: 'branch', status: 'SYNCED', branch: 'feature/at-103', targetBranch: 'develop' })).toBe(
-      'AT-103 → WIP · branch feature/at-103 created from develop',
+      'AT-103 → In progress · branch feature/at-103 created from develop',
     );
   });
   it('Mark done and failed sync', () => {
     expect(moveMessage('AT-106', 'DONE', { action: 'none', status: 'NONE' })).toBe('AT-106 closed');
     expect(moveMessage('AT-102', 'DEV_COMPLETED', { action: 'mr', status: 'FAILED' })).toMatch(/sync failed/);
-    expect(moveMessage('AT-104', 'ALLOTTED', { action: 'none', status: 'NONE' })).toBe('AT-104 → Alloted');
+    expect(moveMessage('AT-104', 'ALLOTTED', { action: 'none', status: 'NONE' })).toBe('AT-104 → Allotted');
+  });
+});
+
+describe('move rules — timer', () => {
+  it('starts the timer into In progress (incl. rework) and stops it out of In progress', () => {
+    expect(timerAction('ALLOTTED', 'WIP', false)).toBe('start');
+    expect(timerAction('DEV_COMPLETED', 'WIP', false)).toBe('start');
+    expect(timerAction('QA', 'WIP', false)).toBe('start');
+    expect(timerAction('WIP', 'DEV_COMPLETED', true)).toBe('stop');
+    expect(timerAction('WIP', 'ALLOTTED', false)).toBe('stop');
+    expect(timerAction('WIP', 'QA', false)).toBe('stop');
+    expect(timerAction('DEV_COMPLETED', 'QA', false)).toBe('none');
+    expect(timerAction('OPEN', 'ALLOTTED', false)).toBe('none');
+    // A tracker still timing a card outside In progress is stopped by any move.
+    expect(timerAction('QA', 'DONE', true)).toBe('stop');
+    expect(timerAction('WIP', 'WIP', true)).toBe('none');
+  });
+
+  it('rework clears devCompletedAt and keeps the first startedAt', () => {
+    const p = planTransition({ hasRepo: true, assigneeEmployeeId: 'e1', moverEmployeeId: 'e1', startedAt: d('2026-09-24'), now, from: 'DEV_COMPLETED', to: 'WIP' });
+    expect(p.rework).toBe(true);
+    expect(p.set.devCompletedAt).toBeNull();
+    expect(p.set.startedAt).toBeUndefined();
+    expect(planTransition({ hasRepo: true, assigneeEmployeeId: 'e1', moverEmployeeId: 'e1', startedAt: null, now, from: 'ALLOTTED', to: 'WIP' }).rework).toBe(false);
+  });
+
+  it('toasts say when the timer starts, or why it waits', () => {
+    const ready = { hasDevice: true, punchedIn: true, onBreak: false };
+    expect(timerStartMessage('AT-101', ready, { isMover: true, short: 'Priya S.' })).toBe('Timer started on AT-101');
+    expect(timerStartMessage('AT-101', ready, { isMover: false, short: 'Priya S.' })).toBe('Timer started on AT-101 for Priya S.');
+    expect(timerStartMessage('AT-101', { ...ready, punchedIn: false }, { isMover: true, short: 'Priya S.' })).toBe('AT-101 is In progress · the timer starts when you punch in');
+    expect(timerStartMessage('AT-101', { ...ready, punchedIn: false }, { isMover: false, short: 'Priya S.' })).toBe('AT-101 is In progress · the timer starts when Priya S. punches in');
+    expect(timerStartMessage('AT-101', { ...ready, onBreak: true }, { isMover: true, short: 'Priya S.' })).toBe('AT-101 is In progress · the timer starts when your break ends');
+    expect(timerStartMessage('AT-101', { ...ready, hasDevice: false }, { isMover: true, short: 'Priya S.' })).toMatch(/no desktop tracker/);
+    expect(timerStopMessage('AT-101', '9:45', '8h')).toBe('AT-101 timer stopped · 9:45 used of 8h estimate');
+    expect(timerStopMessage('AT-101', '0:20', null)).toBe('AT-101 timer stopped · 0:20 used');
+  });
+
+  it('gitNote follows the timer toast', () => {
+    expect(gitNote({ action: 'mr', status: 'SYNCED', branch: 'feature/at-101' })).toBe('pushed to GitLab (feature/at-101)');
+    expect(gitNote({ action: 'none', status: 'NONE' })).toBeNull();
+  });
+});
+
+describe('move rules — allowed moves (← / → links)', () => {
+  const base = { canManage: false, canView: true, locked: false, me: 'priya', boardPeople: new Set(['arjun', 'priya']) };
+  it('my own card moves one step either way; the first column has no back step, Done no forward step', () => {
+    expect(allowedMoves({ ...base, status: 'WIP', assigneeEmployeeId: 'priya' })).toEqual(['ALLOTTED', 'DEV_COMPLETED']);
+    expect(allowedMoves({ ...base, status: 'QA', assigneeEmployeeId: 'priya' })).toEqual(['DEV_COMPLETED', 'DONE']);
+    expect(allowedMoves({ ...base, status: 'DONE', assigneeEmployeeId: 'priya' })).toEqual(['QA']);
+  });
+  it("someone else's card: no links for members, all links for the board lead", () => {
+    expect(allowedMoves({ ...base, status: 'WIP', assigneeEmployeeId: 'rahul' })).toEqual([]);
+    expect(allowedMoves({ ...base, canManage: true, status: 'ALLOTTED', assigneeEmployeeId: 'rahul' })).toEqual(['OPEN', 'WIP']);
+  });
+  it('picking up an Open card needs a board member', () => {
+    expect(allowedMoves({ ...base, status: 'OPEN', assigneeEmployeeId: null })).toEqual(['ALLOTTED']);
+    expect(allowedMoves({ ...base, me: 'kavya', status: 'OPEN', assigneeEmployeeId: null })).toEqual([]);
+    expect(allowedMoves({ ...base, canManage: true, me: 'rohit', status: 'OPEN', assigneeEmployeeId: null })).toEqual([]);
+    expect(allowedMoves({ ...base, canManage: true, me: null, status: 'OPEN', assigneeEmployeeId: null })).toEqual([]);
+  });
+  it('a read-only (locked) project or board shows no links', () => {
+    expect(allowedMoves({ ...base, locked: true, status: 'WIP', assigneeEmployeeId: 'priya' })).toEqual([]);
+    expect(allowedMoves({ ...base, canView: false, status: 'WIP', assigneeEmployeeId: 'priya' })).toEqual([]);
   });
 });
 

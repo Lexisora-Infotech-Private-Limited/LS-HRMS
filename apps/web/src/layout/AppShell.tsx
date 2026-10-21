@@ -8,7 +8,7 @@ import { onRealtime } from '@/lib/socket';
 import { useToast } from '@/lib/toast';
 import { Avatar } from '@/components/ui';
 import { IdleWatcher } from '@/modules/time/idle';
-import { PunchButton } from '@/modules/time/punch';
+import { LatePunchDialog, PunchButton } from '@/modules/time/punch';
 import { GlobalSearch } from '@/modules/platform/GlobalSearch';
 
 export function AppShell() {
@@ -75,6 +75,7 @@ export function AppShell() {
           <GlobalSearch />
           <div className="topbar-spacer" style={{ marginLeft: 'auto' }} />
           <PunchButton />
+          <LatePunchDialog />
           <IdleWatcher />
           <button className="btn btn-secondary topbar-alerts" onClick={() => nav('/alerts')}>
             <span>Alerts</span>

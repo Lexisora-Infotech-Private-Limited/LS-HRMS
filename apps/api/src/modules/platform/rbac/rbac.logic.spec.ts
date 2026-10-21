@@ -32,6 +32,7 @@ describe('roles matrix — fresh tenant defaults equal the wireframe (M3 accepta
   it.each([
     ['Mobile app access', { employee: 'none', lead: 'none', manager: 'none', hr: 'all', admin: 'all' }],
     ['Approve timesheets', { employee: 'none', lead: 'all', manager: 'all', hr: 'none', admin: 'all' }],
+    ['Add & edit holidays', { employee: 'none', lead: 'none', manager: 'none', hr: 'all', admin: 'all' }],
     ['View all task boards', { employee: 'none', lead: 'none', manager: 'all', hr: 'none', admin: 'all' }],
     // HR runs payroll but does not own the ledger → documented partial (half fill).
     ['Payroll & ledger', { employee: 'none', lead: 'none', manager: 'none', hr: 'some', admin: 'all' }],
@@ -43,10 +44,11 @@ describe('roles matrix — fresh tenant defaults equal the wireframe (M3 accepta
     expect(cells(label)).toEqual(expected);
   });
 
-  it('covers the 8 wireframe rows in order', () => {
+  it('covers the 8 wireframe rows in order, plus holidays', () => {
     expect(ROLE_MATRIX_ROWS.map((r) => r.label)).toEqual([
       'Mobile app access',
       'Approve timesheets',
+      'Add & edit holidays',
       'View all task boards',
       'Payroll & ledger',
       'Publish global notices',

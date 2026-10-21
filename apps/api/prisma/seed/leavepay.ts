@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from '@prisma/client';
 import type { SeedCtx } from './core';
 import { PrismaService } from '../../src/core/prisma/prisma.service';
 import { CryptoService } from '../../src/core/crypto/crypto.service';
+import { SettingsService } from '../../src/core/settings/settings.service';
 import { runAsTenant } from '../../src/core/context/request-context';
 import { makeCalendar, WorkCalendarService, DEFAULT_WEEKLY_OFFS, type HolidayRow } from '../../src/modules/leavepay/common/calendar.service';
 import { dd, dk, eachDay, monthBounds, type DateKey } from '../../src/modules/leavepay/common/dates';
@@ -293,7 +294,7 @@ export async function seed_leavepay(prisma: PrismaClient, ctx: SeedCtx): Promise
         },
       }) as PrismaService;
       const salarySvc = new SalaryService(svc, crypto, null as any);
-      const engine = new PayrollEngineService(enginePrisma, new WorkCalendarService(svc), salarySvc);
+      const engine = new PayrollEngineService(enginePrisma, new WorkCalendarService(svc), salarySvc, new SettingsService(svc));
 
       const runFor = async (period: string, finalize: boolean) => {
         const b = monthBounds(period);
