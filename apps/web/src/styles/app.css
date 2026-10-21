@@ -47,7 +47,45 @@
   .sidebar.open { transform: none; box-shadow: var(--shadow-lg); }
   .mobile-nav-toggle { display: inline-flex; }
   .topbar, .main { padding-left: 16px; padding-right: 16px; }
+  /* Small screens: one row of menu, Punch in, Alerts and the profile (on the right); the search sits on its own row below.
+     A grid keeps them on one row at any width: the profile shrinks (name shown with "...") instead of wrapping to a new line. */
+  .topbar { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto minmax(0, auto); column-gap: 8px; row-gap: 10px; align-items: center; }
+  .topbar > .mobile-nav-toggle { grid-column: 1; grid-row: 1; }
+  .topbar > .topbar-spacer { display: none; }
+  .topbar > .topbar-punch { grid-column: 3; grid-row: 1; }
+  .topbar > .topbar-alerts { grid-column: 4; grid-row: 1; }
+  .topbar > .topbar-user { grid-column: 5; grid-row: 1; min-width: 0; }
+  .topbar > .pf-search { grid-column: 1 / -1; grid-row: 2; max-width: none; min-width: 0; }
+  .topbar .topbar-punch, .topbar .topbar-alerts { font-size: 12px; padding: 4px 8px; }
+  .topbar .topbar-alerts .count-badge { min-width: 16px; height: 16px; font-size: 10px; padding: 0 4px; }
+  .topbar .mobile-nav-toggle { width: 32px; height: 32px; }
+  .topbar .avatar { width: 28px !important; height: 28px !important; font-size: 12px !important; }
+  .topbar .user-btn { gap: 6px; max-width: 100%; min-width: 0; }
+  .topbar .topbar-user-text { min-width: 0; }
+  .topbar .topbar-user-name { font-size: 12px !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .topbar .topbar-user-role { font-size: 10px !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
+@media (max-width: 400px) {
+  /* Narrow phones: everything stays on one row, with the profile (name and role) on the right; the name is shortened only if it truly does not fit. */
+  .topbar { column-gap: 6px; }
+  .topbar .topbar-punch, .topbar .topbar-alerts { font-size: 11.5px; padding: 4px 7px; }
+  .topbar .mobile-nav-toggle { width: 30px; height: 30px; }
+  .topbar .avatar { width: 26px !important; height: 26px !important; font-size: 11px !important; }
+  .topbar .user-btn { gap: 5px; }
+  .topbar .topbar-user-name { font-size: 11.5px !important; }
+}
+
+/* — table rows as cards on a phone (DataTable mobileCards) — */
+.dt-cards { display: flex; flex-direction: column; gap: 10px; }
+.dt-card { border: 1px solid var(--color-divider); border-radius: 8px; padding: 12px 14px; background: var(--color-bg); }
+.dt-card.clickable { cursor: pointer; }
+.dt-card.clickable:active, .dt-card.clickable:focus-visible { background: color-mix(in srgb, var(--color-text) 5%, transparent); outline: none; }
+.dt-card-title { font-family: var(--font-heading); font-size: 18px; line-height: 1.25; margin-bottom: 6px; }
+.dt-card-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 7px 0; border-top: 1px solid var(--color-divider); font-size: 13.5px; }
+.dt-card-row.full { justify-content: flex-end; }
+.dt-card-label { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-neutral-600); flex: none; }
+.dt-card-value { min-width: 0; text-align: right; overflow-wrap: anywhere; }
+.dt-card-value.num { white-space: nowrap; font-feature-settings: 'tnum'; }
 
 /* — page header — */
 .page-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
@@ -88,9 +126,9 @@
 .toast.error { background: var(--color-danger); }
 
 /* — form grid (modal forms) — */
-.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.form-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
 .form-grid .span-2 { grid-column: 1 / -1; }
-@media (max-width: 560px) { .form-grid { grid-template-columns: 1fr; } }
+@media (max-width: 560px) { .form-grid { grid-template-columns: minmax(0, 1fr); } }
 
 /* — spinner — */
 .spinner { width: 18px; height: 18px; border: 2px solid var(--color-neutral-300); border-top-color: var(--color-accent); border-radius: 50%; animation: spin .8s linear infinite; }

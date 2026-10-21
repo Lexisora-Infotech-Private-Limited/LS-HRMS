@@ -56,7 +56,7 @@ export function ShiftsPage() {
         (shifts.isError ? (
           <ErrorBlock error={shifts.error} retry={() => void shifts.refetch()} />
         ) : (
-          <DataTable<ShiftRow>
+          <DataTable<ShiftRow> mobileCards
             loading={shifts.isLoading}
             rows={shifts.data}
             rowKey={(r) => r.id}
@@ -83,7 +83,7 @@ export function ShiftsPage() {
         (allocs.isError ? (
           <ErrorBlock error={allocs.error} />
         ) : (
-          <DataTable<ShiftAllocationRow>
+          <DataTable<ShiftAllocationRow> mobileCards
             loading={allocs.isLoading}
             rows={allocs.data}
             rowKey={(r) => r.id}
@@ -185,7 +185,7 @@ export function LocationsPage() {
       {q.isError ? (
         <ErrorBlock error={q.error} retry={() => void q.refetch()} />
       ) : (
-        <DataTable<LocationRow>
+        <DataTable<LocationRow> mobileCards
           loading={q.isLoading}
           rows={q.data}
           rowKey={(r) => r.id}
@@ -295,7 +295,7 @@ function LocationDetailModal({ id, onClose, onEdit }: { id: string; onClose: () 
           <div className="kv-row"><span>Geo radius</span><span>{d.geoRadius}{d.geoFenceWebPunch ? ' · checked on web punch' : ''}</span></div>
           <div className="kv-row"><span>Biometric devices</span><span>{d.devices.length ? d.devices.map((x) => `${x.name} (${x.status})`).join(', ') : 'None'}</span></div>
           <div className="time-label">Employees · {d.employeeList.length}</div>
-          <div style={{ maxHeight: 220, overflow: 'auto' }}>
+          <div style={{ maxHeight: 220, overflowY: 'auto', overflowX: 'hidden', scrollbarGutter: 'stable', paddingRight: 8 }}>
             {d.employeeList.map((e) => (
               <div key={e.id} className="kv-row" style={{ fontSize: 13 }}>
                 <span>{e.name} <span className="faint">{e.empCode}</span></span>

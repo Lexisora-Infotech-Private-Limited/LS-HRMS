@@ -1,10 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { createHash } from 'node:crypto';
-import { DEFAULT_PAYSLIP_TEMPLATE, canvasFromBlockDesign, payslipCanvasPreset, payslipCanvasSchema, payslipDesignSchema, payslipTemplateSchema, type PayslipCanvas, type PayslipDesign, type PayslipDetail, type PayslipRow, type PayslipTemplate } from '@lexisora/shared';
+import { createHash, randomBytes } from 'node:crypto';
+import { DEFAULT_PAYSLIP_TEMPLATE, canvasFromBlockDesign, payslipCanvasPreset, payslipCanvasSchema, payslipDesignSchema, payslipTemplateSchema, type PayslipCanvas, type PayslipDesign, type PayslipDetail, type PayslipRow, type PayslipTemplate, type PayslipTemplateDto, type PayslipTemplatesView } from '@lexisora/shared';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { getContext, requireContext } from '../../../core/context/request-context';
 import { hasPerm } from '../../../core/auth/decorators';
-import { forbidden, notFound } from '../../../core/http/errors';
+import { badRequest, forbidden, notFound } from '../../../core/http/errors';
 import { AuditService } from '../../../core/audit/audit.service';
 import { CryptoService } from '../../../core/crypto/crypto.service';
 import { NotificationsService } from '../../../core/notifications/notifications.service';
@@ -17,7 +17,27 @@ import { logoFromDataUrl, pdfMoney, renderPayslip, samplePayslip } from './paysl
 
 export { pdfMoney };
 
-const TEMPLATE_KEY = 'payroll.payslipTemplate';
+/** The earlier single-design setting, read once to carry an existing design over as the first saved template. */
+const OLD_TEMPLATE_KEY = 'payroll.payslipTemplate';
+const TEMPLATES_KEY = 'payroll.payslipTemplates';
+type StoredPayslipTemplate = { id: string; name: string; design: PayslipCanvas };
+/** `byStructure` maps a salary structure to the payslip template it uses; anything not listed uses the default. */
+type StoredPayslipTemplates = { items: StoredPayslipTemplate[]; defaultId: string; byStructure: Record<string, string> };
+
+/** Pay component names the editor offers for renaming or always showing: those in the salary structures, plus the standard statutory deductions. */
+function componentNames(structureLines: unknown[]): { earnings: string[]; deductions: string[] } {
+  const earnings: string[] = [];
+  const deductions: string[] = ['Provident fund', 'ESI', 'Professional tax', 'Income tax (TDS)'];
+  const add = (list: string[], name: string) => {
+    if (name && !list.some((x) => x.toLowerCase() === name.toLowerCase())) list.push(name);
+  };
+  for (const lines of structureLines) {
+    for (const l of Array.isArray(lines) ? (lines as { componentCode?: string; label?: string; kind?: string }[]) : []) {
+      add(l.kind === 'DEDUCTION' ? deductions : earnings, (l.label ?? l.componentCode ?? '').trim());
+    }
+  }
+  return { earnings, deductions };
+}
 
 export function toPayslipRow(p: { id: string; period: string; runType: string; workingDays: number; paidDays: number; idleDeductionPaise: number; netPaise: number; grossPaise: number; status: string }): PayslipRow {
   return { id: p.id, period: p.period, month: periodLabel(p.period), runType: p.runType, workingDays: p.workingDays, paidDays: p.paidDays, idleDeductionPaise: p.idleDeductionPaise, netPaise: p.netPaise, grossPaise: p.grossPaise, status: p.status };
@@ -112,13 +132,9 @@ export class PayslipService {
     };
   }
 
-  /**
-   * The company's stored design: a v3 canvas design, a v2 block design, or the older settings-style template (also the
-   * default until they customise). Payslips keep rendering with whichever is stored, so nothing changes until a company
-   * saves a new design.
-   */
-  async template(): Promise<PayslipTemplate | PayslipDesign | PayslipCanvas> {
-    const raw = await this.settings.get<unknown>(TEMPLATE_KEY, null);
+  /** The single design older companies saved (a v3 canvas, a v2 block design, or the settings-style template). */
+  private async oldTemplate(): Promise<PayslipTemplate | PayslipDesign | PayslipCanvas> {
+    const raw = await this.settings.get<unknown>(OLD_TEMPLATE_KEY, null);
     const version = raw && typeof raw === 'object' ? (raw as { version?: number }).version : undefined;
     if (version === 3) {
       const r = payslipCanvasSchema.safeParse(raw);
@@ -132,15 +148,46 @@ export class PayslipService {
     return r.success ? r.data : DEFAULT_PAYSLIP_TEMPLATE;
   }
 
-  /** The design for the editor, always as a canvas. `legacy` = still an older design (the editor starts from its closest template). */
-  async designView(): Promise<{ design: PayslipCanvas; legacy: boolean; companyLogo: string | null; company: { name: string; address: string | null; pan: string | null } }> {
-    const t = await this.template();
-    const design = 'elements' in t ? t : 'blocks' in t ? canvasFromBlockDesign(t) : payslipCanvasPreset(t.layout, t.accentColor);
+  private async loadTemplates(): Promise<StoredPayslipTemplates> {
+    const saved = await this.settings.get<StoredPayslipTemplates | null>(TEMPLATES_KEY, null);
+    // Designs saved before an option existed lack its field; parsing fills the default so editing and the PDF never meet a missing one.
+    if (saved?.items?.length) return { items: saved.items.map((t) => ({ ...t, design: payslipCanvasSchema.safeParse(t.design).data ?? t.design })), defaultId: saved.defaultId, byStructure: saved.byStructure ?? {} };
+    // First use: the design the company already had becomes "Default", next to the branded starter.
+    const t = await this.oldTemplate();
+    const design: PayslipCanvas = 'elements' in t ? t : 'blocks' in t ? canvasFromBlockDesign(t) : { ...payslipCanvasPreset(t.layout, t.accentColor), logoMode: t.logoMode, customLogo: t.customLogo };
+    return { items: [{ id: 'default', name: 'Default', design }, { id: 'branded', name: 'Branded summary', design: payslipCanvasPreset('BRANDED') }], defaultId: 'default', byStructure: {} };
+  }
+
+  private async persistTemplates(v: StoredPayslipTemplates) {
+    await this.settings.set(TEMPLATES_KEY, v);
+  }
+
+  /** The template a payslip is drawn with: the one set for the employee's salary structure at that time, else the default. */
+  private pickTemplate(set: StoredPayslipTemplates, structureId: string | null | undefined): StoredPayslipTemplate {
+    const id = structureId ? set.byStructure[structureId] : undefined;
+    return set.items.find((t) => t.id === id) ?? set.items.find((t) => t.id === set.defaultId) ?? set.items[0]!;
+  }
+
+  private async structureOf(employeeId: string, year: number, month: number): Promise<string | null> {
+    const end = new Date(Date.UTC(year, month, 0));
+    const sal = await this.prisma.employeeSalary.findFirst({ where: { employeeId, effectiveFrom: { lte: end } }, orderBy: { effectiveFrom: 'desc' }, select: { templateId: true } });
+    return sal?.templateId ?? null;
+  }
+
+  async templatesView(): Promise<PayslipTemplatesView> {
+    const set = await this.loadTemplates();
+    const structures = await this.prisma.salaryTemplate.findMany({ where: { active: true }, select: { id: true, name: true, lines: true }, orderBy: { name: 'asc' } });
     const logoBytes = await this.logoFor({ logoMode: 'COMPANY', customLogo: null });
     const isPng = logoBytes?.subarray(0, 4).toString('hex') === '89504e47';
     const isJpg = logoBytes?.subarray(0, 2).toString('hex') === 'ffd8';
     const companyLogo = logoBytes && (isPng || isJpg) ? `data:image/${isPng ? 'png' : 'jpeg'};base64,${logoBytes.toString('base64')}` : null;
-    return { design: !('elements' in t) && !('blocks' in t) ? { ...design, logoMode: t.logoMode, customLogo: t.customLogo } : design, legacy: !('elements' in t), companyLogo, company: await this.companyInfo() };
+    return {
+      templates: set.items.map((t): PayslipTemplateDto => ({ id: t.id, name: t.name, isDefault: t.id === set.defaultId, design: t.design })),
+      structures: structures.map((st) => ({ id: st.id, name: st.name, templateId: set.byStructure[st.id] && set.items.some((t) => t.id === set.byStructure[st.id]) ? set.byStructure[st.id]! : null })),
+      components: componentNames(structures.map((st) => st.lines)),
+      companyLogo,
+      company: await this.companyInfo(),
+    };
   }
 
   private async companyInfo(): Promise<{ name: string; address: string | null; pan: string | null }> {
@@ -148,10 +195,53 @@ export class PayslipService {
     return { name: tenant.legalName ?? tenant.name, address: [tenant.address, tenant.city].filter(Boolean).join(', ') || null, pan: tenant.pan };
   }
 
-  async saveTemplate(input: PayslipCanvas) {
-    await this.settings.set(TEMPLATE_KEY, input);
-    await this.audit.record({ action: 'payslip.template.updated', entity: 'Setting', entityId: TEMPLATE_KEY, meta: { version: 3, elements: input.elements.length, logoMode: input.logoMode, accentColor: input.accentColor } });
-    return this.designView();
+  async createTemplate(name: string, design: PayslipCanvas): Promise<PayslipTemplatesView> {
+    const set = await this.loadTemplates();
+    if (set.items.length >= 20) throw badRequest('You can keep up to 20 payslip templates', 'PAYSLIP_TEMPLATE_LIMIT');
+    const t = { id: randomBytes(6).toString('hex'), name, design };
+    await this.persistTemplates({ ...set, items: [...set.items, t] });
+    await this.audit.record({ action: 'payslip.template.created', entity: 'Setting', entityId: t.id, meta: { name, elements: design.elements.length } });
+    return this.templatesView();
+  }
+
+  async saveTemplate(id: string, name: string, design: PayslipCanvas): Promise<PayslipTemplatesView> {
+    const set = await this.loadTemplates();
+    if (!set.items.some((t) => t.id === id)) throw notFound('Payslip template');
+    await this.persistTemplates({ ...set, items: set.items.map((t) => (t.id === id ? { id, name, design } : t)) });
+    await this.audit.record({ action: 'payslip.template.updated', entity: 'Setting', entityId: id, meta: { name, elements: design.elements.length, logoMode: design.logoMode, accentColor: design.accentColor } });
+    return this.templatesView();
+  }
+
+  async setDefaultTemplate(id: string): Promise<PayslipTemplatesView> {
+    const set = await this.loadTemplates();
+    if (!set.items.some((t) => t.id === id)) throw notFound('Payslip template');
+    await this.persistTemplates({ ...set, defaultId: id });
+    await this.audit.record({ action: 'payslip.template.default', entity: 'Setting', entityId: id });
+    return this.templatesView();
+  }
+
+  async removeTemplate(id: string): Promise<PayslipTemplatesView> {
+    const set = await this.loadTemplates();
+    if (!set.items.some((t) => t.id === id)) throw notFound('Payslip template');
+    if (set.defaultId === id) throw badRequest('Choose another default template before deleting this one', 'PAYSLIP_TEMPLATE_IS_DEFAULT');
+    // Salary structures that used it fall back to the default.
+    const byStructure = Object.fromEntries(Object.entries(set.byStructure).filter(([, tid]) => tid !== id));
+    await this.persistTemplates({ items: set.items.filter((t) => t.id !== id), defaultId: set.defaultId, byStructure });
+    await this.audit.record({ action: 'payslip.template.deleted', entity: 'Setting', entityId: id });
+    return this.templatesView();
+  }
+
+  /** Choose the payslip template one salary structure uses (null = the default template). */
+  async assignTemplate(salaryTemplateId: string, templateId: string | null): Promise<PayslipTemplatesView> {
+    const set = await this.loadTemplates();
+    if (templateId && !set.items.some((t) => t.id === templateId)) throw notFound('Payslip template');
+    if (!(await this.prisma.salaryTemplate.findUnique({ where: { id: salaryTemplateId }, select: { id: true } }))) throw notFound('Salary structure');
+    const byStructure = { ...set.byStructure };
+    if (templateId) byStructure[salaryTemplateId] = templateId;
+    else delete byStructure[salaryTemplateId];
+    await this.persistTemplates({ ...set, byStructure });
+    await this.audit.record({ action: 'payslip.template.assigned', entity: 'SalaryTemplate', entityId: salaryTemplateId, meta: { templateId } });
+    return this.templatesView();
   }
 
   /** The logo bytes the design asks for: the uploaded one, the company logo from Branding, or none. */
@@ -195,21 +285,23 @@ export class PayslipService {
         /* regenerate below */
       }
     }
-    const tpl = await this.template();
-    return { data: await this.render(d, tpl, await this.logoFor(tpl)), filename: this.fileName(d) };
+    const tpl = this.pickTemplate(await this.loadTemplates(), await this.structureOf(p.employeeId, p.periodYear, p.periodMonth));
+    return { data: await this.render(d, tpl.design, await this.logoFor(tpl.design)), filename: this.fileName(d) };
   }
 
   /** Render + store + publish every draft payslip of a run; notify each employee. */
   async publishRun(runId: string): Promise<number> {
     const run = await this.prisma.payrollRun.findUniqueOrThrow({ where: { id: runId } });
     const slips = await this.prisma.payslip.findMany({ where: { runId, status: 'DRAFT' }, include: { employee: { select: { userId: true } } } });
-    const tpl = await this.template();
-    const logo = await this.logoFor(tpl);
+    const set = await this.loadTemplates();
+    const logos = new Map<string, Buffer | null>();
     let n = 0;
     for (const s of slips) {
       try {
         const d = await this.build(s.id);
-        const data = await this.render(d, tpl, logo);
+        const tpl = this.pickTemplate(set, await this.structureOf(s.employeeId, s.periodYear, s.periodMonth));
+        if (!logos.has(tpl.id)) logos.set(tpl.id, await this.logoFor(tpl.design));
+        const data = await this.render(d, tpl.design, logos.get(tpl.id) ?? null);
         const file = await this.storage.save({ data, filename: this.fileName(d), mime: 'application/pdf', category: 'payslip', isPrivate: true, tenantId: s.tenantId, ownerUserId: s.employee.userId });
         await this.prisma.payslip.update({ where: { id: s.id }, data: { fileId: file.id, fileSha256: createHash('sha256').update(data).digest('hex'), status: 'PUBLISHED', publishedAt: new Date() } });
         if (s.employee.userId) await this.notifications.notify({ userIds: [s.employee.userId], type: 'payslip.published', title: `Payslip for ${periodLabel(run.period)} is ready`, body: `Net pay ${pdfMoney(s.netPaise).replace('Rs. ', '₹ ').replace(/\.00$/, '')}`, link: '/payslips', from: 'Payroll', email: true });

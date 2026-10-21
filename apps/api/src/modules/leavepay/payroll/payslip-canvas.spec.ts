@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PAYSLIP_CANVAS_PRESETS, bakeCompanyFields, newPayslipElement, payslipLabelsToText, planPayslipTable, payslipTextToLabels, payslipCanvasPreset, payslipCanvasSchema, type PayslipCanvas } from '@lexisora/shared';
+import { CUSTOM_FONTS, PAYSLIP_FONTS, applyPayslipFont, PAYSLIP_CANVAS_PRESETS, bakeCompanyFields, newPayslipElement, payslipLabelsToText, planPayslipTable, payslipTextToLabels, payslipCanvasPreset, payslipCanvasSchema, type PayslipCanvas } from '@lexisora/shared';
 import { PdfService } from '../../../core/pdf/pdf.service';
 import { renderPayslip, samplePayslip } from './payslip-render';
 
@@ -18,8 +18,9 @@ async function text(design: PayslipCanvas) {
 
 describe('payslip canvas design', () => {
   it.each(PAYSLIP_CANVAS_PRESETS)('the %s template is valid and renders the payroll amounts on one page', async (layout) => {
-    const design = payslipCanvasPreset(layout);
-    expect(payslipCanvasSchema.safeParse(design).success).toBe(true);
+    // The text check below reads plain PDF text, which embedded fonts do not store; the Roboto output has its own test.
+    const design = applyPayslipFont(payslipCanvasPreset(layout), 'HELVETICA');
+    expect(payslipCanvasSchema.safeParse(payslipCanvasPreset(layout)).success).toBe(true);
     const { out, pages } = await text(design);
     for (const s of ['Acme Pvt Ltd', 'Sample Employee', 'Provident fund', 'Basic', '89,600.00']) expect(out).toContain(s);
     expect(pages).toBe(1);
@@ -103,5 +104,127 @@ describe('payslip canvas design', () => {
     expect(out).toContain('BASIC');
     expect(out).toContain('Rs. 45,000.00'); // amounts stay as they are
     expect(payslipCanvasSchema.parse({ elements: [newPayslipElement('text', 'x')] }).elements[0]).toMatchObject({ style: { textCase: 'NONE' } });
+  });
+});
+
+describe('editable table headings and rows', () => {
+  const table = (over: Record<string, unknown>) => payslipCanvasSchema.parse({ elements: [{ ...newPayslipElement('table', 't', 50, 100), ...over }] });
+
+  it('a design saved before these options existed still renders', async () => {
+    const parsed = table({}).elements[0] as unknown as Record<string, unknown>;
+    const { alwaysShow: _a, extraRows: _x, headStyle: _h, ...old } = parsed;
+    const design = { ...table({}), elements: [{ ...old, rowOverrides: [{ label: 'Basic', height: 0, gapAfter: 0, line: 'DEFAULT' }] }] } as unknown as PayslipCanvas;
+    const { out } = await text(design);
+    expect(out).toContain('EARNINGS');
+    expect(out).toContain('Basic');
+  });
+
+  it('cell padding defaults to 3 and keeps the text on the page when raised', async () => {
+    expect(table({}).elements[0]).toMatchObject({ cellPadding: 3 });
+    const { out } = await text(table({ cellPadding: 12 }));
+    expect(out).toContain('Rs. 45,000.00');
+    expect(payslipCanvasSchema.safeParse({ elements: [{ ...table({}).elements[0], cellPadding: 99 }] }).success).toBe(false);
+  });
+
+  it('older designs load with the standard look and no extra rows', () => {
+    const t = payslipCanvasSchema.parse({ elements: [{ type: 'table', id: 't', rowOverrides: [{ label: 'Basic' }] }] }).elements[0]!;
+    expect(t).toMatchObject({ headStyle: null, alwaysShow: [], extraRows: [], rowOverrides: [{ label: 'Basic', rename: '' }] });
+  });
+
+  it("prints the company's own wording for a pay component", async () => {
+    const { out } = await text(table({ rowOverrides: [{ label: 'HRA', rename: 'House Rent Allowance (HRA)' }] }));
+    expect(out).toContain('House Rent Allowance (HRA)');
+    expect(out).toContain('Basic');
+  });
+
+  it('keeps a component on the page when its amount is zero', async () => {
+    const { out } = await text(table({ kind: 'DEDUCTIONS', heading: 'Deductions', alwaysShow: ['Income tax (TDS)'] }));
+    expect(out).toContain('Provident fund');
+    expect(out).toContain('Income tax (TDS)');
+    expect(out).toContain('Rs. 0.00');
+  });
+
+  it('prints rows the company typed, with fields filled in', async () => {
+    const { out } = await text(table({ extraRows: [{ label: 'Reimbursement', amount: 'Rs. 500.00' }, { label: 'Paid days', amount: '{{pay.paidDays}}' }] }));
+    for (const x of ['Reimbursement', 'Rs. 500.00', 'Paid days']) expect(out).toContain(x);
+  });
+
+  it('headings are UPPERCASE by default and follow the company style when one is set', async () => {
+    expect((await text(table({ heading: 'Earnings' }))).out).toContain('EARNINGS');
+    const custom = (await text(table({ heading: 'Earnings', headStyle: { size: 10, bold: true, color: '#12a3c6' } }))).out;
+    expect(custom).toContain('Earnings');
+    expect(custom).not.toContain('EARNINGS');
+  });
+});
+
+describe('a label in its own colour in front of the text', () => {
+  const line = (over: Record<string, unknown>) => payslipCanvasSchema.parse({ elements: [{ ...newPayslipElement('text', 'w', 50, 100), w: 500, h: 14, text: '{{pay.netInWords}}', lead: { text: 'Amount in words :', color: '#12a3c6', bold: true }, ...over }] });
+
+  it('older text elements load without a label and without the one-line option', () => {
+    expect(payslipCanvasSchema.parse({ elements: [newPayslipElement('text', 'x')] }).elements[0]).toMatchObject({ lead: null, fit: false });
+  });
+
+  it('prints the label and the text, whatever side they are aligned to', async () => {
+    for (const align of ['LEFT', 'CENTER', 'RIGHT']) {
+      const { out } = await text(line({ style: { align, size: 10 } }));
+      expect(out).toContain('Amount in words :');
+      expect(out).toContain('Eighty-nine thousand six hundred rupees only');
+    }
+  });
+
+  it('a very long value is shrunk to one line, or wraps in a taller box, and is never lost', async () => {
+    for (const fit of [true, false]) {
+      const { out, pages } = await text(line({ w: 200, h: fit ? 14 : 40, fit, text: 'One crore twenty-three lakh forty-five thousand six hundred and seventy-eight rupees and ninety-nine paise only' }));
+      expect(out).toContain('Amount in words :');
+      expect(out).toContain('One crore twenty-three lakh');
+      expect(pages).toBe(1);
+    }
+  });
+
+  it('a line whose value is empty is left out, label and all', async () => {
+    const { out } = await text(line({ text: '{{note.idle}}' }));
+    expect(out).not.toContain('Amount in words :');
+  });
+});
+
+describe('payslip fonts', () => {
+  const BUILT_IN = ['HELVETICA', 'TIMES', 'COURIER'];
+  it.each(PAYSLIP_FONTS)('%s renders, plain and bold italic', async (font) => {
+    for (const style of [{}, { bold: true, italic: true }]) {
+      const design = payslipCanvasSchema.parse({ elements: [{ ...newPayslipElement('text', 'a', 50, 50), w: 400, text: 'Net pay Rs. 89,600.00 · Sample Employee', style: { font, ...style } }] });
+      const buf = await renderPayslip(pdf, sample, design, null);
+      expect(buf.subarray(0, 5).toString()).toBe('%PDF-');
+      // a bundled family is embedded under its own name (not silently printed in Helvetica)
+      if (!BUILT_IN.includes(font)) expect(buf.toString('latin1')).toMatch(new RegExp(`BaseFont /[A-Z]{6}[+]${CUSTOM_FONTS[font.toLowerCase() as keyof typeof CUSTOM_FONTS].label.split(' ')[0]}`));
+    }
+  });
+
+  it('the Branded summary uses Roboto in every section, headings included', async () => {
+    const design = payslipCanvasPreset('BRANDED');
+    const fonts = design.elements.flatMap((e) => (e.type === 'text' || e.type === 'details' ? [e.style.font] : e.type === 'table' ? [e.style.font, e.headStyle?.font] : []));
+    expect(fonts.length).toBeGreaterThan(20);
+    expect(new Set(fonts)).toEqual(new Set(['ROBOTO']));
+    const buf = await renderPayslip(pdf, sample, design, null);
+    const raw = buf.toString('latin1');
+    expect(raw).toMatch(/BaseFont \/[A-Z]{6}[+]Roboto/);
+    expect(raw).not.toMatch(/BaseFont \/Helvetica/);
+  });
+
+  it('one font for the whole template keeps sizes, bold and colours', () => {
+    const before = payslipCanvasPreset('CLASSIC');
+    const after = applyPayslipFont(before, 'LORA');
+    expect(after.elements.length).toBe(before.elements.length);
+    after.elements.forEach((e, i) => {
+      const b = before.elements[i]!;
+      if (e.type === 'text' && b.type === 'text') expect(e.style).toEqual({ ...b.style, font: 'LORA' });
+      if (e.type === 'table') expect(e.headStyle).toMatchObject({ font: 'LORA', bold: true, textCase: 'UPPER' });
+      if (e.type === 'line' || e.type === 'box') expect(e).toEqual(b);
+    });
+  });
+
+  it('every designer font has its file bundled on the server', async () => {
+    const { existsSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    for (const f of Object.values(CUSTOM_FONTS)) for (const w of [400, 700]) expect(existsSync(join(process.cwd(), 'assets', 'fonts', `${f.file}-${w}-normal.ttf`)), `${f.file} ${w}`).toBe(true);
   });
 });

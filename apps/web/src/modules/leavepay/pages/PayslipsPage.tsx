@@ -29,7 +29,7 @@ export default function PayslipsPage() {
   return (
     <div data-screen-label="My payslips" className="stack" style={{ gap: 18 }}>
       <PageHeader title="My payslips" sub="Calculated from approved attendance, auto-idle time and leave." />
-      {q.error ? <ErrorBlock error={q.error} retry={() => q.refetch()} /> : <DataTable columns={cols} rows={q.data} loading={q.isLoading} rowKey={(p) => p.id} onRowClick={setOpen} empty="Your payslips appear here once payroll is finalized." />}
+      {q.error ? <ErrorBlock error={q.error} retry={() => q.refetch()} /> : <DataTable mobileCards columns={cols} rows={q.data} loading={q.isLoading} rowKey={(p) => p.id} onRowClick={setOpen} empty="Your payslips appear here once payroll is finalized." />}
       {open && <PayslipModal row={open} onClose={() => setOpen(null)} onDownload={() => dl(open)} />}
     </div>
   );

@@ -1,5 +1,5 @@
 import { lazy, Suspense, type ReactNode } from 'react';
-import type { RouteObject } from 'react-router-dom';
+import { Navigate, type RouteObject } from 'react-router-dom';
 import { guard } from '@/layout/Guard';
 import { Loading } from '@/components/ui';
 
@@ -17,6 +17,7 @@ const AssetsPage = lazy(() => import('./pages/AssetsPage'));
 const WelcomeKitsPage = lazy(() => import('./pages/WelcomeKitsPage'));
 const IdCardPage = lazy(() => import('./pages/IdCardPage'));
 const VisitingCardPage = lazy(() => import('./pages/VisitingCardPage'));
+const VisitingCardDesignerPage = lazy(() => import('./pages/VisitingCardDesignerPage'));
 
 const s = (el: ReactNode) => <Suspense fallback={<Loading />}>{el}</Suspense>;
 
@@ -41,5 +42,7 @@ export const routes: RouteObject[] = [
   { path: 'assets', element: guard('assets.manage', s(<AssetsPage />)) },
   { path: 'welcome-kits', element: guard('welcomekit.manage', s(<WelcomeKitsPage />)) },
   { path: 'id-card', element: guard('idcard.manage', s(<IdCardPage />)) },
-  { path: 'visiting-card', element: guard('vcard.self', s(<VisitingCardPage />)) },
+  { path: 'visiting-card', element: guard('dashboard.view', s(<VisitingCardPage />)) },
+  { path: 'visiting-card-designer', element: guard('settings.vcard', s(<VisitingCardDesignerPage />)) },
+  { path: 'visiting-card-access', element: <Navigate to="/visiting-card-designer?tab=access" replace /> },
 ];

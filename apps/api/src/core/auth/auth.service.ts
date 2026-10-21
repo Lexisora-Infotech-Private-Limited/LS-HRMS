@@ -8,6 +8,7 @@ import { AppError, badRequest } from '../http/errors';
 import { MailService } from '../mail/mail.service';
 import { AuditService } from '../audit/audit.service';
 import { randomToken, sha256, TokenService } from './token.service';
+import { applyVcardAccess } from './vcard-access';
 
 export type ClientMeta = { ip?: string; userAgent?: string };
 
@@ -124,7 +125,7 @@ export class AuthService {
       title,
       roleKey: u.role.key,
       roleName: u.role.name,
-      permissions: u.role.permissions,
+      permissions: await applyVcardAccess(this.prisma, u.tenantId, { roleKey: u.role.key, employeeId: e?.id ?? null }, u.role.permissions),
       isPlatformAdmin: u.isPlatformAdmin,
       workMode: e?.workMode ?? null,
       branding: {

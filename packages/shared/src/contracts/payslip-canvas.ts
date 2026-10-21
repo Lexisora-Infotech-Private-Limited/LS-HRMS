@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { payslipStyleSchema, PAYSLIP_FIELDS, type PayslipDesign } from './payslip-design';
+import { payslipStyleSchema, PAYSLIP_FIELDS, type PayslipDesign, type PayslipStyle } from './payslip-design';
 
 // ── Payslip design v3: a free canvas. Every element sits at its own x / y on an A4 page (points) ──
 // Text is whatever the company types. Only the earnings and deductions amounts (and any {{field}} the company
@@ -13,7 +13,17 @@ const elementId = z.string().min(1).max(40);
 const geometry = { x: pt(0, PAYSLIP_PAGE.width, 40), y: pt(0, PAYSLIP_PAGE.height, 40), w: pt(1, PAYSLIP_PAGE.width, 200), h: pt(1, PAYSLIP_PAGE.height, 24) };
 const rowSchema = z.object({ label: z.string().max(40), value: z.string().max(160) });
 
-const textEl = z.object({ type: z.literal('text'), id: elementId, ...geometry, text: z.string().max(600).default(''), style: payslipStyleSchema.default({}) });
+const textEl = z.object({
+  type: z.literal('text'),
+  id: elementId,
+  ...geometry,
+  text: z.string().max(600).default(''),
+  style: payslipStyleSchema.default({}),
+  /** A label at the front of the line in its own colour (e.g. "Amount in words :"), followed by the text, so the two always sit together. */
+  lead: z.object({ text: z.string().max(80).default(''), color: hexColor.default('#605d5d'), bold: z.boolean().default(false) }).nullable().default(null),
+  /** Keep the text on one line, shrinking it only as much as needed to fit the box. */
+  fit: z.boolean().default(false),
+});
 const logoEl = z.object({ type: z.literal('logo'), id: elementId, ...geometry, w: pt(8, PAYSLIP_PAGE.width, 110), h: pt(8, PAYSLIP_PAGE.height, 48) });
 const lineEl = z.object({ type: z.literal('line'), id: elementId, ...geometry, h: pt(0, PAYSLIP_PAGE.height, 0), color: hexColor.default('#d7d3d3'), thickness: pt(0.25, 6, 0.8), dashed: z.boolean().default(false) });
 const boxEl = z.object({
@@ -48,6 +58,8 @@ const rowOverrideSchema = z.object({
   gapAfter: pt(0, 60, 0),
   /** DEFAULT follows the table's "lines between rows"; SHOW / HIDE force the line under this row. */
   line: z.enum(['DEFAULT', 'SHOW', 'HIDE']).default('DEFAULT'),
+  /** The wording to print for this pay component instead of its payroll name ('' = keep the payroll name). */
+  rename: z.string().max(60).default(''),
 });
 export type PayslipRowOverride = z.infer<typeof rowOverrideSchema>;
 
@@ -66,6 +78,8 @@ const tableEl = z.object({
   showTotal: z.boolean().default(true),
   totalLabel: z.string().max(40).default('Total earnings'),
   rowHeight: pt(10, 40, 20),
+  /** Space between the text and the left / right edge of each cell. */
+  cellPadding: pt(0, 30, 3),
   rules: z.boolean().default(true),
   headColor: hexColor.default('#605d5d'),
   totalFill: hexColor.nullable().default(null),
@@ -81,6 +95,12 @@ const tableEl = z.object({
   headerGap: pt(0, 60, 0),
   totalGap: pt(0, 60, 0),
   rowOverrides: z.array(rowOverrideSchema).max(40).default([]),
+  /** null = the standard heading look (small, bold, in the heading colour, UPPERCASE); otherwise the company's own font, size, colour and case. */
+  headStyle: payslipStyleSchema.nullable().default(null),
+  /** Pay components to print even when the employee has none of it that month (shown as 0). */
+  alwaysShow: z.array(z.string().min(1).max(40)).max(20).default([]),
+  /** Rows the company types itself, printed under the payroll rows. They are not added to the totals. */
+  extraRows: z.array(z.object({ label: z.string().max(60).default(''), full: z.string().max(40).default(''), amount: z.string().max(80).default('') })).max(12).default([]),
 });
 
 export const payslipElementSchema = z.discriminatedUnion('type', [textEl, logoEl, lineEl, boxEl, detailsEl, tableEl]);
@@ -221,9 +241,140 @@ const summaryPreset = (accent: string): PayslipCanvas =>
     { type: 'text', x: 48, y: 642, w: 499, h: 12, text: 'This is a computer-generated payslip and does not require a signature.', style: { size: 7.5, color: '#605d5d', align: 'CENTER' } },
   ]);
 
-export const PAYSLIP_CANVAS_PRESETS = ['CLASSIC', 'SUMMARY_CARD'] as const;
-export const payslipCanvasPreset = (layout: (typeof PAYSLIP_CANVAS_PRESETS)[number], accent = '#b68235'): PayslipCanvas => (layout === 'SUMMARY_CARD' ? summaryPreset(accent) : classicPreset(accent));
+
+// Pink and teal summary: header with logo and month, summary card, side-by-side earnings and deductions, net payable bar, notes and signatory.
+const PINK = '#e91e8c';
+const TEAL = '#12a3c6';
+const NAVY = '#1f2a44';
+const SLATE = '#5b6475';
+const PINK_TINT = '#fdf0f6';
+const BLUE_TINT = '#e5f5fa';
+const HAIR = '#e5e7eb';
+
+/**
+ * Use one font family for every text, details row, table row and table heading of a design. Size, bold, italic, colour and
+ * everything else stay as they are; a table whose headings were still in the standard look gets that same look in the new font.
+ */
+export function applyPayslipFont(design: PayslipCanvas, font: PayslipStyle['font']): PayslipCanvas {
+  return {
+    ...design,
+    elements: design.elements.map((e) =>
+      e.type === 'text' || e.type === 'details'
+        ? { ...e, style: { ...e.style, font } }
+        : e.type === 'table'
+          ? { ...e, style: { ...e.style, font }, headStyle: { ...(e.headStyle ?? { size: Math.min(8, e.style.size), bold: true, italic: false, color: e.headColor, align: 'LEFT' as const, textCase: 'UPPER' as const }), font } }
+          : e,
+    ),
+  };
+}
+
+const brandedPreset = (): PayslipCanvas => {
+  const nav = (size: number, extra: Record<string, unknown> = {}) => ({ size, color: NAVY, ...extra });
+  const slate = (size: number, extra: Record<string, unknown> = {}) => ({ size, color: SLATE, ...extra });
+  const rule = (x: number, y: number, w: number, color = HAIR, thickness = 0.6) => ({ type: 'line', x, y, w, color, thickness });
+  const vbar = (x: number, y: number, h: number, fill = '#e3e6ea') => ({ type: 'box', x, y, w: 1, h, fill, border: null, radius: 0, corners: 'NONE' });
+  const band = (x: number, y: number, w: number, h: number, fill: string, radius = 0, corners = 'NONE') => ({ type: 'box', x, y, w, h, fill, border: null, radius, corners });
+  const frame = (x: number, y: number, w: number, h: number, fill: string | null = null, border = '#e3e6ea') => ({ type: 'box', x, y, w, h, fill, border, radius: 4 });
+  return applyPayslipFont(canvas(PINK, [
+    // header
+    { type: 'logo', x: 28, y: 42, w: 100, h: 70 },
+    { type: 'text', x: 155, y: 56, w: 265, h: 22, text: '{{company.name}}', style: { size: 16, bold: true, color: PINK } },
+    { type: 'text', x: 155, y: 82, w: 265, h: 30, text: '{{company.address}}', style: slate(9) },
+    vbar(433, 48, 68, '#d1d5db'),
+    { type: 'text', x: 452, y: 56, w: 115, h: 12, text: 'Payslip For the Month', style: slate(9) },
+    { type: 'text', x: 452, y: 72, w: 120, h: 20, text: '{{pay.period}}', style: nav(15, { bold: true }) },
+    rule(25, 138, 547, '#c9ced6', 0.8),
+    // employee summary
+    frame(25, 165, 311, 160),
+    band(25, 165, 311, 33, '#eef0f4', 4, 'TOP'),
+    band(25, 165, 3, 33, PINK),
+    { type: 'text', x: 40, y: 174, w: 250, h: 16, text: 'EMPLOYEE SUMMARY', style: nav(12, { bold: true }) },
+    {
+      type: 'details',
+      x: 40,
+      y: 204,
+      w: 285,
+      h: 108,
+      rows: [R('Employee Name', '{{employee.name}}'), R('Employee ID', '{{employee.code}}'), R('Pay Period', '{{pay.period}}'), R('Pay Date', '{{pay.date}}')],
+      rowHeight: 27,
+      labelWidth: 108,
+      separator: ':',
+      labelColor: SLATE,
+      style: nav(10),
+    },
+    rule(40, 226, 272),
+    rule(40, 253, 272),
+    rule(40, 280, 272),
+    // net pay card
+    frame(351, 165, 221, 160, PINK_TINT, '#f6cfe2'),
+    { type: 'text', x: 372, y: 184, w: 180, h: 18, text: 'Total Net Pay', style: nav(14, { bold: true }) },
+    { type: 'text', x: 372, y: 208, w: 190, h: 32, text: '{{pay.net}}', style: { size: 24, bold: true, color: PINK } },
+    rule(365, 254, 193, '#e2b6cc'),
+    { type: 'details', x: 369, y: 262, w: 190, h: 54, rows: [R('Paid Days', '{{pay.paidDays}}'), R('LOP Days', '{{pay.lopDays}}')], rowHeight: 27, labelWidth: 95, separator: ':', labelColor: SLATE, style: nav(10) },
+    // earnings and deductions
+    frame(25, 345, 547, 207),
+    band(25, 345, 285, 32, PINK_TINT),
+    band(310, 345, 262, 32, BLUE_TINT),
+    { type: 'table', x: 25, y: 345, w: 285, h: 172, kind: 'EARNINGS', heading: 'EARNINGS', amountHeading: 'AMOUNT (Rs.)', showTotal: false, rowHeight: 28, headerHeight: 32, cellPadding: 6, headColor: NAVY, lineColor: HAIR, lineWidth: 0.6, style: nav(10) },
+    { type: 'table', x: 310, y: 345, w: 262, h: 172, kind: 'DEDUCTIONS', heading: 'DEDUCTIONS', amountHeading: 'AMOUNT (Rs.)', showTotal: false, rowHeight: 28, headerHeight: 32, cellPadding: 6, headColor: TEAL, lineColor: HAIR, lineWidth: 0.6, style: nav(10) },
+    vbar(310, 345, 207),
+    vbar(193, 377, 141, HAIR),
+    vbar(474, 377, 141, HAIR),
+    band(25, 518, 285, 34, PINK_TINT),
+    { type: 'text', x: 40, y: 529, w: 140, h: 14, text: 'Gross Earnings', style: nav(11, { bold: true }) },
+    { type: 'text', x: 180, y: 529, w: 120, h: 14, text: '{{pay.gross}}', style: nav(11, { bold: true, align: 'RIGHT' }) },
+    band(310, 518, 262, 34, BLUE_TINT),
+    { type: 'text', x: 325, y: 529, w: 130, h: 14, text: 'Total Deductions', style: nav(11, { bold: true }) },
+    { type: 'text', x: 450, y: 529, w: 112, h: 14, text: '{{pay.deductions}}', style: nav(11, { bold: true, align: 'RIGHT' }) },
+    // total net payable
+    frame(25, 577, 547, 53, '#f7f8fa', '#d9dde3'),
+    band(444, 577.5, 127.5, 52, PINK_TINT),
+    { type: 'text', x: 40, y: 589, w: 250, h: 16, text: 'TOTAL NET PAYABLE', style: nav(13, { bold: true }) },
+    { type: 'text', x: 40, y: 608, w: 250, h: 12, text: 'Gross Earnings - Total Deductions', style: slate(10) },
+    { type: 'text', x: 452, y: 594, w: 112, h: 20, text: '{{pay.net}}', style: { size: 16, bold: true, color: PINK, align: 'RIGHT' } },
+    { type: 'text', x: 25, y: 644, w: 547, h: 14, text: '{{pay.netInWords}}', lead: { text: 'Amount in Words :', color: TEAL, bold: false }, fit: true, style: nav(10, { align: 'RIGHT' }) },
+    { type: 'text', x: 25, y: 664, w: 547, h: 11, text: '{{note.idle}}', style: slate(7.5) },
+    { type: 'text', x: 25, y: 676, w: 547, h: 11, text: '{{note.employer}}', style: slate(7.5) },
+    { type: 'text', x: 25, y: 688, w: 547, h: 11, text: '{{note.ytd}}', style: slate(7.5) },
+    // notes and signatory
+    rule(25, 704, 547, '#c9ced6', 0.8),
+    { type: 'text', x: 28, y: 716, w: 50, h: 16, text: 'Note:', style: { size: 12, bold: true, color: PINK } },
+    { type: 'text', x: 82, y: 716, w: 320, h: 12, text: '1.  This is a system-generated document and does not require a signature.', style: nav(8) },
+    { type: 'text', x: 82, y: 730, w: 320, h: 12, text: '2.  For any queries, please contact HR.', style: nav(8) },
+    { type: 'text', x: 82, y: 744, w: 320, h: 12, text: '3.  This is a confidential document.', style: nav(8) },
+    vbar(417, 708, 56, '#f6cfe2'),
+    { type: 'text', x: 425, y: 728, w: 147, h: 12, text: 'Authorised Signatory', style: nav(9, { align: 'CENTER' }) },
+    { type: 'text', x: 425, y: 742, w: 147, h: 12, text: '{{company.name}}', style: nav(9, { align: 'CENTER' }) },
+    // corner accents
+    rule(0, 820, 493, PINK, 1.2),
+    band(0, 826, 595, 16, '#f1f2f4'),
+    band(494, 812, 30, 30, PINK),
+    band(530, 806, 65, 36, TEAL),
+  ]), 'ROBOTO');
+};
+
+export const PAYSLIP_CANVAS_PRESETS = ['CLASSIC', 'SUMMARY_CARD', 'BRANDED'] as const;
+export type PayslipCanvasPreset = (typeof PAYSLIP_CANVAS_PRESETS)[number];
+export const PAYSLIP_CANVAS_PRESET_LABELS: Record<PayslipCanvasPreset, string> = { CLASSIC: 'Classic', SUMMARY_CARD: 'Summary card', BRANDED: 'Branded summary' };
+/** BRANDED has its own pink and teal colours; the accent only colours the other two. */
+export const payslipCanvasPreset = (layout: PayslipCanvasPreset, accent = '#b68235'): PayslipCanvas => (layout === 'BRANDED' ? brandedPreset() : layout === 'SUMMARY_CARD' ? summaryPreset(accent) : classicPreset(accent));
 export const DEFAULT_PAYSLIP_CANVAS: PayslipCanvas = classicPreset('#b68235');
+
+// ── Saved payslip templates: a company keeps several named designs, picks a default, and sets one per salary structure ──
+export const payslipTemplateInputSchema = z.object({ name: z.string().trim().min(2, 'Give the template a name').max(60), design: payslipCanvasSchema });
+export type PayslipTemplateInput = z.infer<typeof payslipTemplateInputSchema>;
+export const payslipAssignSchema = z.object({ salaryTemplateId: z.string().min(1).max(60), templateId: z.string().min(1).max(60).nullable() });
+export type PayslipAssignInput = z.infer<typeof payslipAssignSchema>;
+export type PayslipTemplateDto = { id: string; name: string; isDefault: boolean; design: PayslipCanvas };
+export type PayslipTemplatesView = {
+  templates: PayslipTemplateDto[];
+  /** Active salary structures and the payslip template each one uses (null = the default template). */
+  structures: { id: string; name: string; templateId: string | null }[];
+  /** The pay component names salary structures use (plus the standard statutory deductions), to rename or always show. */
+  components: { earnings: string[]; deductions: string[] };
+  companyLogo: string | null;
+  company: { name: string; address: string | null; pan: string | null };
+};
 
 /** Best-effort conversion of an older block design: the closest starting template, keeping logo and colour. */
 export function canvasFromBlockDesign(d: PayslipDesign): PayslipCanvas {
@@ -297,6 +448,35 @@ export function bakeCompanyFields(design: PayslipCanvas, company: { name: string
     ...design,
     elements: design.elements.map((e) => (e.type === 'text' ? { ...e, text: bake(e.text) } : e.type === 'details' ? { ...e, rows: e.rows.map((r) => ({ ...r, value: bake(r.value) })) } : e)),
   };
+}
+
+const normLabel = (s: string) => s.trim().toLowerCase();
+
+/** The wording printed for a pay component's row: the company's own name for it, else the payroll name. */
+export function tableRowLabel(t: PayslipElementOf<'table'>, label: string): string {
+  const o = t.rowOverrides.find((x) => normLabel(x.label) === normLabel(label));
+  return o?.rename?.trim() ? o.rename.trim() : label;
+}
+
+/**
+ * Every body row of a table as text cells: the payroll rows (renamed as the company asked), then the components it always shows
+ * (as 0), then the rows it typed itself. Shared by the PDF and the editor so they always agree. `key` is the payroll name the
+ * row's height / line settings follow.
+ */
+export function tableBodyRows(
+  t: PayslipElementOf<'table'>,
+  lines: { label: string; full: number | null; amount: number }[],
+  fmt: (paise: number) => string,
+  fill: (text: string) => string = (s) => s,
+): { key: string; cells: string[] }[] {
+  const earnings = t.kind === 'EARNINGS';
+  const full = earnings && t.showFullMonth;
+  const have = new Set(lines.map((l) => normLabel(l.label)));
+  const all = [...lines, ...(t.alwaysShow ?? []).filter((l) => !have.has(normLabel(l))).map((label) => ({ label, full: earnings ? 0 : null, amount: 0 }))];
+  const rows = all.map((l) => ({ key: l.label, cells: full ? [tableRowLabel(t, l.label), l.full !== null ? fmt(l.full) : '', fmt(l.amount)] : [tableRowLabel(t, l.label), fmt(l.amount)] }));
+  for (const x of t.extraRows ?? []) rows.push({ key: x.label || 'Your row', cells: full ? [fill(x.label), fill(x.full), fill(x.amount)] : [fill(x.label), fill(x.amount)] });
+  if (!rows.length && !earnings) rows.push({ key: 'No deductions', cells: full ? ['No deductions', '', fmt(0)] : ['No deductions', fmt(0)] });
+  return rows;
 }
 
 export type TableRowPlan = { kind: 'head' | 'row' | 'total'; label: string; height: number; line: boolean; gapBefore: number; gapAfter: number };

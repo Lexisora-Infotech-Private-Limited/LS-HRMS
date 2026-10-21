@@ -1,16 +1,22 @@
-import { Body, Controller, Get, HttpCode, Param, Post, Put, Query, Res } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, Query, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import type { z } from 'zod';
 import {
   generateCardsSchema,
+  idCardEmployeeTemplateSchema,
+  idCardRoleTemplatesSchema,
   idCardSettingsSchema,
   idCardTemplateSchema,
   peopleReasonSchema,
   printBatchSchema,
+  companyProfileSchema,
+  vcardAccessSchema,
   vcardEmailSchema,
   vcardSettingsSchema,
   vcardWhatsappSchema,
   type IdCardSettings,
+  type CompanyProfile,
+  type VCardAccess,
   type IdCardTemplateInput,
 } from '@lexisora/shared';
 import { Public, RequirePerm } from '../../../core/auth/decorators';
@@ -35,6 +41,34 @@ export class IdCardsController {
     const r = await this.cards.verifyHtml(token);
     res.status(r.status).setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(r.html);
+  }
+
+  /** The template for each role. */
+  @Get('role-templates')
+  @RequirePerm('idcard.manage')
+  roleTemplates() {
+    return this.cards.roleTemplates();
+  }
+
+  @Put('role-templates')
+  @RequirePerm('idcard.manage')
+  setRoleTemplates(@Body(new ZodPipe(idCardRoleTemplatesSchema)) dto: { choices: Record<string, string | null> }) {
+    return this.cards.setRoleTemplates(dto.choices);
+  }
+
+  /** Choose the template for one person (templateId null = the company default). */
+  @Put('employee-template/:employeeId')
+  @RequirePerm('idcard.manage')
+  setEmployeeTemplate(@Param('employeeId') employeeId: string, @Body(new ZodPipe(idCardEmployeeTemplateSchema)) dto: { templateId: string | null }) {
+    return this.cards.setEmployeeTemplate(employeeId, dto.templateId);
+  }
+
+  @Public()
+  @Get('verify/:token/contact.vcf')
+  async verifyVcf(@Param('token') token: string, @Res() res: Response) {
+    const r = await this.cards.verifyVcf(token);
+    if (!r.vcf) return res.status(r.status).type('text/plain').send('Not available');
+    send(res, 'text/vcard; charset=utf-8', r.filename ?? 'contact.vcf', r.vcf, false);
   }
 
   @Get('mine')
@@ -70,6 +104,12 @@ export class IdCardsController {
   @RequirePerm('idcard.manage')
   updateTemplate(@Param('id') id: string, @Body(new ZodPipe(idCardTemplateSchema)) dto: IdCardTemplateInput) {
     return this.cards.updateTemplate(id, dto);
+  }
+
+  @Delete('templates/:id')
+  @RequirePerm('idcard.manage')
+  deleteTemplate(@Param('id') id: string) {
+    return this.cards.deleteTemplate(id);
   }
 
   @Post('templates/:id/default')
@@ -180,6 +220,61 @@ export class VcardController {
     res.send(r.html ?? '');
   }
 
+  @Get('company')
+  @RequirePerm('settings.vcard', 'idcard.manage')
+  company() {
+    return this.vcard.companyProfile();
+  }
+
+  @Put('company')
+  @RequirePerm('settings.vcard', 'idcard.manage')
+  saveCompany(@Body(new ZodPipe(companyProfileSchema)) dto: CompanyProfile) {
+    return this.vcard.saveCompanyProfile(dto);
+  }
+
+  @Get('templates')
+  @RequirePerm('settings.vcard')
+  templates() {
+    return this.vcard.templates();
+  }
+
+  @Post('templates')
+  @RequirePerm('settings.vcard')
+  createTemplate(@Body(new ZodPipe(idCardTemplateSchema)) dto: IdCardTemplateInput) {
+    return this.vcard.createTemplate(dto);
+  }
+
+  @Put('templates/:id')
+  @RequirePerm('settings.vcard')
+  updateTemplate(@Param('id') id: string, @Body(new ZodPipe(idCardTemplateSchema)) dto: IdCardTemplateInput) {
+    return this.vcard.updateTemplate(id, dto);
+  }
+
+  @Delete('templates/:id')
+  @RequirePerm('settings.vcard')
+  deleteVcardTemplate(@Param('id') id: string) {
+    return this.vcard.deleteTemplate(id);
+  }
+
+  @Post('templates/:id/default')
+  @RequirePerm('settings.vcard')
+  @HttpCode(200)
+  setDefaultTemplate(@Param('id') id: string) {
+    return this.vcard.setDefaultTemplate(id);
+  }
+
+  @Get('access')
+  @RequirePerm('settings.vcard')
+  access() {
+    return this.vcard.access();
+  }
+
+  @Put('access')
+  @RequirePerm('settings.vcard')
+  saveAccess(@Body(new ZodPipe(vcardAccessSchema)) dto: VCardAccess) {
+    return this.vcard.saveAccess(dto);
+  }
+
   @Get()
   @RequirePerm('vcard.self')
   card() {
@@ -194,8 +289,9 @@ export class VcardController {
 
   @Get('png')
   @RequirePerm('vcard.self')
-  async png(@Res() res: Response) {
-    send(res, 'image/png', 'visiting-card.png', await this.vcard.png(), false);
+  async png(@Res() res: Response, @Query('side') side?: string) {
+    const back = side === 'back';
+    send(res, 'image/png', back ? 'visiting-card-back.png' : 'visiting-card.png', await this.vcard.png(undefined, back ? 'back' : 'front'), false);
   }
 
   @Get('pdf')

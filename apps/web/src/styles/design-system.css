@@ -198,7 +198,7 @@ textarea.input { min-height: 90px; resize: vertical; }
 .table td { padding: 9px 8px; border-bottom: 1px solid var(--color-divider); vertical-align: middle; }
 .table tbody tr:hover { background: color-mix(in srgb, var(--color-text) 4%, transparent); }
 .table tbody tr.clickable { cursor: pointer; }
-.table .num { text-align: right; font-feature-settings: 'tnum'; }
+.table .num { text-align: right; font-feature-settings: 'tnum'; white-space: nowrap; } /* an amount stays on one line: the symbol and the number never split */
 
 /* — dialog — */
 .dialog-backdrop {
@@ -215,4 +215,9 @@ textarea.input { min-height: 90px; resize: vertical; }
 .dialog-wide { width: min(880px, 100%); }
 .dialog-title { font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 20px; }
 .dialog-body { font-size: 14px; opacity: 0.85; }
-.dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-2); }
+.dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-2); flex-wrap: wrap; margin-top: var(--space-2); }
+@media (max-width: 560px) {
+  /* Phones: the buttons stack at full width, the main action on top, so none runs off the dialog. */
+  .dialog-actions { flex-direction: column-reverse; align-items: stretch; }
+  .dialog-actions .btn { width: 100%; white-space: normal; text-align: center; }
+}

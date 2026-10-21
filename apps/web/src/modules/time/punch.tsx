@@ -124,7 +124,7 @@ export function PunchButton() {
   if (!p.enabled || !p.today) return null;
   return (
     <button
-      className={`btn btn-sm ${p.punchedIn ? 'btn-secondary' : 'btn-primary'}`}
+      className={`btn btn-sm topbar-punch ${p.punchedIn ? 'btn-secondary' : 'btn-primary'}`}
       onClick={() => void p.toggle()}
       disabled={p.busy}
       title={p.blocked ? (p.today.blockReason ?? 'Office mode: punch in with the biometric sensor') : p.punchedIn ? `Worked ${p.elapsed}` : undefined}
