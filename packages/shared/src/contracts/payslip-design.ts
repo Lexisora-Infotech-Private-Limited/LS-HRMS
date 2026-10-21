@@ -1,12 +1,50 @@
 import { z } from 'zod';
+import { CUSTOM_FONTS } from '../fonts';
 import { TEXT_CASES } from './text-case';
 import { payslipTemplateSchema, DEFAULT_PAYSLIP_TEMPLATE, PAYSLIP_LAYOUTS, type PayslipTemplate } from './leavepay';
 
 // ── Payslip design v2: a payslip is a list of blocks the company can add, reorder, restyle and align ──
 // Anything that varies per person is a {{field}} filled in for each employee; everything else is text typed into the design.
 
-export const PAYSLIP_FONTS = ['HELVETICA', 'TIMES', 'COURIER'] as const;
-export const PAYSLIP_FONT_LABELS: Record<(typeof PAYSLIP_FONTS)[number], string> = { HELVETICA: 'Helvetica (clean)', TIMES: 'Times (serif)', COURIER: 'Courier (typewriter)' };
+/** The three built-in PDF fonts, then the bundled families (see fonts.ts). */
+export const PAYSLIP_FONTS = ['HELVETICA', 'TIMES', 'COURIER', 'MONTSERRAT', 'POPPINS', 'INTER', 'OPENSANS', 'ROBOTO', 'LATO', 'NUNITO', 'RALEWAY', 'PLAYFAIR', 'MERRIWEATHER', 'LORA', 'OSWALD', 'DANCING'] as const;
+export const PAYSLIP_FONT_LABELS: Record<(typeof PAYSLIP_FONTS)[number], string> = {
+  HELVETICA: 'Helvetica (clean)',
+  TIMES: 'Times (serif)',
+  COURIER: 'Courier (typewriter)',
+  MONTSERRAT: 'Montserrat (modern)',
+  POPPINS: 'Poppins (rounded modern)',
+  INTER: 'Inter (crisp)',
+  OPENSANS: 'Open Sans (friendly)',
+  ROBOTO: 'Roboto (neutral)',
+  LATO: 'Lato (warm)',
+  NUNITO: 'Nunito (soft rounded)',
+  RALEWAY: 'Raleway (light, elegant)',
+  PLAYFAIR: 'Playfair Display (elegant serif)',
+  MERRIWEATHER: 'Merriweather (readable serif)',
+  LORA: 'Lora (book serif)',
+  OSWALD: 'Oswald (condensed)',
+  DANCING: 'Dancing Script (handwriting)',
+};
+/** The CSS font stack the editor previews each payslip font with. */
+export const PAYSLIP_FONT_CSS: Record<(typeof PAYSLIP_FONTS)[number], string> = {
+  HELVETICA: 'Helvetica, Arial, sans-serif',
+  TIMES: "'Times New Roman', Times, serif",
+  COURIER: "'Courier New', Courier, monospace",
+  MONTSERRAT: CUSTOM_FONTS.montserrat.css,
+  POPPINS: CUSTOM_FONTS.poppins.css,
+  INTER: CUSTOM_FONTS.inter.css,
+  OPENSANS: CUSTOM_FONTS.opensans.css,
+  ROBOTO: CUSTOM_FONTS.roboto.css,
+  LATO: CUSTOM_FONTS.lato.css,
+  NUNITO: CUSTOM_FONTS.nunito.css,
+  RALEWAY: CUSTOM_FONTS.raleway.css,
+  PLAYFAIR: CUSTOM_FONTS.playfair.css,
+  MERRIWEATHER: CUSTOM_FONTS.merriweather.css,
+  LORA: CUSTOM_FONTS.lora.css,
+  OSWALD: CUSTOM_FONTS.oswald.css,
+  DANCING: CUSTOM_FONTS.dancing.css,
+};
 export const PAYSLIP_ALIGNS = ['LEFT', 'CENTER', 'RIGHT'] as const;
 
 const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Use a colour like #b68235');

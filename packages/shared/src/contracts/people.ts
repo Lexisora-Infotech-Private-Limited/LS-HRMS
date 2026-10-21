@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CUSTOM_FONTS } from '../fonts';
 import { TEXT_CASES } from './text-case';
 
 /**
@@ -773,11 +774,21 @@ export const ID_CARD_FONTS = {
   opensans: { label: 'Open Sans', css: "'Open Sans', sans-serif", avg: 0.55 },
   roboto: { label: 'Roboto', css: "Roboto, sans-serif", avg: 0.5 },
   lato: { label: 'Lato', css: "Lato, sans-serif", avg: 0.5 },
+  montserrat: CUSTOM_FONTS.montserrat,
+  poppins: CUSTOM_FONTS.poppins,
+  inter: CUSTOM_FONTS.inter,
+  nunito: CUSTOM_FONTS.nunito,
+  raleway: CUSTOM_FONTS.raleway,
+  playfair: CUSTOM_FONTS.playfair,
+  merriweather: CUSTOM_FONTS.merriweather,
+  lora: CUSTOM_FONTS.lora,
+  oswald: CUSTOM_FONTS.oswald,
+  dancing: CUSTOM_FONTS.dancing,
 } as const;
 export type IdCardFontKey = keyof typeof ID_CARD_FONTS;
 export const idCardFontCss = (k: string | null | undefined): string => (ID_CARD_FONTS as Record<string, { css: string }>)[k ?? 'sans']?.css ?? ID_CARD_FONTS.sans.css;
 export const idCardFontAvg = (k: string | null | undefined): number => (ID_CARD_FONTS as Record<string, { avg: number }>)[k ?? 'sans']?.avg ?? 0.52;
-export const ID_CARD_FONT_KEYS = ['sans', 'serif', 'courier', 'calibri', 'cambria', 'opensans', 'roboto', 'lato'] as const;
+export const ID_CARD_FONT_KEYS = ['sans', 'serif', 'courier', 'calibri', 'cambria', 'opensans', 'roboto', 'lato', 'montserrat', 'poppins', 'inter', 'nunito', 'raleway', 'playfair', 'merriweather', 'lora', 'oswald', 'dancing'] as const;
 export const idCardElementSchema = z.object({
   id: z.string().min(1),
   type: z.enum(['TEXT', 'PHOTO', 'QR', 'LOGO', 'STATIC', 'SHAPE', 'SIGNATURE', 'IMAGE']),
@@ -792,8 +803,10 @@ export const idCardElementSchema = z.object({
   shrink: z.boolean().optional().nullable(),
   /** PHOTO: how the picture is framed. */
   photo: idCardPhotoFrameSchema.optional().nullable(),
-  /** IMAGE: a picture the company uploaded (an icon, a logo variant…). */
+  /** IMAGE: a picture the company uploaded (an icon, a logo variant…). QR: the logo shown in the middle of a BRANDED QR. */
   fileId: z.string().optional().nullable(),
+  /** QR: PLAIN (black and white) or BRANDED (a gradient in the company colours, with the logo in the centre). */
+  qrStyle: z.enum(['PLAIN', 'BRANDED']).optional().nullable(),
   xMm: z.number().min(-5).max(100),
   yMm: z.number().min(-5).max(100),
   wMm: z.number().min(0.2).max(100),
@@ -859,7 +872,11 @@ export const idCardSettingsSchema = z.object({
 export type IdCardSettings = z.infer<typeof idCardSettingsSchema>;
 export const generateCardsSchema = z.object({ cardIds: z.array(z.string()).optional(), allGeneratable: z.boolean().optional() });
 export const printBatchSchema = z.object({ cardIds: z.array(z.string()).optional(), allReady: z.boolean().optional() });
-export type IdCardRow = { id: string; employeeId: string; employee: string; empCode: string; template: string | null; status: string; statusLabel: string; missing: string[]; generatedAt: string | null; printBatch: string | null; serial: string };
+/** Template for each role: role key → template id (null / missing = the company default). */
+export const idCardRoleTemplatesSchema = z.object({ choices: z.record(z.string().min(1).max(40), z.string().min(1).max(60).nullable()) });
+export type IdCardRoleTemplates = { roles: { key: string; name: string }[]; choices: Record<string, string> };
+export const idCardEmployeeTemplateSchema = z.object({ templateId: z.string().min(1).max(60).nullable() });
+export type IdCardRow = { id: string; employeeId: string; employee: string; empCode: string; template: string | null; /** the template the card was made with */ templateId: string | null; /** true when this person has their own template (not the company default) */ customTemplate: boolean; /** true when the template comes from the person's role */ byRole: boolean; status: string; statusLabel: string; missing: string[]; generatedAt: string | null; printBatch: string | null; serial: string };
 export type IdCardPreviewData = Record<IdCardBinding, string | null>;
 
 // ── Visiting card ──────────────────────────────────────────────────────────
@@ -874,6 +891,59 @@ export const vcardEmailSchema = z.object({
   message: z.string().trim().max(1000).optional().nullable(),
 });
 export const vcardWhatsappSchema = z.object({ phone: z.string().trim().regex(/^\+?[0-9 ]{10,16}$/, 'Enter a valid WhatsApp number').optional().nullable().or(z.literal('')) });
+/** Who gets a digital visiting card: everyone, everyone in the chosen roles, or only the chosen employees. */
+export const VCARD_ACCESS_MODES = ['EVERYONE', 'ROLES', 'EMPLOYEES'] as const;
+export const vcardAccessSchema = z.object({
+  mode: z.enum(VCARD_ACCESS_MODES).default('EVERYONE'),
+  roles: z.array(z.string().min(1).max(40)).max(50).default([]),
+  employeeIds: z.array(z.string().min(1).max(40)).max(5000).default([]),
+});
+export type VCardAccess = z.infer<typeof vcardAccessSchema>;
+export const DEFAULT_VCARD_ACCESS: VCardAccess = { mode: 'EVERYONE', roles: [], employeeIds: [] };
+export type VCardAccessDto = VCardAccess & { roleOptions: { key: string; name: string }[] };
+export const VCARD_ACCESS_KEY = 'people.vcard.access';
+
+/** A web address: a bare domain gets https:// added; empty is allowed. */
+const webAddress = z
+  .string()
+  .trim()
+  .max(200)
+  .default('')
+  .transform((v, ctx) => {
+    if (!v) return '';
+    const url = /^https?:\/\//i.test(v) ? v : `https://${v}`;
+    if (!/^https?:\/\/[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:\d{1,5})?(\/\S*)?$/i.test(url)) {
+      ctx.addIssue({ code: 'custom', message: 'Enter a valid web address, e.g. www.yourcompany.com' });
+      return z.NEVER;
+    }
+    return url.replace(/\/+$/, '');
+  });
+const pageColor = (def: string) => z.string().trim().regex(/^#[0-9a-fA-F]{6}$/, 'Use a colour like #e91e8c').default(def);
+/** The company details shown on the page an employee's ID card QR opens (and the colours of that page). */
+export const companyProfileSchema = z.object({
+  website: webAddress,
+  officeEmail: z.string().trim().max(120).default('').refine((v) => !v || /^\S+@\S+\.\S+$/.test(v), 'Enter a valid email'),
+  /** Blank = the phone number saved with the company. */
+  officePhone: z.string().trim().max(30).default(''),
+  /** Blank = the address saved with the company. */
+  address: z.string().trim().max(300).default(''),
+  /** Shown at the top right and the foot of the page, split on "|". */
+  tagline: z.string().trim().max(80).default('People | Technology | Growth'),
+  slogan: z.string().trim().max(60).default('Code with Passion'),
+  linkedin: webAddress,
+  instagram: webAddress,
+  primaryColor: pageColor('#e91e8c'),
+  secondaryColor: pageColor('#12a3c6'),
+});
+export type CompanyProfile = z.infer<typeof companyProfileSchema>;
+export const COMPANY_PROFILE_KEY = 'people.company.profile';
+export const DEFAULT_COMPANY_PROFILE: CompanyProfile = companyProfileSchema.parse({});
+/** Whether this person (by role and employee) is covered by the visiting-card setting. */
+export function vcardAllowed(a: VCardAccess, who: { roleKey?: string | null; employeeId?: string | null }): boolean {
+  if (a.mode === 'ROLES') return !!who.roleKey && a.roles.includes(who.roleKey);
+  if (a.mode === 'EMPLOYEES') return !!who.employeeId && a.employeeIds.includes(who.employeeId);
+  return true;
+}
 export type VCardDto = {
   name: string;
   title: string;
@@ -885,6 +955,8 @@ export type VCardDto = {
   address: string | null;
   publicUrl: string;
   qrDataUrl: string;
+  /** The corporate template has a back side (drawn content or a background). */
+  hasBack: boolean;
   showPhone: boolean;
   workPhone: string | null;
   linkedinUrl: string | null;

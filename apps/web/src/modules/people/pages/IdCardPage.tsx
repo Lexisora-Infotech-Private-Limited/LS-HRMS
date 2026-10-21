@@ -32,12 +32,32 @@ import {
   type IdCardTemplateDto,
   type IdCardTemplateInput,
 } from '@lexisora/shared';
+import '@fontsource/montserrat/400.css';
+import '@fontsource/montserrat/700.css';
+import '@fontsource/poppins/400.css';
+import '@fontsource/poppins/700.css';
+import '@fontsource/inter/400.css';
+import '@fontsource/inter/700.css';
 import '@fontsource/open-sans/400.css';
 import '@fontsource/open-sans/700.css';
 import '@fontsource/roboto/400.css';
 import '@fontsource/roboto/700.css';
 import '@fontsource/lato/400.css';
 import '@fontsource/lato/700.css';
+import '@fontsource/nunito/400.css';
+import '@fontsource/nunito/700.css';
+import '@fontsource/raleway/400.css';
+import '@fontsource/raleway/700.css';
+import '@fontsource/playfair-display/400.css';
+import '@fontsource/playfair-display/700.css';
+import '@fontsource/merriweather/400.css';
+import '@fontsource/merriweather/700.css';
+import '@fontsource/lora/400.css';
+import '@fontsource/lora/700.css';
+import '@fontsource/oswald/400.css';
+import '@fontsource/oswald/700.css';
+import '@fontsource/dancing-script/400.css';
+import '@fontsource/dancing-script/700.css';
 import { authUrl, download, fileUrl, uploadFile } from '@/lib/api';
 import { useAction } from '@/lib/query';
 import { useToast } from '@/lib/toast';
@@ -45,6 +65,7 @@ import { FormModal, type FieldDef } from '@/components/form';
 import { DataTable, type Column } from '@/components/table';
 import { ConfirmDialog, ErrorBlock, Loading, Modal, PageHeader, Pills, Seg, Tabs, Tag, type Tone } from '@/components/ui';
 import { lookupsFor, peopleApi, peopleKeys, type PrintBatchRow } from '../api';
+import { QrScanPageDrawer, VisitingCardAccessPanel } from './VcardSettingsPanels';
 import '../people.css';
 
 /**
@@ -62,12 +83,15 @@ const K = {
   templates: [...peopleKeys.idcards, 'templates'] as const,
   settings: [...peopleKeys.idcards, 'settings'] as const,
   generatable: [...peopleKeys.idcards, 'generatable'] as const,
+  vcardTemplate: [...peopleKeys.vcard, 'template'] as const,
   batches: [...peopleKeys.idcards, 'batches'] as const,
   preview: (id: string) => [...peopleKeys.idcards, 'preview', id] as const,
   list: (status: string, q: string) => [...peopleKeys.idcards, 'list', status, q] as const,
 };
 const INVALIDATE = [[...peopleKeys.idcards]];
 const DIMS = { PORTRAIT: { w: 53.98, h: 85.6 }, LANDSCAPE: { w: 85.6, h: 53.98 } } as const;
+/** The visiting card is 3.5 × 2 in. */
+const VCARD_DIMS = { w: 88.9, h: 50.8 } as const;
 const FAMILY = { serif: "'Times New Roman', 'Liberation Serif', Times, serif", sans: "Arial, 'Liberation Sans', Helvetica, sans-serif" };
 const PT_TO_MM = 25.4 / 72;
 
@@ -112,6 +136,21 @@ const PALETTE_MORE: PaletteItem[] = [
   { key: 'shape', label: 'Shape', make: () => ({ type: 'SHAPE', label: 'Shape', xMm: 0, yMm: 0, wMm: 20, hMm: 2, fill: '#b68235', z: 0 }) },
 ];
 const ALL_PALETTE = [...PALETTE, ...PALETTE_MORE];
+
+/** A visiting card carries only these details (no photo, employee ID, blood group, birth date or signature). */
+const VCARD_BINDINGS: IdCardBinding[] = ['employee.full_name', 'employee.designation', 'employee.department', 'employee.email', 'employee.mobile', 'tenant.name', 'tenant.address'];
+const VCARD_PALETTE: PaletteItem[] = [
+  { key: 'name', label: 'Full name', make: (W) => textEl('Full name', 'employee.full_name', W - 12, 8, font(20, 'serif', '#201f1d', 'left')) },
+  { key: 'designation', label: 'Designation', make: (W) => textEl('Designation', 'employee.designation', W - 12, 5, font(9, 'sans', '#8a6326', 'left')) },
+  { key: 'department', label: 'Department', make: () => textEl('Department', 'employee.department', 40, 5, font(9, 'sans', '#605d5d', 'left')) },
+  { key: 'email', label: 'Email', make: () => textEl('Email', 'employee.email', 45, 5, font(8, 'sans', '#201f1d', 'left')) },
+  { key: 'mobile', label: 'Mobile number', make: () => textEl('Mobile number', 'employee.mobile', 36, 5, font(8, 'sans', '#201f1d', 'left')) },
+  { key: 'company', label: 'Company name', make: (W) => textEl('Company name', 'tenant.name', W - 40, 7, font(12, 'serif', '#201f1d', 'left')) },
+  { key: 'companyAddress', label: 'Company address', make: (W) => textEl('Company address', 'tenant.address', W - 12, 8, font(7.5, 'sans', '#605d5d', 'left')) },
+  { key: 'logo', label: 'Company logo', make: () => ({ type: 'LOGO', label: 'Company logo', binding: 'tenant.logo', xMm: 0, yMm: 0, wMm: 30, hMm: 9, z: 1, font: font(13, 'serif') }) },
+  { key: 'qr', label: 'QR code', make: () => ({ type: 'QR', label: 'QR code', binding: 'qr.verify_url', xMm: 0, yMm: 0, wMm: 16, hMm: 16, z: 1 }) },
+];
+const VCARD_MORE: PaletteItem[] = PALETTE_MORE.filter((p) => p.key !== 'signature');
 
 const TEXT_BINDINGS = IDCARD_BINDINGS.filter((b) => !['employee.photo', 'tenant.logo', 'qr.verify_url'].includes(b));
 function bindingOptions(type: IdCardElement['type']): IdCardBinding[] {
@@ -170,6 +209,8 @@ export default function IdCardPage() {
   const settings = useQuery({ queryKey: K.settings, queryFn: () => peopleApi.idSettings() });
   const batches = useQuery({ queryKey: K.batches, queryFn: () => peopleApi.printBatches() });
   const [confirmPrint, setConfirmPrint] = useState(false);
+  const [roleTpls, setRoleTpls] = useState(false);
+  const [qrPanel, setQrPanel] = useState(false);
   const nav = useNavigate();
 
   const generate = useAction(() => peopleApi.generateCards({ allGeneratable: true }), {
@@ -201,6 +242,8 @@ export default function IdCardPage() {
         sub="Drag fields onto the card. Cards generate automatically when a photo and details are uploaded."
         actions={
           <>
+            <button className="btn btn-secondary" style={{ borderColor: 'var(--color-accent)', color: 'var(--color-accent)', fontWeight: 600 }} onClick={() => setQrPanel(true)} title="Company details and preview of the page a scan opens">◧ QR scan page</button>
+            <button className="btn btn-secondary" onClick={() => setRoleTpls(true)}>Templates by role</button>
             <button className="btn btn-secondary" disabled={!n || generate.isPending} title={n ? undefined : 'No new joiner has a complete profile yet'} onClick={() => generate.mutate(undefined)}>
               {generate.isPending ? 'Generating…' : `Generate for ${n} new joiner${n === 1 ? '' : 's'}`}
             </button>
@@ -210,6 +253,7 @@ export default function IdCardPage() {
           </>
         }
       />
+      {roleTpls && <RoleTemplatesModal onClose={() => setRoleTpls(false)} />}
       {waiting.length > 0 && (
         <div className="note" style={{ fontSize: 13 }}>
           {waiting.length} waiting for photo or blood group:{' '}
@@ -231,6 +275,7 @@ export default function IdCardPage() {
           { value: 'batches', label: `Print batches${batches.data?.length ? ` · ${batches.data.length}` : ''}` },
         ]}
       />
+      {qrPanel && <QrScanPageDrawer onClose={() => setQrPanel(false)} />}
       {tab === 'designer' && <Designer settings={settings.data} initialEmployee={sp.get('employee')} />}
       {tab === 'cards' && <CardsTab />}
       {tab === 'batches' && <BatchesTab rows={batches.data} loading={batches.isLoading} error={batches.error} retry={() => void batches.refetch()} />}
@@ -255,9 +300,10 @@ export default function IdCardPage() {
 
 // ── Designer ──────────────────────────────────────────────────────────────
 
-function Designer({ settings, initialEmployee }: { settings: IdCardSettings | undefined; initialEmployee: string | null }) {
+function Designer({ settings, initialEmployee, visiting = false }: { settings: IdCardSettings | undefined; initialEmployee: string | null; visiting?: boolean }) {
   const { toast, toastError } = useToast();
-  const tpls = useQuery({ queryKey: K.templates, queryFn: () => peopleApi.idTemplates() });
+  // Visiting card mode edits the one company-wide visiting card template instead of the ID card templates.
+  const tpls = useQuery({ queryKey: visiting ? K.vcardTemplate : K.templates, queryFn: () => (visiting ? peopleApi.vcardTemplates() : peopleApi.idTemplates()) });
   const emps = useQuery({ queryKey: ['lookups', 'people', 'idcard-employees'], queryFn: () => lookupsFor(['employees']) });
   const [tplId, setTplId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -266,6 +312,7 @@ function Designer({ settings, initialEmployee }: { settings: IdCardSettings | un
   const [employeeId, setEmployeeId] = useState<string>(initialEmployee ?? '');
   const [switchTo, setSwitchTo] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [editingSettings, setEditingSettings] = useState(false);
   const [vendor, setVendor] = useState('');
@@ -290,19 +337,30 @@ function Designer({ settings, initialEmployee }: { settings: IdCardSettings | un
   }, [tpl?.id, tpl?.version]);
   const dirty = !!tpl && !!draft && JSON.stringify(toDraft(tpl)) !== JSON.stringify(draft);
 
-  const publish = useAction((d: Draft) => peopleApi.updateIdTemplate(tpl!.id, toInput(d)), {
+  const publish = useAction((d: Draft) => (visiting ? peopleApi.updateVcardTemplate(tpl!.id, toInput(d)) : peopleApi.updateIdTemplate(tpl!.id, toInput(d))), {
     success: (r) => `${r.name} published · v${r.version}`,
-    invalidate: INVALIDATE,
+    invalidate: visiting ? [[...peopleKeys.vcard]] : INVALIDATE,
     // Adopt the server's normalised copy so the editor is clean again.
     onSuccess: (r) => setDraft(toDraft(r)),
   });
-  const makeDefault = useAction(() => peopleApi.setDefaultIdTemplate(tpl!.id), { success: `${tpl?.name ?? 'Template'} is now the default template · cards not yet sent to print were moved to it`, invalidate: INVALIDATE });
+  const removeTemplate = useAction(() => (visiting ? peopleApi.deleteVcardTemplate(tpl!.id) : peopleApi.deleteIdTemplate(tpl!.id)), {
+    success: 'Template deleted',
+    invalidate: visiting ? [[...peopleKeys.vcard]] : INVALIDATE,
+    // the editor falls back to the default template once the deleted one is gone
+    onSuccess: () => { setDeleting(false); setTplId(null); setSel(null); },
+  });
+  const makeDefault = useAction(() => (visiting ? peopleApi.setDefaultVcardTemplate(tpl!.id) : peopleApi.setDefaultIdTemplate(tpl!.id)), {
+    success: visiting ? `${tpl?.name ?? 'Template'} is now the default · every visiting card uses it` : `${tpl?.name ?? 'Template'} is now the default template · cards not yet sent to print were moved to it`,
+    invalidate: visiting ? [[...peopleKeys.vcard]] : INVALIDATE,
+  });
   const saveVendor = useAction(() => peopleApi.saveIdSettings({ ...(settings as IdCardSettings), printVendorEmail: vendor.trim() }), { success: 'Print vendor saved', invalidate: INVALIDATE });
 
   if (tpls.error) return <ErrorBlock error={tpls.error} retry={() => void tpls.refetch()} />;
   if (tpls.isLoading || !tpl || !draft) return <Loading />;
 
-  const dims = DIMS[draft.orientation];
+  const dims = visiting ? VCARD_DIMS : DIMS[draft.orientation];
+  const palette = visiting ? VCARD_PALETTE : PALETTE;
+  const paletteMore = visiting ? VCARD_MORE : PALETTE_MORE;
   const els = draft[side];
   const selected = els.find((e) => e.id === sel) ?? null;
   const setEls = (fn: (els: IdCardElement[]) => IdCardElement[]) => setDraft((d) => (d ? { ...d, [side]: fn(d[side]) } : d));
@@ -376,11 +434,11 @@ function Designer({ settings, initialEmployee }: { settings: IdCardSettings | un
       {/* Left: elements + templates */}
       <div className="stack" style={{ gap: 6 }}>
         <div className="pp-idc-kick">Elements</div>
-        {PALETTE.map((p) => (
+        {palette.map((p) => (
           <PaletteButton key={p.key} item={p} onAdd={() => addEl(p)} />
         ))}
         <div className="pp-idc-kick" style={{ marginTop: 6 }}>More</div>
-        {PALETTE_MORE.map((p) => (
+        {paletteMore.map((p) => (
           <PaletteButton key={p.key} item={p} onAdd={() => addEl(p)} />
         ))}
         <div className="pp-idc-kick" style={{ marginTop: 10 }}>Templates</div>
@@ -391,6 +449,7 @@ function Designer({ settings, initialEmployee }: { settings: IdCardSettings | un
           </button>
         ))}
         <button type="button" className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start' }} onClick={() => setCreating(true)}>+ New template</button>
+        {!tpl.isDefault && <button type="button" className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start' }} onClick={() => setDeleting(true)}>Delete this template</button>}
       </div>
 
       {/* Centre: canvas */}
@@ -408,6 +467,7 @@ function Designer({ settings, initialEmployee }: { settings: IdCardSettings | un
           onBgFit={setBgFit}
           data={preview.data?.data}
           qr={preview.data?.qrDataUrl}
+          qrBranded={preview.data?.qrBrandedDataUrl}
           onSelect={(id) => { setSel(id); setPhotoMove(false); }}
           editing={editingId}
           onEdit={setEditingId}
@@ -415,7 +475,7 @@ function Designer({ settings, initialEmployee }: { settings: IdCardSettings | un
           onDelete={removeEl}
           onDuplicate={dupEl}
           onDropItem={(key, at) => {
-            const item = ALL_PALETTE.find((p) => p.key === key);
+            const item = [...palette, ...paletteMore].find((p) => p.key === key);
             if (item) addEl(item, at);
           }}
         />
@@ -429,13 +489,13 @@ function Designer({ settings, initialEmployee }: { settings: IdCardSettings | un
           </select>
         </div>
         <div className="faint" style={{ fontSize: 12, textAlign: 'center', maxWidth: 420 }}>
-          CR80 · {dims.w} × {dims.h} mm · drag to move, corner to resize (1 mm snap) · arrow keys nudge, Delete removes. The QR opens the public verification page once the card is generated.
+          {visiting ? 'Visiting card' : 'CR80'} · {dims.w} × {dims.h} mm · drag to move, corner to resize (1 mm snap) · arrow keys nudge, Delete removes. {visiting ? 'The QR opens the employee’s own card. To use your company QR instead, delete it and add an Image (upload) with your QR picture.' : 'The QR opens the public verification page once the card is generated.'}
         </div>
         <div className="row" style={{ gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
           <button className="btn btn-ghost btn-sm" disabled={!dirty} onClick={() => { setDraft(toDraft(tpl)); setSel(null); }}>Discard changes</button>
-          <button className="btn btn-secondary btn-sm" disabled={!employeeId} onClick={() => setPreviewing(true)} title={dirty ? 'Shows the published version' : undefined}>Preview print</button>
+          {!visiting && <button className="btn btn-secondary btn-sm" disabled={!employeeId} onClick={() => setPreviewing(true)} title={dirty ? 'Shows the published version' : undefined}>Preview print</button>}
           {!tpl.isDefault && <button className="btn btn-secondary btn-sm" disabled={makeDefault.isPending} onClick={() => makeDefault.mutate(undefined)}>Set as default</button>}
-          <button className="btn btn-primary btn-sm" disabled={!dirty || publish.isPending} onClick={() => publish.mutate(draft)}>{publish.isPending ? 'Publishing…' : 'Publish template'}</button>
+          <button className="btn btn-primary btn-sm" disabled={!dirty || publish.isPending} onClick={() => publish.mutate(draft)}>{publish.isPending ? 'Publishing…' : visiting ? 'Publish visiting card' : 'Publish template'}</button>
         </div>
       </div>
 
@@ -443,7 +503,7 @@ function Designer({ settings, initialEmployee }: { settings: IdCardSettings | un
       <div className="stack" style={{ gap: 10 }}>
         <div className="pp-idc-kick">Properties · {selected ? (selected.label ?? selected.type.toLowerCase()) : 'Card'}</div>
         {selected ? (
-          <ElementProps el={selected} photoMoving={photoMove} onPhotoMove={setPhotoMove} cardW={dims.w} cardH={dims.h} onPatch={(p) => patchEl(selected.id, p)} onFont={(p) => patchFont(selected.id, p)} onLayer={(d) => layer(selected.id, d)} onDuplicate={() => dupEl(selected.id)} onDelete={() => removeEl(selected.id)} />
+          <ElementProps visiting={visiting} el={selected} photoMoving={photoMove} onPhotoMove={setPhotoMove} cardW={dims.w} cardH={dims.h} onPatch={(p) => patchEl(selected.id, p)} onFont={(p) => patchFont(selected.id, p)} onLayer={(d) => layer(selected.id, d)} onDuplicate={() => dupEl(selected.id)} onDelete={() => removeEl(selected.id)} />
         ) : (
           <div className="field">
             <label htmlFor="idc-name">Template name</label>
@@ -478,6 +538,7 @@ function Designer({ settings, initialEmployee }: { settings: IdCardSettings | un
             </label>
           )}
         </div>
+        {!visiting && (
         <div className="field">
           <label htmlFor="idc-vendor">Print vendor</label>
           <input id="idc-vendor" className="input" type="email" value={vendor} onChange={(e) => setVendor(e.target.value)} placeholder="print@vendor.in" />
@@ -488,6 +549,7 @@ function Designer({ settings, initialEmployee }: { settings: IdCardSettings | un
             <button className="btn btn-ghost btn-sm" disabled={!settings} onClick={() => setEditingSettings(true)}>Card settings</button>
           </div>
         </div>
+        )}
       </div>
 
       {switchTo && (
@@ -506,8 +568,19 @@ function Designer({ settings, initialEmployee }: { settings: IdCardSettings | un
           onClose={() => setSwitchTo(null)}
         />
       )}
+      {deleting && (
+        <ConfirmDialog
+          title={`Delete “${tpl.name}”?`}
+          body={visiting ? 'The template is removed. Employees’ visiting cards keep using the default template.' : 'Anyone set to use it, by person or by role, goes back to the company default, and cards still waiting to print are redrawn. Cards already printed or issued are not changed.'}
+          confirmLabel="Delete template"
+          danger
+          onConfirm={() => removeTemplate.mutate(undefined)}
+          onClose={() => setDeleting(false)}
+        />
+      )}
       {creating && (
         <NewTemplateModal
+          visiting={visiting}
           current={draft}
           onClose={() => setCreating(false)}
           onCreated={(t) => {
@@ -558,6 +631,7 @@ function Canvas({
   onBgFit,
   data,
   qr,
+  qrBranded,
   onSelect,
   editing,
   onEdit,
@@ -577,6 +651,7 @@ function Canvas({
   onBgFit: (p: Partial<IdCardBgFit>) => void;
   data: IdCardPreviewData | undefined;
   qr: string | undefined;
+  qrBranded?: string;
   onSelect: (id: string | null) => void;
   editing: string | null;
   onEdit: (id: string | null) => void;
@@ -793,7 +868,7 @@ function Canvas({
             onPointerDown={(e) => down(e, el, 'move')}
             title={el.label ?? undefined}
           >
-            <NodeBody el={el} data={data} qr={qr} scale={scale} editing={editing === el.id} onText={(v) => onPatch(el.id, { text: idCardLabelsToText(v), binding: null })} onStopEdit={() => onEdit(null)} />
+            <NodeBody el={el} data={data} qr={qr} qrBranded={qrBranded} scale={scale} editing={editing === el.id} onText={(v) => onPatch(el.id, { text: idCardLabelsToText(v), binding: null })} onStopEdit={() => onEdit(null)} />
             {el.id === sel && <span className="pp-idc-handle" onPointerDown={(e) => down(e, el, 'resize')} aria-label="Resize" />}
           </div>
         ))}
@@ -823,12 +898,21 @@ function PhotoFrame({ src, wMm, hMm, scale, frame }: { src: string; wMm: number;
   );
 }
 
-function NodeBody({ el, data, qr, scale, editing, onText, onStopEdit }: { el: IdCardElement; data: IdCardPreviewData | undefined; qr: string | undefined; scale: number; editing?: boolean; onText?: (v: string) => void; onStopEdit?: () => void }) {
+function NodeBody({ el, data, qr, qrBranded, scale, editing, onText, onStopEdit }: { el: IdCardElement; data: IdCardPreviewData | undefined; qr: string | undefined; qrBranded?: string; scale: number; editing?: boolean; onText?: (v: string) => void; onStopEdit?: () => void }) {
   if (el.type === 'IMAGE') return el.fileId ? <img src={fileUrl(el.fileId)} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }} /> : <div className="pp-idc-ph">Image</div>;
   if (el.type === 'SHAPE') return <div style={{ width: '100%', height: '100%', background: el.fill ?? '#b68235' }} />;
   if (el.type === 'PHOTO') {
     const id = data?.['employee.photo'];
     return id ? <PhotoFrame src={fileUrl(id) ?? ''} wMm={el.wMm} hMm={el.hMm} scale={scale} frame={el.photo ?? DEFAULT_ID_CARD_PHOTO_FRAME} /> : <div className="pp-idc-ph">Photo</div>;
+  }
+  if (el.type === 'QR' && el.qrStyle === 'BRANDED' && qrBranded) {
+    // the QR in the company colours, with the chosen logo in its white centre (about 22% of the width, as the printed card draws it)
+    return (
+      <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+        <img src={qrBranded} alt="QR" draggable={false} style={{ width: '100%', height: '100%', display: 'block' }} />
+        {el.fileId && <img src={fileUrl(el.fileId)} alt="" draggable={false} style={{ position: 'absolute', left: '50%', top: '50%', width: '20%', height: '20%', transform: 'translate(-50%, -50%)', objectFit: 'contain' }} />}
+      </div>
+    );
   }
   if (el.type === 'QR') return qr ? <img src={qr} alt="QR" draggable={false} style={{ width: '100%', height: '100%', display: 'block' }} /> : <div className="pp-idc-ph">QR</div>;
   if (el.type === 'LOGO' && data?.['tenant.logo']) return <img src={fileUrl(data['tenant.logo'])} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }} />;
@@ -909,7 +993,7 @@ function NumField({ id, value, min, max, step, onCommit }: { id: string; value: 
   );
 }
 
-function ElementProps({ el, photoMoving, onPhotoMove, cardW, cardH, onPatch, onFont, onLayer, onDuplicate, onDelete }: { el: IdCardElement; photoMoving: boolean; onPhotoMove: (on: boolean) => void; cardW: number; cardH: number; onPatch: (p: Partial<IdCardElement>) => void; onFont: (p: Partial<Font>) => void; onLayer: (d: 1 | -1) => void; onDuplicate: () => void; onDelete: () => void }) {
+function ElementProps({ visiting = false, el, photoMoving, onPhotoMove, cardW, cardH, onPatch, onFont, onLayer, onDuplicate, onDelete }: { visiting?: boolean; el: IdCardElement; photoMoving: boolean; onPhotoMove: (on: boolean) => void; cardW: number; cardH: number; onPatch: (p: Partial<IdCardElement>) => void; onFont: (p: Partial<Font>) => void; onLayer: (d: 1 | -1) => void; onDuplicate: () => void; onDelete: () => void }) {
   const f = { ...font(10), ...(el.font ?? {}) };
   const isText = ['TEXT', 'STATIC', 'SIGNATURE', 'LOGO'].includes(el.type);
   const { toastError } = useToast();
@@ -997,11 +1081,11 @@ function ElementProps({ el, photoMoving, onPhotoMove, cardW, cardH, onPatch, onF
           <textarea id="idc-text" ref={textRef} className="input" rows={3} maxLength={400} value={editText(el)} onChange={(e) => setTyped(e.target.value)} />
           <select className="input" aria-label="Insert employee value" value="" onChange={(e) => e.target.value && insertField(e.target.value)}>
             <option value="">Insert employee value…</option>
-            {TEXT_BINDINGS.map((b) => (
+            {(visiting ? VCARD_BINDINGS : TEXT_BINDINGS).map((b) => (
               <option key={b} value={b}>{IDCARD_BINDING_LABELS[b]}</option>
             ))}
           </select>
-          <span className="field-hint">Type anything you like. A value such as [Blood group] is filled in from each employee's record. You can also double-click the text on the card to type on it. A tall box wraps long text onto several lines.</span>
+          <span className="field-hint">Type anything you like. A value such as {visiting ? '[Email]' : '[Blood group]'} is filled in from each employee's record. You can also double-click the text on the card to type on it. A tall box wraps long text onto several lines.</span>
         </div>
       )}
       {(el.type === 'TEXT' || el.type === 'STATIC') && (
@@ -1035,6 +1119,30 @@ function ElementProps({ el, photoMoving, onPhotoMove, cardW, cardH, onPatch, onF
           <label htmlFor="idc-text">Text</label>
           <input id="idc-text" className="input" maxLength={200} value={el.text ?? ''} onChange={(e) => onPatch({ text: e.target.value })} />
         </div>
+      )}
+      {el.type === 'QR' && (
+        <>
+          <div className="field">
+            <label htmlFor="idc-qrstyle">QR style</label>
+            <select id="idc-qrstyle" className="input" value={el.qrStyle ?? 'PLAIN'} onChange={(e) => onPatch({ qrStyle: e.target.value as 'PLAIN' | 'BRANDED' })}>
+              <option value="PLAIN">Plain (black and white)</option>
+              <option value="BRANDED">Company colours with a logo in the centre</option>
+            </select>
+            <span className="field-hint">{(el.qrStyle ?? 'PLAIN') === 'BRANDED' ? 'Drawn in a gradient of your company colours (set under the QR scan page button at the top). Give it a white margin by placing it on a light area, and keep it at least 15 mm wide so phones can read it.' : 'Black and white is the easiest for phones to read.'}</span>
+          </div>
+          {el.qrStyle === 'BRANDED' && (
+            <div className="field">
+              <label>Logo in the centre</label>
+              {el.fileId && <img src={fileUrl(el.fileId)} alt="" style={{ width: '100%', height: 60, objectFit: 'contain', border: '1px solid var(--color-divider)', borderRadius: 4, background: '#fff' }} />}
+              <label className="pp-idc-upload">
+                <input type="file" accept="image/png,image/jpeg" style={{ display: 'none' }} disabled={busy} onChange={(e) => { void pickImage(e.target.files?.[0] ?? null); e.target.value = ''; }} />
+                {busy ? 'Uploading…' : el.fileId ? 'Replace logo' : 'Upload logo'}
+              </label>
+              {el.fileId && <button className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start' }} onClick={() => onPatch({ fileId: null })}>Use the company logo</button>}
+              <span className="field-hint">PNG or JPG. Without one, the company logo from Branding is used, and if there is none the centre stays empty.</span>
+            </div>
+          )}
+        </>
       )}
       {el.type === 'IMAGE' && (
         <div className="field">
@@ -1098,22 +1206,22 @@ function ElementProps({ el, photoMoving, onPhotoMove, cardW, cardH, onPatch, onF
 
 // ── Modals ────────────────────────────────────────────────────────────────
 
-function NewTemplateModal({ current, onClose, onCreated }: { current: Draft; onClose: () => void; onCreated: (t: IdCardTemplateDto) => void }) {
-  const create = useAction((b: IdCardTemplateInput) => peopleApi.createIdTemplate(b), { success: (r) => `${r.name} created`, invalidate: INVALIDATE, onSuccess: onCreated });
+function NewTemplateModal({ visiting = false, current, onClose, onCreated }: { visiting?: boolean; current: Draft; onClose: () => void; onCreated: (t: IdCardTemplateDto) => void }) {
+  const create = useAction((b: IdCardTemplateInput) => (visiting ? peopleApi.createVcardTemplate(b) : peopleApi.createIdTemplate(b)), { success: (r) => `${r.name} created`, invalidate: visiting ? [[...peopleKeys.vcard]] : INVALIDATE, onSuccess: onCreated });
   const fields: FieldDef[] = [
-    { name: 'name', label: 'Template name', type: 'text', span: 2, required: true, placeholder: 'Intern portrait' },
-    { name: 'orientation', label: 'Orientation', type: 'select', required: true, options: [{ value: 'PORTRAIT', label: 'Portrait' }, { value: 'LANDSCAPE', label: 'Landscape' }] },
+    { name: 'name', label: 'Template name', type: 'text', span: 2, required: true, placeholder: visiting ? 'Sales team' : 'Intern portrait' },
+    ...(visiting ? [] : [{ name: 'orientation', label: 'Orientation', type: 'select', required: true, options: [{ value: 'PORTRAIT', label: 'Portrait' }, { value: 'LANDSCAPE', label: 'Landscape' }] } as FieldDef]),
     { name: 'start', label: 'Start from', type: 'select', required: true, options: [{ value: 'copy', label: `Copy of ${current.name}` }, { value: 'blank', label: 'Blank card' }] },
   ];
   return (
     <FormModal
-      title="New ID card template"
+      title={visiting ? 'New visiting card template' : 'New ID card template'}
       fields={fields}
       initial={{ orientation: current.orientation, start: 'copy' }}
       submitLabel="Create template"
       onClose={onClose}
       onSubmit={async (v) => {
-        const orientation = v.orientation as Draft['orientation'];
+        const orientation = (visiting ? current.orientation : v.orientation) as Draft['orientation'];
         const from = DIMS[current.orientation];
         const to = DIMS[orientation];
         const sx = to.w / from.w;
@@ -1189,12 +1297,40 @@ function SettingsModal({ settings, onClose }: { settings: IdCardSettings; onClos
 
 type CardFilter = 'all' | 'QUEUED' | 'READY' | 'SENT_TO_PRINT' | 'ISSUED' | 'REVOKED';
 
+/** Pick the ID card template for each role. A person's own template (set in the Cards list) still comes first. */
+function RoleTemplatesModal({ onClose }: { onClose: () => void }) {
+  const { toast } = useToast();
+  const roles = useQuery({ queryKey: [...peopleKeys.idcards, 'role-templates'], queryFn: () => peopleApi.roleTemplates() });
+  const templates = useQuery({ queryKey: K.templates, queryFn: () => peopleApi.idTemplates() });
+  const save = useAction((choices: Record<string, string | null>) => peopleApi.saveRoleTemplates(choices), { success: 'Templates by role saved', invalidate: INVALIDATE });
+  if (!roles.data || !templates.data) return <Modal title="ID card template for each role" onClose={onClose}><div className="dialog-body"><Loading /></div></Modal>;
+  const def = templates.data.find((t) => t.isDefault);
+  const options = [{ value: '', label: `Company default (${def?.name ?? '—'})` }, ...templates.data.filter((t) => !t.isDefault).map((t) => ({ value: t.id, label: t.name }))];
+  const fields: FieldDef[] = roles.data.roles.map((r) => ({ name: r.key, label: r.name, type: 'select', span: 2, options }));
+  return (
+    <FormModal
+      title="ID card template for each role"
+      fields={fields}
+      initial={Object.fromEntries(roles.data.roles.map((r) => [r.key, roles.data!.choices[r.key] ?? '']))}
+      submitLabel="Save"
+      intro={<span className="faint" style={{ fontSize: 12.5 }}>Everyone in a role gets that template. A template chosen for one person in the Cards list comes first, and anyone else uses the company default. Cards not yet sent to print are redrawn; printed and issued cards keep what was printed.</span>}
+      onClose={onClose}
+      onSubmit={async (v) => {
+        const r = await save.mutateAsync(Object.fromEntries(roles.data!.roles.map((x) => [x.key, v[x.key] ? String(v[x.key]) : null])));
+        toast(r.moved ? `${r.moved} waiting card${r.moved === 1 ? '' : 's'} moved to the new template${r.regenerated ? ` · ${r.regenerated} redrawn` : ''}` : 'Saved · no waiting cards needed to change');
+      }}
+    />
+  );
+}
+
 function CardsTab() {
   const [filter, setFilter] = useState<CardFilter>('all');
   const [q, setQ] = useState('');
   const [previewing, setPreviewing] = useState<IdCardRow | null>(null);
   const [reasonFor, setReasonFor] = useState<{ row: IdCardRow; kind: 'revoke' | 'reissue' } | null>(null);
   const [reason, setReason] = useState('');
+  const [choosing, setChoosing] = useState<IdCardRow | null>(null);
+  const templates = useQuery({ queryKey: K.templates, queryFn: () => peopleApi.idTemplates() });
   const list = useQuery({ queryKey: K.list(filter, q), queryFn: () => peopleApi.idCards(filter === 'all' ? undefined : filter, q || undefined), placeholderData: (p) => p });
   const regen = useAction((id: string) => peopleApi.generateCards({ cardIds: [id] }), { success: (r) => (r.generated ? 'ID card generated (front & back)' : `Not generated · ${r.skipped.join('; ')}`), invalidate: INVALIDATE });
   const issue = useAction((id: string) => peopleApi.issueCard(id), { success: 'Marked as issued · employee notified', invalidate: INVALIDATE });
@@ -1202,12 +1338,12 @@ function CardsTab() {
     (x: { row: IdCardRow; kind: 'revoke' | 'reissue'; reason: string }) => (x.kind === 'revoke' ? peopleApi.revokeCard(x.row.id, x.reason) : peopleApi.reissueCard(x.row.employeeId, x.reason)),
     { success: (_r, x) => (x.kind === 'revoke' ? `${x.row.employee}’s card revoked · QR now shows Revoked` : `New card queued for ${x.row.employee}`), invalidate: INVALIDATE, onSuccess: () => setReasonFor(null) },
   );
-  const { toastError } = useToast();
+  const { toast, toastError } = useToast();
 
   const columns: Column<IdCardRow>[] = [
     { key: 'e', header: 'Employee', render: (r) => r.employee },
     { key: 'c', header: 'Emp ID', render: (r) => <span className="tnum">{r.empCode}</span> },
-    { key: 't', header: 'Template', render: (r) => r.template ?? <span className="faint">Default</span> },
+    { key: 't', header: 'Template', render: (r) => <span>{r.template ?? <span className="faint">Default</span>} {r.customTemplate && <Tag tone="accent">Own template</Tag>}{r.byRole && <Tag tone="outline">By role</Tag>}</span> },
     { key: 's', header: 'Status', render: (r) => <Tag tone={STATUS_TONE[r.status] ?? 'neutral'} title={r.serial}>{r.statusLabel}</Tag> },
     { key: 'g', header: 'Generated', render: (r) => (r.generatedAt ? formatDate(r.generatedAt) : <span className="faint">—</span>) },
     { key: 'b', header: 'Print batch', render: (r) => r.printBatch ?? <span className="faint">—</span> },
@@ -1218,6 +1354,7 @@ function CardsTab() {
         <span className="row" style={{ gap: 4, justifyContent: 'flex-end', flexWrap: 'wrap' }} onClick={(e) => e.stopPropagation()}>
           <button className="btn btn-ghost btn-sm" onClick={() => setPreviewing(r)}>Preview</button>
           <button className="btn btn-ghost btn-sm" onClick={() => download(`/id-cards/${r.id}/pdf`).catch(toastError)}>PDF</button>
+          {r.status !== 'REVOKED' && <button className="btn btn-ghost btn-sm" onClick={() => setChoosing(r)}>Template</button>}
           {(r.status === 'QUEUED' || r.status === 'READY') && (
             <button className="btn btn-ghost btn-sm" disabled={regen.isPending} onClick={() => regen.mutate(r.id)}>{r.status === 'READY' ? 'Regenerate' : 'Generate'}</button>
           )}
@@ -1268,6 +1405,21 @@ function CardsTab() {
             </div>
           </div>
         </Modal>
+      )}
+      {choosing && templates.data && (
+        <FormModal
+          title={`ID card template for ${choosing.employee}`}
+          fields={[{ name: 'templateId', label: 'Template', type: 'select', span: 2, options: [{ value: '', label: `Company default (${templates.data.find((t) => t.isDefault)?.name ?? '—'})` }, ...templates.data.filter((t) => !t.isDefault).map((t) => ({ value: t.id, label: t.name }))] }] as FieldDef[]}
+          initial={{ templateId: choosing.customTemplate ? (choosing.templateId ?? '') : '' }}
+          submitLabel="Use this template"
+          intro={<span className="faint" style={{ fontSize: 12.5 }}>{choosing.status === 'QUEUED' || choosing.status === 'READY' ? `${choosing.employee}’s card is redrawn with it straight away.` : `${choosing.employee}’s card is already ${choosing.statusLabel.toLowerCase()}, so what was printed stays as it is. The template is used when the card is reissued.`}</span>}
+          onClose={() => setChoosing(null)}
+          onSubmit={async (v) => {
+            const r = await peopleApi.setEmployeeIdTemplate(choosing.employeeId, v.templateId ? String(v.templateId) : null);
+            toast(r.applied === 'NOW' ? `${choosing.employee}’s card now uses ${r.template}` : `${choosing.employee} will use ${r.template}${r.applied === 'ON_REISSUE' ? ' when the card is reissued' : ''}`);
+            void list.refetch();
+          }}
+        />
       )}
       {reasonFor && (
         <Modal
@@ -1322,4 +1474,23 @@ function BatchesTab({ rows, loading, error, retry }: { rows: PrintBatchRow[] | u
   ];
   if (error) return <ErrorBlock error={error} retry={retry} />;
   return <DataTable columns={columns} rows={rows} loading={loading} rowKey={(r) => r.id} empty="No print batches yet. Generate cards, then send them to the print vendor." />;
+}
+
+/** The visiting card designer: the same canvas, sized 3.5 × 2 in, for the one company-wide visiting card. */
+export function VisitingCardDesigner() {
+  const [sp, setSp] = useSearchParams();
+  const tab: 'designer' | 'access' = sp.get('tab') === 'access' ? 'access' : 'designer';
+  const pickTab = (t: 'designer' | 'access') => {
+    const next = new URLSearchParams(sp);
+    if (t === 'designer') next.delete('tab');
+    else next.set('tab', t);
+    setSp(next, { replace: true });
+  };
+  return (
+    <div data-screen-label="Visiting card designer" className="stack" style={{ gap: 18 }}>
+      <PageHeader title="Visiting card designer" sub="Design the visiting card every employee gets, and choose who gets one." />
+      <Tabs<'designer' | 'access'> value={tab} onChange={pickTab} tabs={[{ value: 'designer', label: 'Designer' }, { value: 'access', label: 'Access' }]} />
+      {tab === 'access' ? <VisitingCardAccessPanel /> : <Designer settings={undefined} initialEmployee={null} visiting />}
+    </div>
+  );
 }

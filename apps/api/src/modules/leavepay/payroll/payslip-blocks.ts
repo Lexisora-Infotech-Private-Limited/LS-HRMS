@@ -1,5 +1,6 @@
 import type { PayslipBlock, PayslipDesign, PayslipDetail, PayslipStyle } from '@lexisora/shared';
 import { PDF_COLORS, type Pdf, type PdfService } from '../../../core/pdf/pdf.service';
+import { customFontName } from '../../../core/pdf/fonts';
 import { periodLabel } from '../common/dates';
 import { fmtHm } from './payroll-calc';
 
@@ -14,7 +15,10 @@ const FONTS = {
 
 /** The PDF font for a style (bold / italic can be overridden, e.g. table headings are always bold). */
 export function fontFor(s: Pick<PayslipStyle, 'font' | 'bold' | 'italic'>, bold = s.bold, italic = s.italic): string {
-  return FONTS[s.font][(bold ? 1 : 0) + (italic ? 2 : 0)]!;
+  const i = (bold ? 1 : 0) + (italic ? 2 : 0);
+  const builtIn = (FONTS as Record<string, readonly string[]>)[s.font];
+  // The bundled families are registered on every document; if one were missing from the server the text still prints, in Helvetica.
+  return builtIn ? builtIn[i]! : (customFontName(s.font, bold, italic) ?? FONTS.HELVETICA[i]!);
 }
 
 /** Tint a #rrggbb colour with white (0 = the colour, 1 = white). */

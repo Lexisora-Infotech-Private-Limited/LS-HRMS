@@ -65,8 +65,8 @@ export default function ProfilePage({ self }: { self?: boolean }) {
         <div className="row" style={{ gap: 8 }}>
           {can('idcard.manage') ? (
             <button className="btn btn-secondary" onClick={() => nav(`/id-card?employee=${p.id}`)}>ID card</button>
-          ) : p.isSelf && can('vcard.self') ? (
-            <button className="btn btn-secondary" onClick={() => nav('/visiting-card')}>Visiting card</button>
+          ) : p.isSelf ? (
+            <button className="btn btn-secondary" onClick={() => nav('/visiting-card')}>{can('vcard.self') ? 'Visiting card' : 'My ID card'}</button>
           ) : null}
           {p.canLifecycle && p.status === 'ONBOARDING' && <button className="btn btn-secondary" onClick={() => setDialog('invite')}>Resend invite</button>}
           {p.canLifecycle && p.employmentType === 'INTERN' && p.status === 'ACTIVE' && <button className="btn btn-secondary" onClick={() => setDialog('convert')}>Convert to full-time</button>}

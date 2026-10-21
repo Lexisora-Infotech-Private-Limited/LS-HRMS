@@ -1,35 +1,29 @@
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { randomBytes } from 'node:crypto';
-import type { IdCardElement, VCardDto } from '@lexisora/shared';
+import { COMPANY_PROFILE_KEY, DEFAULT_COMPANY_PROFILE, DEFAULT_ID_CARD_BG_FIT, VCARD_ACCESS_KEY, companyProfileSchema, type CompanyProfile, vcardAllowed, type IdCardBgFit, type IdCardElement, type IdCardTemplateDto, type IdCardTemplateInput, type VCardAccess, type VCardAccessDto, type VCardDto } from '@lexisora/shared';
 import { env } from '../../../config/env';
 import { AuditService } from '../../../core/audit/audit.service';
+import { forgetVcardAccess, loadVcardAccess } from '../../../core/auth/vcard-access';
+import { SettingsService } from '../../../core/settings/settings.service';
 import { requireContext } from '../../../core/context/request-context';
 import { AppError, badRequest, notFound } from '../../../core/http/errors';
 import { MailService, type MailInput } from '../../../core/mail/mail.service';
 import { PdfService } from '../../../core/pdf/pdf.service';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { buildVcf, slugify, whatsappLink } from '../people.rules';
-import { PT_PER_MM, qrDataUrl, renderCardSvg, svgToPng } from '../idcards/card-render';
+import { IdCardsService } from '../idcards/idcards.service';
+import { PT_PER_MM, dataUrlSize, qrDataUrl, renderCardSvg, svgToPng } from '../idcards/card-render';
+import { H_MM, W_MM, defaultVisitingFront } from './vcard-default';
 
-/** 3.5 × 2 in visiting card (88.9 × 50.8 mm); PNG 1050 × 600 px at 300 DPI. */
-const W_MM = 88.9;
-const H_MM = 50.8;
+const TEMPLATES_KEY = 'people.vcard.templates';
+/** The earlier single-template setting, read once to carry an existing design over. */
+const OLD_TEMPLATE_KEY = 'people.vcard.template';
+type StoredTemplate = { id: string; name: string; front: IdCardElement[]; frontBgFileId: string | null; frontBgFit: IdCardBgFit; /** older saves have no back */ back?: IdCardElement[]; backBgFileId?: string | null; backBgFit?: IdCardBgFit; version: number };
+const hasBackSide = (t: { back: IdCardElement[]; backBgFileId?: string | null }) => t.back.length > 0 || !!t.backBgFileId;
+type StoredTemplates = { items: StoredTemplate[]; defaultId: string };
 
 const publicUrl = (tenantSlug: string, slug: string) => `${env.WEB_ORIGIN}/api/v1/vcard/c/${tenantSlug}/${slug}`;
-
-function cardElements(showPhone: boolean): IdCardElement[] {
-  const f = (size: number, extra: Partial<NonNullable<IdCardElement['font']>> = {}) => ({ size, weight: 'normal' as const, color: '#201f1d', align: 'left' as const, family: 'sans' as const, ...extra });
-  return [
-    { id: 'company', type: 'TEXT', binding: 'tenant.name', xMm: 6.5, yMm: 5, wMm: 55, hMm: 7, z: 1, font: f(12, { family: 'serif' }) },
-    { id: 'qr', type: 'QR', binding: 'qr.verify_url', xMm: 67, yMm: 5, wMm: 15.5, hMm: 15.5, z: 1 },
-    { id: 'name', type: 'TEXT', binding: 'employee.full_name', xMm: 6.5, yMm: 21, wMm: 76, hMm: 9, z: 1, font: f(20, { family: 'serif' }) },
-    { id: 'title', type: 'TEXT', binding: 'employee.designation', xMm: 6.5, yMm: 29, wMm: 76, hMm: 5, z: 1, font: f(9, { color: '#8a6326' }) },
-    { id: 'rule', type: 'SHAPE', xMm: 6.5, yMm: 38.5, wMm: 76, hMm: 0.3, fill: '#d7d3d3', z: 0 },
-    { id: 'email', type: 'TEXT', binding: 'employee.emp_code', xMm: 6.5, yMm: 40, wMm: 45, hMm: 5, z: 1, font: f(8) },
-    ...(showPhone ? [{ id: 'phone', type: 'TEXT' as const, binding: 'employee.emergency_contact' as const, xMm: 46, yMm: 40, wMm: 36.5, hMm: 5, z: 1, font: f(8, { align: 'right' as const }) }] : []),
-  ];
-}
 
 /** Digital visiting card (M11): auto-filled from the profile; PNG/PDF/vCard, email + WhatsApp share. */
 @Injectable()
@@ -39,7 +33,124 @@ export class VcardService {
     private readonly mail: MailService,
     private readonly pdf: PdfService,
     private readonly audit: AuditService,
+    private readonly settings: SettingsService,
+    private readonly idcards: IdCardsService,
   ) {}
+
+  /** The "who gets a visiting card" setting (HR / admin). */
+  async access(): Promise<VCardAccessDto> {
+    const [access, roles] = await Promise.all([loadVcardAccess(this.prisma, requireContext().tenantId), this.prisma.role.findMany({ select: { key: true, name: true }, orderBy: { name: 'asc' } })]);
+    return { ...access, roleOptions: roles };
+  }
+
+  async saveAccess(input: VCardAccess): Promise<VCardAccessDto> {
+    const tenantId = requireContext().tenantId;
+    const known = new Set((await this.prisma.role.findMany({ select: { key: true } })).map((r) => r.key));
+    const roles = input.roles.filter((r) => known.has(r));
+    if (input.mode === 'ROLES' && !roles.length) throw badRequest('Choose at least one role', 'VCARD_ROLES_REQUIRED');
+    if (input.mode === 'EMPLOYEES' && !input.employeeIds.length) throw badRequest('Choose at least one employee', 'VCARD_EMPLOYEES_REQUIRED');
+    const value: VCardAccess = { mode: input.mode, roles, employeeIds: input.employeeIds };
+    await this.settings.set(VCARD_ACCESS_KEY, value);
+    forgetVcardAccess(tenantId);
+    await this.audit.record({ action: 'vcard.access_updated', entity: 'Setting', entityId: VCARD_ACCESS_KEY, meta: { mode: value.mode, roles: value.roles.length, employees: value.employeeIds.length } });
+    return this.access();
+  }
+
+  // ── Company details shown on the page an ID card QR opens ────────────────
+
+  async companyProfile(): Promise<CompanyProfile> {
+    const r = companyProfileSchema.safeParse(await this.settings.get<unknown>(COMPANY_PROFILE_KEY, {}));
+    return r.success ? r.data : DEFAULT_COMPANY_PROFILE;
+  }
+
+  async saveCompanyProfile(input: CompanyProfile): Promise<CompanyProfile> {
+    await this.settings.set(COMPANY_PROFILE_KEY, input);
+    await this.audit.record({ action: 'company.profile.updated', entity: 'Setting', entityId: COMPANY_PROFILE_KEY, meta: { website: input.website, hasOfficeEmail: !!input.officeEmail } });
+    return this.companyProfile();
+  }
+
+  // ── Templates (designed in the visiting card designer; one is the default every card uses) ──
+
+  private async loadTemplates(): Promise<StoredTemplates> {
+    const saved = await this.settings.get<StoredTemplates | null>(TEMPLATES_KEY, null);
+    if (saved?.items?.length) return saved;
+    // First use (or a company that saved the single-template version): start with one template.
+    const old = await this.settings.get<Omit<StoredTemplate, 'id'> | null>(OLD_TEMPLATE_KEY, null);
+    const first: StoredTemplate = { id: 'corporate', name: old?.name ?? 'Corporate', front: old?.front ?? defaultVisitingFront(), frontBgFileId: old?.frontBgFileId ?? null, frontBgFit: old?.frontBgFit ?? DEFAULT_ID_CARD_BG_FIT, version: old?.version ?? 1 };
+    return { items: [first], defaultId: first.id };
+  }
+
+  private tplDto(t: StoredTemplate, defaultId: string): IdCardTemplateDto {
+    return {
+      id: t.id,
+      name: t.name,
+      orientation: 'LANDSCAPE',
+      front: t.front,
+      back: t.back ?? [],
+      frontBgFileId: t.frontBgFileId,
+      backBgFileId: t.backBgFileId ?? null,
+      frontBgFit: t.frontBgFit,
+      backBgFit: t.backBgFit ?? DEFAULT_ID_CARD_BG_FIT,
+      isDefault: t.id === defaultId,
+      widthMm: W_MM,
+      heightMm: H_MM,
+      version: t.version,
+    };
+  }
+
+  async templates(): Promise<IdCardTemplateDto[]> {
+    const { items, defaultId } = await this.loadTemplates();
+    return items.map((t) => this.tplDto(t, defaultId)).sort((a, b) => Number(b.isDefault) - Number(a.isDefault));
+  }
+
+  /** The template every visiting card is drawn with. */
+  private async defaultTemplate(): Promise<IdCardTemplateDto> {
+    const { items, defaultId } = await this.loadTemplates();
+    return this.tplDto(items.find((t) => t.id === defaultId) ?? items[0]!, items.find((t) => t.id === defaultId)?.id ?? items[0]!.id);
+  }
+
+  private async saveTemplates(v: StoredTemplates) {
+    await this.settings.set(TEMPLATES_KEY, v);
+  }
+
+  async createTemplate(i: IdCardTemplateInput): Promise<IdCardTemplateDto> {
+    const cur = await this.loadTemplates();
+    if (cur.items.length >= 20) throw badRequest('You can keep up to 20 visiting card templates', 'VCARD_TEMPLATE_LIMIT');
+    const t: StoredTemplate = { id: randomBytes(6).toString('hex'), name: i.name, front: i.front, frontBgFileId: i.frontBgFileId ?? null, frontBgFit: i.frontBgFit ?? DEFAULT_ID_CARD_BG_FIT, back: i.back, backBgFileId: i.backBgFileId ?? null, backBgFit: i.backBgFit ?? DEFAULT_ID_CARD_BG_FIT, version: 1 };
+    const next = { items: [...cur.items, t], defaultId: i.isDefault ? t.id : cur.defaultId };
+    await this.saveTemplates(next);
+    await this.audit.record({ action: 'vcard.template.created', entity: 'Setting', entityId: t.id, meta: { name: t.name } });
+    return this.tplDto(t, next.defaultId);
+  }
+
+  async updateTemplate(id: string, i: IdCardTemplateInput): Promise<IdCardTemplateDto> {
+    const cur = await this.loadTemplates();
+    const old = cur.items.find((t) => t.id === id);
+    if (!old) throw notFound('Template');
+    const t: StoredTemplate = { id, name: i.name, front: i.front, frontBgFileId: i.frontBgFileId ?? null, frontBgFit: i.frontBgFit ?? DEFAULT_ID_CARD_BG_FIT, back: i.back, backBgFileId: i.backBgFileId ?? null, backBgFit: i.backBgFit ?? DEFAULT_ID_CARD_BG_FIT, version: old.version + 1 };
+    const next = { items: cur.items.map((x) => (x.id === id ? t : x)), defaultId: i.isDefault ? id : cur.defaultId };
+    await this.saveTemplates(next);
+    await this.audit.record({ action: 'vcard.template.published', entity: 'Setting', entityId: id, meta: { version: t.version, elements: t.front.length, backElements: i.back.length } });
+    return this.tplDto(t, next.defaultId);
+  }
+
+  /** Delete a visiting card template. The default cannot be deleted (every card is drawn from it). */
+  async deleteTemplate(id: string) {
+    const cur = await this.loadTemplates();
+    if (!cur.items.some((t) => t.id === id)) throw notFound('Template');
+    if (cur.defaultId === id) throw badRequest('Make another template the default before deleting this one', 'TEMPLATE_IS_DEFAULT');
+    await this.saveTemplates({ items: cur.items.filter((t) => t.id !== id), defaultId: cur.defaultId });
+    await this.audit.record({ action: 'vcard.template.deleted', entity: 'Setting', entityId: id });
+    return { ok: true };
+  }
+
+  async setDefaultTemplate(id: string) {
+    const cur = await this.loadTemplates();
+    if (!cur.items.some((t) => t.id === id)) throw notFound('Template');
+    await this.saveTemplates({ items: cur.items, defaultId: id });
+    await this.audit.record({ action: 'vcard.template.default', entity: 'Setting', entityId: id });
+    return { ok: true };
+  }
 
   async ensureProfile(employeeId: string, fullName: string) {
     const existing = await this.prisma.vCardProfile.findUnique({ where: { employeeId } });
@@ -64,6 +175,7 @@ export class VcardService {
     const p = await this.ensureProfile(e.id, e.fullName);
     const t = await this.prisma.raw.tenant.findUniqueOrThrow({ where: { id: requireContext().tenantId } });
     const company = t.name;
+    const hasBack = hasBackSide(await this.defaultTemplate());
     const phone = p.showPhone ? (p.workPhone || e.phone || null) : null;
     const url = publicUrl(t.slug, p.publicSlug);
     const address = e.branch?.address ?? t.address ?? null;
@@ -81,6 +193,7 @@ export class VcardService {
       publicUrl: url,
       // Public link off → the QR carries the vCard itself (works offline).
       qrDataUrl: await qrDataUrl(p.isPublic ? url : vcf),
+      hasBack,
       showPhone: p.showPhone,
       workPhone: p.workPhone,
       linkedinUrl: p.linkedinUrl,
@@ -108,37 +221,48 @@ export class VcardService {
     return this.card(me);
   }
 
-  async png(employeeId = this.meId()): Promise<Buffer> {
+  async png(employeeId = this.meId(), side: 'front' | 'back' = 'front'): Promise<Buffer> {
     const c = await this.card(employeeId);
-    const data: Record<string, string | null> = {
-      'tenant.name': c.company,
-      'employee.full_name': c.name,
-      'employee.designation': c.title,
-      'employee.emp_code': c.email,
-      'employee.emergency_contact': c.phone,
-      'qr.verify_url': 'x',
-    };
-    const svg = renderCardSvg({ widthMm: W_MM, heightMm: H_MM, elements: cardElements(!!c.phone) }, data, { qr: c.qrDataUrl });
+    const tpl = await this.defaultTemplate();
+    const data = await this.idcards.dataFor(employeeId);
+    // The card shows what the employee chose to share; the QR is drawn from the card's own link.
+    data['employee.email'] = c.email;
+    data['employee.mobile'] = c.phone;
+    data['qr.verify_url'] = 'x';
+    const els = side === 'back' ? tpl.back : tpl.front;
+    const photo = await this.idcards.image(data['employee.photo']);
+    const bg = await this.idcards.image(side === 'back' ? tpl.backBgFileId : tpl.frontBgFileId, 1100);
+    const custom: Record<string, string | null> = {};
+    for (const el of els) if (el.type === 'IMAGE' && el.fileId && !(el.fileId in custom)) custom[el.fileId] = await this.idcards.image(el.fileId, 900);
+    const svg = renderCardSvg(
+      { widthMm: W_MM, heightMm: H_MM, elements: els },
+      data,
+      { photo, photoSize: await dataUrlSize(photo), logo: await this.idcards.image(data['tenant.logo'], 400), qr: c.qrDataUrl, bg, bgSize: await dataUrlSize(bg), bgFit: (side === 'back' ? tpl.backBgFit : tpl.frontBgFit) ?? undefined, custom },
+    );
     return svgToPng(svg);
   }
 
   async pdfFile(employeeId = this.meId()): Promise<Buffer> {
-    const png = await this.png(employeeId);
+    const pages = [await this.png(employeeId)];
+    if (hasBackSide(await this.defaultTemplate())) pages.push(await this.png(employeeId, 'back'));
     const bleed = 3 * PT_PER_MM;
     const w = W_MM * PT_PER_MM;
     const h = H_MM * PT_PER_MM;
     return this.pdf.render(
       (doc) => {
-        doc.rect(0, 0, w + 2 * bleed, h + 2 * bleed).fill('#ffffff');
-        doc.image(png, bleed, bleed, { width: w, height: h });
-        // crop marks
-        doc.lineWidth(0.3).strokeColor('#999999');
-        for (const [x, y] of [[bleed, bleed], [bleed + w, bleed], [bleed, bleed + h], [bleed + w, bleed + h]] as [number, number][]) {
-          doc.moveTo(x, y - bleed).lineTo(x, y - bleed / 2).stroke();
-          doc.moveTo(x, y + bleed / 2).lineTo(x, y + bleed).stroke();
-          doc.moveTo(x - bleed, y).lineTo(x - bleed / 2, y).stroke();
-          doc.moveTo(x + bleed / 2, y).lineTo(x + bleed, y).stroke();
-        }
+        pages.forEach((png, i) => {
+          if (i > 0) doc.addPage({ size: [w + 2 * bleed, h + 2 * bleed], margin: 0 });
+          doc.rect(0, 0, w + 2 * bleed, h + 2 * bleed).fill('#ffffff');
+          doc.image(png, bleed, bleed, { width: w, height: h });
+          // crop marks
+          doc.lineWidth(0.3).strokeColor('#999999');
+          for (const [x, y] of [[bleed, bleed], [bleed + w, bleed], [bleed, bleed + h], [bleed + w, bleed + h]] as [number, number][]) {
+            doc.moveTo(x, y - bleed).lineTo(x, y - bleed / 2).stroke();
+            doc.moveTo(x, y + bleed / 2).lineTo(x, y + bleed).stroke();
+            doc.moveTo(x - bleed, y).lineTo(x - bleed / 2, y).stroke();
+            doc.moveTo(x + bleed / 2, y).lineTo(x + bleed, y).stroke();
+          }
+        });
       },
       { size: [w + 2 * bleed, h + 2 * bleed], margin: 0, info: { Title: 'Visiting card', Author: 'Lexisora HRMS' } },
     );
@@ -159,6 +283,7 @@ export class VcardService {
     if ((await this.sharesToday(me)) + to.length > 20) throw new AppError(429, 'SHARE_LIMIT', 'You can share your card with up to 20 people a day');
     const c = await this.card(me);
     const png = await this.png(me);
+    const back = hasBackSide(await this.defaultTemplate()) ? await this.png(me, 'back') : null;
     const mail: MailInput & { replyTo: string } = {
       to,
       replyTo: c.email,
@@ -166,6 +291,7 @@ export class VcardService {
       text: `${message ? `${message}\n\n` : ''}${c.name}\n${c.title}\n${c.company}\n${c.email}${c.phone ? `\n${c.phone}` : ''}${c.isPublic ? `\n\nView online: ${c.publicUrl}` : ''}\n\nThe card image and a contact file (.vcf) are attached.`,
       attachments: [
         { filename: `${c.slug}.png`, content: png, contentType: 'image/png' },
+        ...(back ? [{ filename: `${c.slug}-back.png`, content: back, contentType: 'image/png' }] : []),
         { filename: `${c.slug}.vcf`, content: c.vcf, contentType: 'text/vcard' },
       ],
     };
@@ -196,12 +322,14 @@ export class VcardService {
     const wantVcf = slug.endsWith('.vcf');
     const s = wantVcf ? slug.slice(0, -4) : slug;
     const p = t ? await this.prisma.raw.vCardProfile.findUnique({ where: { tenantId_publicSlug: { tenantId: t.id, publicSlug: s } } }) : null;
-    const e = p ? await this.prisma.raw.employee.findUnique({ where: { id: p.employeeId }, include: { designation: true, department: true } }) : null;
+    const e = p ? await this.prisma.raw.employee.findUnique({ where: { id: p.employeeId }, include: { designation: true, department: true, user: { include: { role: true } } } }) : null;
+    // A card for someone the visiting-card setting no longer covers stops working, same as a private card.
+    const covered = t && e ? vcardAllowed(await loadVcardAccess(this.prisma, t.id), { roleKey: e.user?.role.key, employeeId: e.id }) : true;
     const page = (body: string) =>
       `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Visiting card</title><style>body{margin:0;font-family:'Segoe UI',Arial,sans-serif;background:#f7f5f2;color:#201f1d;display:grid;place-items:center;min-height:100vh}.c{background:#fff;border:1px solid #d7d3d3;border-radius:8px;padding:26px;width:min(420px,90vw);box-shadow:0 8px 24px rgba(0,0,0,.06)}.co{font-family:Georgia,serif;font-size:18px}.nm{font-family:Georgia,serif;font-size:28px;margin-top:22px}.ti{font-size:13px;color:#8a6326}.ft{font-size:12.5px;border-top:1px solid #d7d3d3;margin-top:18px;padding-top:8px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px}a.b{display:inline-block;margin-top:16px;background:#b68235;color:#fff;text-decoration:none;padding:8px 14px;border-radius:4px;font-size:13px}</style></head><body><div class="c">${body}</div></body></html>`;
     const esc = (x: string) => x.replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]!);
     if (!t || !p || !e) return { status: 404, html: page('<div class="nm">Card not found</div>') };
-    if (!p.isPublic || e.status === 'EXITED') return { status: 410, html: page(`<div class="nm">No longer available</div><div class="ti">${e.status === 'EXITED' ? `No longer with ${esc(t.name)}` : 'This card is private.'}</div>`) };
+    if (!p.isPublic || !covered || e.status === 'EXITED') return { status: 410, html: page(`<div class="nm">No longer available</div><div class="ti">${e.status === 'EXITED' ? `No longer with ${esc(t.name)}` : 'This card is private.'}</div>`) };
     const phone = p.showPhone ? (p.workPhone || e.phone || null) : null;
     const vcf = buildVcf({ name: e.fullName, org: t.name, title: e.designation?.name, email: e.officialEmail, phone, url: publicUrl(t.slug, p.publicSlug), linkedin: p.linkedinUrl });
     if (wantVcf) return { status: 200, vcf, filename: `${p.publicSlug}.vcf` };

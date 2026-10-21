@@ -20,7 +20,10 @@ import type {
   PayrollRunView,
   PayslipDetail,
   PayslipRow,
+  PayslipAssignInput,
   PayslipCanvas,
+  PayslipTemplateInput,
+  PayslipTemplatesView,
   SalaryListRow,
   SalaryPreview,
   SalaryPreviewInput,
@@ -36,7 +39,6 @@ import { del, download, get, patch, post, postBlob, put } from '@/lib/api';
 
 /** Leave + payroll API (docs/specs/spec-leavepay.md). */
 
-export type PayslipTemplateView = { design: PayslipCanvas; legacy: boolean; companyLogo: string | null; company: { name: string; address: string | null; pan: string | null } };
 
 export const lpKeys = {
   balances: ['leavepay', 'balances'] as const,
@@ -56,7 +58,7 @@ export const lpKeys = {
   salaries: ['leavepay', 'salaries'] as const,
   salary: (id: string) => ['leavepay', 'salary', id] as const,
   templates: ['leavepay', 'salary-templates'] as const,
-  payslipTemplate: ['leavepay', 'payslip-template'] as const,
+  payslipTemplate: ['leavepay', 'payslip-templates'] as const,
   payslips: ['leavepay', 'payslips'] as const,
   payslip: (id: string) => ['leavepay', 'payslip', id] as const,
   adjustments: ['leavepay', 'adjustments'] as const,
@@ -113,9 +115,13 @@ export const lpApi = {
   salaries: () => get<SalaryListRow[]>('/salary/employees'),
   salary: (employeeId: string) => get<SalaryView>(`/salary/employee/${employeeId}`),
   salaryPreview: (body: SalaryPreviewInput) => post<SalaryPreview>('/salary/preview', body),
-  payslipTemplate: () => get<PayslipTemplateView>('/payslip-template'),
-  savePayslipTemplate: (body: PayslipCanvas) => put<PayslipTemplateView>('/payslip-template', body),
-  previewPayslipPdf: (body: PayslipCanvas) => postBlob('/payslip-template/preview', body),
+  payslipTemplates: () => get<PayslipTemplatesView>('/payslip-templates'),
+  createPayslipTemplate: (body: PayslipTemplateInput) => post<PayslipTemplatesView>('/payslip-templates', body),
+  savePayslipTemplate: (id: string, body: PayslipTemplateInput) => put<PayslipTemplatesView>(`/payslip-templates/${id}`, body),
+  setDefaultPayslipTemplate: (id: string) => post<PayslipTemplatesView>(`/payslip-templates/${id}/default`),
+  deletePayslipTemplate: (id: string) => del<PayslipTemplatesView>(`/payslip-templates/${id}`),
+  assignPayslipTemplate: (body: PayslipAssignInput) => put<PayslipTemplatesView>('/payslip-templates/assign', body),
+  previewPayslipPdf: (body: PayslipCanvas) => postBlob('/payslip-templates/preview', body),
   templates: () => get<SalaryTemplateRow[]>('/salary-templates'),
   createTemplate: (body: SalaryTemplateInput) => post<SalaryTemplateRow>('/salary-templates', body),
   updateTemplate: (id: string, body: SalaryTemplateInput) => patch<SalaryTemplateRow>(`/salary-templates/${id}`, body),

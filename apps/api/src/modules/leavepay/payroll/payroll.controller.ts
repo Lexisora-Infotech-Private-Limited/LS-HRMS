@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, Res } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Put, Query, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { z } from 'zod';
 import {
@@ -7,8 +7,10 @@ import {
   payrollHoldSchema,
   payrollProfileSchema,
   payrollRunSchema,
+  payslipAssignSchema,
   payslipCanvasSchema,
   payslipListQuery,
+  payslipTemplateInputSchema,
   salaryPreviewSchema,
   salaryRevisionSchema,
   salaryTemplatePreviewSchema,
@@ -16,7 +18,9 @@ import {
   type AdjustmentInput,
   type PayrollProfileInput,
   type PayrollRunInput,
+  type PayslipAssignInput,
   type PayslipCanvas,
+  type PayslipTemplateInput,
   type SalaryPreviewInput,
   type SalaryRevisionInput,
   type SalaryTemplateInput,
@@ -230,20 +234,42 @@ export class SalaryTemplatesController {
   }
 }
 
-/** Payslip design — one per company, editable by Admin/CEO and HR; applies to payslips generated from then on. */
-@Controller('payslip-template')
+/** Payslip templates — a company keeps several, picks a default and sets one per salary structure (Admin/CEO and HR). */
+@Controller('payslip-templates')
 @RequirePerm('payroll.manage')
 export class PayslipTemplateController {
   constructor(private readonly payslips: PayslipService) {}
 
   @Get()
-  get() {
-    return this.payslips.designView();
+  list() {
+    return this.payslips.templatesView();
   }
 
-  @Put()
-  save(@Body(new ZodPipe(payslipCanvasSchema)) body: PayslipCanvas) {
-    return this.payslips.saveTemplate(body);
+  @Post()
+  create(@Body(new ZodPipe(payslipTemplateInputSchema)) body: PayslipTemplateInput) {
+    return this.payslips.createTemplate(body.name, body.design);
+  }
+
+  /** Choose the template one salary structure uses. */
+  @Put('assign')
+  assign(@Body(new ZodPipe(payslipAssignSchema)) body: PayslipAssignInput) {
+    return this.payslips.assignTemplate(body.salaryTemplateId, body.templateId);
+  }
+
+  @Put(':id')
+  save(@Param('id') id: string, @Body(new ZodPipe(payslipTemplateInputSchema)) body: PayslipTemplateInput) {
+    return this.payslips.saveTemplate(id, body.name, body.design);
+  }
+
+  @Post(':id/default')
+  @HttpCode(200)
+  makeDefault(@Param('id') id: string) {
+    return this.payslips.setDefaultTemplate(id);
+  }
+
+  @Delete(':id')
+  remove(@Param('id') id: string) {
+    return this.payslips.removeTemplate(id);
   }
 
   /** A sample payslip PDF in the design being edited (nothing is saved). */

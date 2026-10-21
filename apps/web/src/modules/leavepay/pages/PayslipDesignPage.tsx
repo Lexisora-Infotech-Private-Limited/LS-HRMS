@@ -5,29 +5,84 @@ import {
   PAYSLIP_ELEMENT_LABELS,
   PAYSLIP_FIELDS,
   PAYSLIP_FONTS,
+  PAYSLIP_FONT_CSS,
   PAYSLIP_FONT_LABELS,
   PAYSLIP_PAGE,
-  PAYSLIP_PRESET_LABELS,
+  PAYSLIP_CANVAS_PRESETS,
+  PAYSLIP_CANVAS_PRESET_LABELS,
   PAYSLIP_SAMPLE,
   TEXT_CASES,
   TEXT_CASE_LABELS,
+  applyPayslipFont,
   applyTextCase,
   bakeCompanyFields,
   newPayslipElement,
   payslipFieldLabel,
   planPayslipTable,
+  tableBodyRows,
   payslipLabelsToText,
   payslipTextToLabels,
   payslipCanvasPreset,
   payslipCanvasSchema,
   type PayslipCanvas,
+  type PayslipCanvasPreset,
   type PayslipElement,
   type PayslipElementOf,
   type PayslipRowOverride,
   type PayslipElementType,
+  type PayslipTemplatesView,
   type PayslipStyle,
 } from '@lexisora/shared';
+import '@fontsource/montserrat/400.css';
+import '@fontsource/montserrat/400-italic.css';
+import '@fontsource/montserrat/700.css';
+import '@fontsource/montserrat/700-italic.css';
+import '@fontsource/poppins/400.css';
+import '@fontsource/poppins/400-italic.css';
+import '@fontsource/poppins/700.css';
+import '@fontsource/poppins/700-italic.css';
+import '@fontsource/inter/400.css';
+import '@fontsource/inter/400-italic.css';
+import '@fontsource/inter/700.css';
+import '@fontsource/inter/700-italic.css';
+import '@fontsource/open-sans/400.css';
+import '@fontsource/open-sans/400-italic.css';
+import '@fontsource/open-sans/700.css';
+import '@fontsource/open-sans/700-italic.css';
+import '@fontsource/roboto/400.css';
+import '@fontsource/roboto/400-italic.css';
+import '@fontsource/roboto/700.css';
+import '@fontsource/roboto/700-italic.css';
+import '@fontsource/lato/400.css';
+import '@fontsource/lato/400-italic.css';
+import '@fontsource/lato/700.css';
+import '@fontsource/lato/700-italic.css';
+import '@fontsource/nunito/400.css';
+import '@fontsource/nunito/400-italic.css';
+import '@fontsource/nunito/700.css';
+import '@fontsource/nunito/700-italic.css';
+import '@fontsource/raleway/400.css';
+import '@fontsource/raleway/400-italic.css';
+import '@fontsource/raleway/700.css';
+import '@fontsource/raleway/700-italic.css';
+import '@fontsource/playfair-display/400.css';
+import '@fontsource/playfair-display/400-italic.css';
+import '@fontsource/playfair-display/700.css';
+import '@fontsource/playfair-display/700-italic.css';
+import '@fontsource/merriweather/400.css';
+import '@fontsource/merriweather/400-italic.css';
+import '@fontsource/merriweather/700.css';
+import '@fontsource/merriweather/700-italic.css';
+import '@fontsource/lora/400.css';
+import '@fontsource/lora/400-italic.css';
+import '@fontsource/lora/700.css';
+import '@fontsource/lora/700-italic.css';
+import '@fontsource/oswald/400.css';
+import '@fontsource/oswald/700.css';
+import '@fontsource/dancing-script/400.css';
+import '@fontsource/dancing-script/700.css';
 import { useAction } from '@/lib/query';
+import { FormModal, type FieldDef } from '@/components/form';
 import { ConfirmDialog, ErrorBlock, Loading, PageHeader } from '@/components/ui';
 import { lpApi, lpKeys } from '../api';
 import '../leavepay.css';
@@ -40,7 +95,6 @@ const MAX_LOGO_BYTES = 250 * 1024;
 const uid = () => `e${Math.random().toString(36).slice(2, 9)}`;
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
 const round1 = (n: number) => Math.round(n * 10) / 10;
-const FONT_CSS: Record<PayslipStyle['font'], string> = { HELVETICA: 'Helvetica, Arial, sans-serif', TIMES: "'Times New Roman', Times, serif", COURIER: "'Courier New', Courier, monospace" };
 const money = (paise: number) => `Rs. ${(paise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const ELEMENT_TYPES = Object.keys(PAYSLIP_ELEMENT_LABELS) as PayslipElementType[];
 const ADD_LABELS: Record<PayslipElementType, string> = { text: 'Text', logo: 'Logo', line: 'Line', box: 'Box', details: 'Details rows', table: 'Table' };
@@ -214,16 +268,17 @@ function RowList({ rows, onChange, focus }: { rows: Row[]; onChange: (r: Row[]) 
 }
 
 /** Lines and spacing of a table: for the whole table, then row by row (matched to the pay component's name). */
-function TableLines({ e, set }: { e: PayslipElementOf<'table'>; set: (patch: Record<string, unknown>) => void }) {
+function TableLines({ e, set, focus, components }: { e: PayslipElementOf<'table'>; set: (patch: Record<string, unknown>) => void; focus: React.MutableRefObject<Focus>; components: string[] }) {
   const [extra, setExtra] = useState('');
-  const sample = (e.kind === 'EARNINGS' ? PAYSLIP_SAMPLE.earnings : PAYSLIP_SAMPLE.deductions).map((l) => l.label);
+  // The pay component names salary structures really use; the sample names only until there are any.
+  const sample = components.length ? components : (e.kind === 'EARNINGS' ? PAYSLIP_SAMPLE.earnings : PAYSLIP_SAMPLE.deductions).map((l) => l.label);
   const key = (l: string) => l.trim().toLowerCase();
-  const names = [...sample, ...e.rowOverrides.map((o) => o.label).filter((l) => !sample.some((s) => key(s) === key(l)))];
+  const names = [...sample, ...[...e.rowOverrides.map((o) => o.label), ...e.alwaysShow].filter((l, i, all) => !sample.some((s) => key(s) === key(l)) && all.findIndex((x) => key(x) === key(l)) === i)];
   const find = (l: string) => e.rowOverrides.find((o) => key(o.label) === key(l));
   const setRow = (label: string, patch: Partial<PayslipRowOverride>) => {
-    const cur = find(label) ?? { label, height: 0, gapAfter: 0, line: 'DEFAULT' as const };
+    const cur = find(label) ?? { label, height: 0, gapAfter: 0, line: 'DEFAULT' as const, rename: '' };
     const next = { ...cur, ...patch };
-    const plain = !next.height && !next.gapAfter && next.line === 'DEFAULT';
+    const plain = !next.height && !next.gapAfter && next.line === 'DEFAULT' && !next.rename.trim();
     set({ rowOverrides: [...e.rowOverrides.filter((o) => key(o.label) !== key(label)), ...(plain ? [] : [next])] });
   };
   const tri = (v: boolean | null) => (v === null ? 'AUTO' : v ? 'ON' : 'OFF');
@@ -255,18 +310,21 @@ function TableLines({ e, set }: { e: PayslipElementOf<'table'>; set: (patch: Rec
       </div>
       <div className="row" style={{ gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
         <Field label="Row height"><Num label="Row height" min={10} max={40} value={e.rowHeight} onChange={(rowHeight) => set({ rowHeight })} /></Field>
+        <Field label="Cell padding"><Num label="Cell padding" min={0} max={30} step={0.5} value={e.cellPadding ?? 3} onChange={(cellPadding) => set({ cellPadding })} /></Field>
         <Field label="Heading height (0 = row)"><Num label="Heading height" min={0} max={60} value={e.headerHeight} onChange={(headerHeight) => set({ headerHeight })} /></Field>
         <Field label="Gap under heading"><Num label="Gap under heading" min={0} max={60} value={e.headerGap} onChange={(headerGap) => set({ headerGap })} /></Field>
         {e.showTotal && <Field label="Gap above total"><Num label="Gap above total" min={0} max={60} value={e.totalGap} onChange={(totalGap) => set({ totalGap })} /></Field>}
         <Field label="Heading colour"><ColorField label="Heading colour" value={e.headColor} onChange={(headColor) => set({ headColor })} /></Field>
       </div>
       <div className="kicker">Row by row</div>
-      <div className="faint" style={{ fontSize: 12 }}>These settings follow the row’s name, so they apply to every employee who has that pay component. Height 0 means the table’s row height.</div>
+      <div className="faint" style={{ fontSize: 12 }}>These settings follow the pay component’s name, so they apply to every employee who has it. “Show as” prints your own wording instead. “Always show” keeps the row even when the amount is 0. Height 0 means the table’s row height.</div>
       {names.map((n) => {
         const o = find(n);
         return (
           <div key={n} className="row" style={{ gap: 8, alignItems: 'flex-end', flexWrap: 'wrap', borderBottom: '1px solid var(--color-divider)', paddingBottom: 8 }}>
             <div style={{ width: 110, fontWeight: 600, fontSize: 13 }}>{n}</div>
+            <Field label="Show as"><TextBox label={`${n} shown as`} value={o?.rename ?? ''} maxLength={60} width={170} placeholder={n} focus={focus} onChange={(rename) => setRow(n, { rename })} /></Field>
+            <Tick checked={e.alwaysShow.some((x) => key(x) === key(n))} onChange={(on) => set({ alwaysShow: on ? [...e.alwaysShow, n] : e.alwaysShow.filter((x) => key(x) !== key(n)) })} label="Always show" />
             <Field label="Height"><Num label={`${n} height`} min={0} max={60} width={60} value={o?.height ?? 0} onChange={(height) => setRow(n, { height })} /></Field>
             <Field label="Space after"><Num label={`${n} space after`} min={0} max={60} width={60} value={o?.gapAfter ?? 0} onChange={(gapAfter) => setRow(n, { gapAfter })} /></Field>
             <Field label="Line under">
@@ -276,20 +334,20 @@ function TableLines({ e, set }: { e: PayslipElementOf<'table'>; set: (patch: Rec
                 <option value="HIDE">Hide</option>
               </select>
             </Field>
-            {!sample.some((s) => key(s) === key(n)) && <button type="button" className="btn btn-ghost btn-sm" aria-label={`Remove ${n}`} onClick={() => set({ rowOverrides: e.rowOverrides.filter((x) => key(x.label) !== key(n)) })}>✕</button>}
+            {!sample.some((s) => key(s) === key(n)) && <button type="button" className="btn btn-ghost btn-sm" aria-label={`Remove ${n}`} onClick={() => set({ rowOverrides: e.rowOverrides.filter((x) => key(x.label) !== key(n)), alwaysShow: e.alwaysShow.filter((x) => key(x) !== key(n)) })}>✕</button>}
           </div>
         );
       })}
       <div className="row" style={{ gap: 6, alignItems: 'center' }}>
         <input className="input" aria-label="Another pay component name" placeholder="Another component, e.g. Bonus" maxLength={40} style={{ flex: 1 }} value={extra} onChange={(ev) => setExtra(ev.target.value)} />
-        <button type="button" className="btn btn-secondary btn-sm" disabled={!extra.trim() || names.some((n) => key(n) === key(extra))} onClick={() => { setRow(extra.trim(), { gapAfter: 1 }); setExtra(''); }}>+ Add row name</button>
+        <button type="button" className="btn btn-secondary btn-sm" disabled={!extra.trim() || names.some((n) => key(n) === key(extra))} onClick={() => { setRow(extra.trim(), { gapAfter: 1 }); setExtra(''); }}>+ Add a component name</button>
       </div>
     </div>
   );
 }
 
 // ── Properties of the selected element ────────────────────────────────────────────────────────────────────────
-function Properties({ e, set, focus }: { e: PayslipElement; set: (patch: Record<string, unknown>) => void; focus: React.MutableRefObject<Focus> }) {
+function Properties({ e, set, focus, components }: { e: PayslipElement; set: (patch: Record<string, unknown>) => void; focus: React.MutableRefObject<Focus>; components: { earnings: string[]; deductions: string[] } }) {
   const geometry = (
     <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
       <Field label="X"><Num label="X" value={e.x} min={0} max={PAYSLIP_PAGE.width} onChange={(x) => set({ x })} /></Field>
@@ -307,6 +365,18 @@ function Properties({ e, set, focus }: { e: PayslipElement; set: (patch: Record<
           <div className="row" style={{ gap: 8, alignItems: 'center' }}><FieldPicker focus={focus} /></div>
           <div className="faint" style={{ fontSize: 12 }}>{FIELD_HELP} You can also double-click the text on the page (or press Enter while it is selected) to type straight onto it.</div>
           <StyleBar value={e.style} onChange={(style) => set({ style })} />
+          <div className="stack" style={{ gap: 6 }}>
+            <Tick checked={!!e.lead} onChange={(on) => set(on ? { lead: { text: 'Label :', color: e.style.color, bold: e.style.bold }, fit: true } : { lead: null })} label="Start the line with a label in its own colour" />
+            {e.lead && (
+              <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <TextBox label="Label text" value={e.lead.text} maxLength={80} width={210} placeholder="Label :" focus={focus} onChange={(v) => set({ lead: { ...e.lead!, text: v } })} />
+                <ColorField label="Label colour" value={e.lead.color} onChange={(color) => set({ lead: { ...e.lead!, color } })} />
+                <Tick checked={e.lead.bold} onChange={(bold) => set({ lead: { ...e.lead!, bold } })} label="Bold label" />
+              </div>
+            )}
+            <Tick checked={e.fit} onChange={(fit) => set({ fit })} label="Keep on one line (shrink the text to fit the box)" />
+            {e.lead && <div className="faint" style={{ fontSize: 12 }}>The label and the text are placed together, so a longer amount never runs into the label.</div>}
+          </div>
         </>
       );
       break;
@@ -384,6 +454,10 @@ function Properties({ e, set, focus }: { e: PayslipElement; set: (patch: Record<
             <Field label="Heading"><TextBox label="Table heading" value={e.heading} maxLength={40} focus={focus} onChange={(v) => set({ heading: v })} /></Field>
             <Field label="Amount column heading"><TextBox label="Amount heading" value={e.amountHeading} maxLength={30} focus={focus} onChange={(v) => set({ amountHeading: v })} /></Field>
           </div>
+          <div className="stack" style={{ gap: 6 }}>
+            <Tick checked={!!e.headStyle} onChange={(on) => set({ headStyle: on ? { font: 'HELVETICA', size: 9, bold: true, italic: false, color: e.headColor, align: 'LEFT', textCase: 'UPPER' } : null })} label="Choose the heading font, size and colour" />
+            {e.headStyle && <StyleBar value={e.headStyle} onChange={(headStyle) => set({ headStyle })} noAlign />}
+          </div>
           {e.kind === 'EARNINGS' && (
             <div className="row" style={{ gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
               <Tick checked={e.showFullMonth} onChange={(showFullMonth) => set({ showFullMonth })} label={`Show a “${e.fullMonthHeading}” column`} />
@@ -396,7 +470,18 @@ function Properties({ e, set, focus }: { e: PayslipElement; set: (patch: Record<
             {e.showTotal && <Tick checked={!!e.totalFill} onChange={(on) => set({ totalFill: on ? '#f6f5f4' : null })} label="Shade it" />}
             {e.showTotal && e.totalFill && <ColorField label="Total row shade" value={e.totalFill} onChange={(totalFill) => set({ totalFill })} />}
           </div>
-          <TableLines e={e} set={set} />
+          <TableLines e={e} set={set} focus={focus} components={e.kind === 'EARNINGS' ? components.earnings : components.deductions} />
+          <div className="kicker">Your own rows</div>
+          <div className="faint" style={{ fontSize: 12 }}>Rows you type yourself, such as a fixed allowance or a note. They print under the payroll rows and are not added to the totals.</div>
+          {e.extraRows.map((r, i) => (
+            <div key={i} className="row" style={{ gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+              <TextBox label={`Own row ${i + 1} label`} value={r.label} maxLength={60} width={150} placeholder="Label" focus={focus} onChange={(v) => set({ extraRows: e.extraRows.map((x, j) => (j === i ? { ...x, label: v } : x)) })} />
+              {e.kind === 'EARNINGS' && e.showFullMonth && <TextBox label={`Own row ${i + 1} ${e.fullMonthHeading}`} value={r.full} maxLength={40} width={110} placeholder={e.fullMonthHeading} focus={focus} onChange={(v) => set({ extraRows: e.extraRows.map((x, j) => (j === i ? { ...x, full: v } : x)) })} />}
+              <TextBox label={`Own row ${i + 1} amount`} value={r.amount} maxLength={80} width={120} placeholder="Rs. 0.00" focus={focus} onChange={(v) => set({ extraRows: e.extraRows.map((x, j) => (j === i ? { ...x, amount: v } : x)) })} />
+              <button type="button" className="btn btn-ghost btn-sm" aria-label={`Remove own row ${i + 1}`} onClick={() => set({ extraRows: e.extraRows.filter((_, j) => j !== i) })}>✕</button>
+            </div>
+          ))}
+          <div><button type="button" className="btn btn-ghost btn-sm" disabled={e.extraRows.length >= 12} onClick={() => set({ extraRows: [...e.extraRows, { label: '', full: '', amount: '' }] })}>+ Add your own row</button></div>
           <div className="kicker">Row style</div>
           <StyleBar value={e.style} onChange={(style) => set({ style })} noAlign />
         </>
@@ -417,7 +502,7 @@ function fillSample(text: string, values: Record<string, string>): string {
 }
 
 const textCss = (s: PayslipStyle, scale: number): CSSProperties => ({
-  fontFamily: FONT_CSS[s.font],
+  fontFamily: PAYSLIP_FONT_CSS[s.font],
   fontSize: s.size * scale,
   fontWeight: s.bold ? 700 : 400,
   fontStyle: s.italic ? 'italic' : 'normal',
@@ -425,6 +510,22 @@ const textCss = (s: PayslipStyle, scale: number): CSSProperties => ({
   textAlign: s.align.toLowerCase() as CSSProperties['textAlign'],
   lineHeight: 1.2,
 });
+
+/** The largest font size (down to 6) at which the label and text fit on one line of the box, measured with the real font. */
+function fitLineSize(e: PayslipElementOf<'text'>, lead: string, body: string): number {
+  const ctx = document.createElement('canvas').getContext('2d');
+  if (!ctx) return e.style.size;
+  const width = (size: number) => {
+    const font = (bold: boolean) => `${e.style.italic ? 'italic ' : ''}${bold ? 700 : 400} ${size}px ${PAYSLIP_FONT_CSS[e.style.font]}`;
+    ctx.font = font(e.lead?.bold ?? e.style.bold);
+    const l = lead ? ctx.measureText(`${lead} `).width : 0;
+    ctx.font = font(e.style.bold);
+    return l + ctx.measureText(body).width;
+  };
+  let size = e.style.size;
+  while (width(size) > e.w && size > 6) size = Math.max(6, size - 0.25);
+  return size;
+}
 
 /** CSS corner radii for a box: top-left, top-right, bottom-right, bottom-left. */
 function boxRadius(e: PayslipElementOf<'box'>, scale: number): string {
@@ -455,7 +556,21 @@ function NodeBody({ e, scale, values, logoSrc, editing, onText, onStopEdit }: { 
           />
         );
       }
-      return <div style={{ ...textCss(e.style, scale), width: '100%', height: '100%', overflow: 'hidden', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{applyTextCase(fillSample(e.text, values), e.style.textCase) || <span className="pd-empty">(empty)</span>}</div>;
+      {
+        const body = applyTextCase(fillSample(e.text, values), e.style.textCase);
+        const lead = e.lead?.text.trim() ? applyTextCase(fillSample(e.lead.text, values), e.style.textCase) : '';
+        if (body && (lead || e.fit)) {
+          // the label and text flow together; "keep on one line" shrinks them just enough to fit, as the PDF does
+          const size = e.fit ? fitLineSize(e, lead, body) : e.style.size;
+          return (
+            <div style={{ ...textCss({ ...e.style, size }, scale), width: '100%', height: '100%', overflow: 'hidden', whiteSpace: e.fit ? 'nowrap' : 'pre-wrap', wordBreak: 'break-word' }}>
+              {lead && <span style={{ color: e.lead!.color, fontWeight: e.lead!.bold ? 700 : 400 }}>{lead} </span>}
+              {body}
+            </div>
+          );
+        }
+        return <div style={{ ...textCss(e.style, scale), width: '100%', height: '100%', overflow: 'hidden', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{body || <span className="pd-empty">(empty)</span>}</div>;
+      }
     case 'logo':
       return logoSrc ? <img src={logoSrc} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'contain', objectPosition: 'left top', display: 'block' }} /> : <div className="pd-ph">Logo</div>;
     case 'line':
@@ -483,16 +598,17 @@ function NodeBody({ e, scale, values, logoSrc, editing, onText, onStopEdit }: { 
     case 'table': {
       const earn = e.kind === 'EARNINGS';
       const full = earn && e.showFullMonth;
-      const lines = earn ? PAYSLIP_SAMPLE.earnings.map((l) => ({ label: l.label, full: money(l.full), amount: money(l.amount) })) : PAYSLIP_SAMPLE.deductions.map((l) => ({ label: l.label, full: '', amount: money(l.amount) }));
+      const sampleLines = earn ? PAYSLIP_SAMPLE.earnings.map((l) => ({ label: l.label, full: l.full as number | null, amount: l.amount })) : PAYSLIP_SAMPLE.deductions.map((l) => ({ label: l.label, full: null as number | null, amount: l.amount }));
+      const body = tableBodyRows(e, sampleLines, money, (t) => fillSample(t, values));
       const total = earn ? 9_160_000 : 200_000;
       const cols = full ? ['50%', '25%', '25%'] : ['70%', '30%'];
-      const plan = planPayslipTable(e, lines.map((l) => l.label));
+      const plan = planPayslipTable(e, body.map((b) => b.key));
       const cellsFor = (kind: 'head' | 'row' | 'total', i: number) =>
         kind === 'head'
           ? full ? [e.heading, e.fullMonthHeading, e.amountHeading] : [e.heading, e.amountHeading]
           : kind === 'total'
             ? full ? [e.totalLabel, '', money(total)] : [e.totalLabel, money(total)]
-            : full ? [lines[i - 1]!.label, lines[i - 1]!.full, lines[i - 1]!.amount] : [lines[i - 1]!.label, lines[i - 1]!.amount];
+            : body[i - 1]!.cells;
       const lineCss = `${Math.max(0.5, e.lineWidth * scale)}px ${e.lineDashed ? 'dashed' : 'solid'} ${e.lineColor}`;
       return (
         <div style={{ width: '100%', height: '100%', overflow: 'visible' }}>
@@ -503,9 +619,9 @@ function NodeBody({ e, scale, values, logoSrc, editing, onText, onStopEdit }: { 
                   <span
                     key={j}
                     style={{
-                      ...(p.kind === 'head' ? { ...textCss({ ...e.style, bold: true, size: Math.min(8, e.style.size), color: e.headColor, align: 'LEFT' }, scale), textTransform: 'uppercase' as const } : textCss({ ...e.style, bold: p.kind === 'total' ? true : e.style.bold, align: 'LEFT' }, scale)),
+                      ...(p.kind === 'head' ? { ...textCss(e.headStyle ? { ...e.headStyle, align: 'LEFT' } : { ...e.style, bold: true, size: Math.min(8, e.style.size), color: e.headColor, align: 'LEFT' }, scale), textTransform: (e.headStyle ? 'none' : 'uppercase') as 'none' | 'uppercase' } : textCss({ ...e.style, bold: p.kind === 'total' ? true : e.style.bold, align: 'LEFT' }, scale)),
                       width: cols[j],
-                      padding: `0 ${3 * scale}px`,
+                      padding: `0 ${(e.cellPadding ?? 3) * scale}px`,
                       boxSizing: 'border-box',
                       textAlign: (full ? j > 0 : j === 1) ? 'right' : 'left',
                       whiteSpace: 'nowrap',
@@ -513,7 +629,7 @@ function NodeBody({ e, scale, values, logoSrc, editing, onText, onStopEdit }: { 
                       textOverflow: 'ellipsis',
                     }}
                   >
-                    {p.kind !== 'head' && j === 0 ? applyTextCase(c, e.style.textCase) : c}
+                    {p.kind === 'head' ? (e.headStyle ? applyTextCase(c, e.headStyle.textCase) : c) : j === 0 ? applyTextCase(c, e.style.textCase) : c}
                   </span>
                 ))}
               </div>
@@ -562,7 +678,7 @@ function Canvas({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  const scale = clamp((avail - 8) / PAYSLIP_PAGE.width, 0.5, 1.35);
+  const scale = clamp((avail - 8) / PAYSLIP_PAGE.width, 0.3, 1.35);
   const W = PAYSLIP_PAGE.width * scale;
   const H = PAYSLIP_PAGE.height * scale;
 
@@ -670,27 +786,48 @@ function Canvas({
 }
 
 /** Payslip design (Admin/CEO and HR): a free canvas. Drag every element where you want it, type your own text. */
+/** Fill in the default for any option a saved design predates, so the editor never meets a missing field. */
+function withDesignDefaults(v: PayslipTemplatesView): PayslipTemplatesView {
+  return { ...v, templates: v.templates.map((t) => ({ ...t, design: payslipCanvasSchema.safeParse(t.design).data ?? t.design })) };
+}
+
 export default function PayslipDesignPage() {
-  const q = useQuery({ queryKey: lpKeys.payslipTemplate, queryFn: lpApi.payslipTemplate });
+  const q = useQuery({ queryKey: lpKeys.payslipTemplate, queryFn: lpApi.payslipTemplates, select: withDesignDefaults });
+  // Several saved templates: `tplId` is the one open in the editor (null = the default), `loadedId` the one whose design is on the page.
+  const [tplId, setTplId] = useState<string | null>(null);
+  const [loadedId, setLoadedId] = useState<string | null>(null);
+  const [name, setName] = useState('');
+  const [switchTo, setSwitchTo] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [design, setDesign] = useState<PayslipCanvas | null>(null);
   const [sel, setSel] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [tab, setTab] = useState<'design' | 'pdf'>('design');
   const [logoError, setLogoError] = useState<string | null>(null);
-  const [confirmPreset, setConfirmPreset] = useState<'CLASSIC' | 'SUMMARY_CARD' | null>(null);
+  const [confirmPreset, setConfirmPreset] = useState<PayslipCanvasPreset | null>(null);
   const focus = useRef<Focus>(null);
   const past = useRef<PayslipCanvas[]>([]);
   const lastEdit = useRef(0);
   const [undoCount, setUndoCount] = useState(0);
+  const current = q.data ? (q.data.templates.find((t) => t.id === tplId) ?? q.data.templates.find((t) => t.isDefault) ?? q.data.templates[0]) : undefined;
   useEffect(() => {
-    if (q.data && !design) setDesign(bakeCompanyFields(q.data.design, q.data.company));
-  }, [q.data, design]);
+    if (q.data && current && loadedId !== current.id) {
+      setDesign(bakeCompanyFields(current.design, q.data.company));
+      setName(current.name);
+      setLoadedId(current.id);
+      setSel(null);
+      setEditing(null);
+      past.current = [];
+      setUndoCount(0);
+    }
+  }, [q.data, current, loadedId]);
 
-  const saved = q.data?.design;
-  const dirty = !!design && !!saved && JSON.stringify(design) !== JSON.stringify(saved);
+  const saved = q.data && current ? bakeCompanyFields(current.design, q.data.company) : undefined;
+  const dirty = !!design && !!saved && !!current && (JSON.stringify(design) !== JSON.stringify(saved) || name.trim() !== current.name);
   const parsed = useMemo(() => (design ? payslipCanvasSchema.safeParse(design) : null), [design]);
   const problems = parsed && !parsed.success ? [...new Set(parsed.error.issues.map((i) => i.message))] : [];
-  const valid = !!parsed?.success;
+  const valid = !!parsed?.success && name.trim().length >= 2;
 
   // The PDF check: a real sample payslip rendered by the server from the design being edited.
   const [debounced, setDebounced] = useState<PayslipCanvas | null>(null);
@@ -715,7 +852,19 @@ export default function PayslipDesignPage() {
     return () => URL.revokeObjectURL(u);
   }, [preview.data]);
 
-  const save = useAction(() => lpApi.savePayslipTemplate(design!), { success: 'Payslip design saved · it applies from the next payroll run', invalidate: [lpKeys.payslipTemplate] });
+  const save = useAction(() => lpApi.savePayslipTemplate(current!.id, { name: name.trim(), design: design! }), { success: 'Payslip template saved · it applies from the next payroll run', invalidate: [lpKeys.payslipTemplate] });
+  const makeDefault = useAction(() => lpApi.setDefaultPayslipTemplate(current!.id), { success: `${current?.name ?? 'Template'} is now the default · used by every salary structure without its own layout`, invalidate: [lpKeys.payslipTemplate] });
+  const removeTemplate = useAction(() => lpApi.deletePayslipTemplate(current!.id), { success: 'Template deleted', invalidate: [lpKeys.payslipTemplate], onSuccess: () => { setTplId(null); setDeleting(false); } });
+  const create = useAction((b: { name: string; design: PayslipCanvas }) => lpApi.createPayslipTemplate(b), {
+    success: (v) => `${v.templates[v.templates.length - 1]?.name ?? 'Template'} created`,
+    invalidate: [lpKeys.payslipTemplate],
+    onSuccess: (v) => { setTplId(v.templates[v.templates.length - 1]!.id); setCreating(false); },
+  });
+  const pickTemplate = (id: string) => {
+    if (id === current?.id) return;
+    if (dirty) setSwitchTo(id);
+    else setTplId(id);
+  };
 
   if (q.isLoading || !design) return q.error ? <ErrorBlock error={q.error} retry={() => void q.refetch()} /> : <Loading />;
 
@@ -780,10 +929,10 @@ export default function PayslipDesignPage() {
     if (type === 'text') setEditing(el.id);
     setTab('design');
   };
-  const applyPreset = (layout: 'CLASSIC' | 'SUMMARY_CARD') => {
+  const applyPreset = (layout: PayslipCanvasPreset) => {
     beginChange();
     const p = bakeCompanyFields(payslipCanvasPreset(layout, design.accentColor), q.data!.company);
-    setDesign((d) => ({ ...p, logoMode: d!.logoMode, customLogo: d!.customLogo, accentColor: d!.accentColor }));
+    setDesign((d) => ({ ...p, logoMode: d!.logoMode, customLogo: d!.customLogo, accentColor: layout === 'BRANDED' ? p.accentColor : d!.accentColor }));
     setSel(null);
   };
 
@@ -797,6 +946,9 @@ export default function PayslipDesignPage() {
     r.readAsDataURL(file);
   }
 
+  // The one font the whole template uses, or '' when sections differ (a table whose headings are still in the standard look prints them in Helvetica Bold).
+  const usedFonts = new Set(design.elements.flatMap((e) => (e.type === 'text' || e.type === 'details' ? [e.style.font] : e.type === 'table' ? [e.style.font, e.headStyle?.font ?? 'HELVETICA'] : [])));
+  const wholeFont = usedFonts.size === 1 ? [...usedFonts][0]! : '';
   const selected = design.elements.find((e) => e.id === sel) ?? null;
   const selIndex = selected ? design.elements.findIndex((e) => e.id === selected.id) : -1;
 
@@ -804,23 +956,51 @@ export default function PayslipDesignPage() {
     <div data-screen-label="Payslip design" className="stack" style={{ gap: 18 }}>
       <PageHeader
         title="Payslip design"
-        sub="Design your payslip on the page: drag anything where you want it, resize it, and type your own text."
+        sub="Keep several payslip templates, design each on the page, and choose which salary structure uses which."
         actions={
           <>
             <button className="btn btn-secondary" disabled={undoCount === 0} onClick={undo}>Undo</button>
             <button className="btn btn-secondary" onClick={() => setConfirmPreset('CLASSIC')}>Reset to default</button>
-            <button className="btn btn-primary" disabled={!dirty || !valid || save.isPending} onClick={() => save.mutate(undefined)}>{save.isPending ? 'Saving…' : 'Save design'}</button>
+            <button className="btn btn-primary" disabled={!dirty || !valid || save.isPending} onClick={() => save.mutate(undefined)}>{save.isPending ? 'Saving…' : 'Save template'}</button>
           </>
         }
       />
       <div className="note" style={{ fontSize: 13 }}>
         A saved design applies to payslips generated from the <b>next payroll run</b>; payslips already issued stay as they were. Names and amounts shown on the page are a sample. Only the earnings and deductions rows, and any employee value you insert, are filled in from payroll for each person.
-        {q.data?.legacy && <> Your payslips currently use an earlier design; the page below starts from the closest template, and saving switches to this editor’s design.</>}
         {dirty && <b> · Unsaved changes</b>}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(340px, 440px) minmax(0, 1fr)', gap: 24, alignItems: 'start' }}>
-        <div className="stack" style={{ gap: 20 }}>
+      <div className="pd-layout">
+        <div className="stack pd-controls" style={{ gap: 20 }}>
+          <section className="stack" style={{ gap: 8 }}>
+            <div className="kicker">Templates</div>
+            {q.data!.templates.map((t) => {
+              const users = q.data!.structures.filter((st) => st.templateId === t.id).map((st) => st.name);
+              return (
+                <button key={t.id} type="button" className={`btn btn-sm ${t.id === current?.id ? 'btn-primary' : 'btn-secondary'}`} style={{ justifyContent: 'space-between', height: 'auto', padding: '6px 10px', textAlign: 'left' }} onClick={() => pickTemplate(t.id)}>
+                  <span>{t.name}</span>
+                  <span style={{ fontSize: 11, opacity: 0.85 }}>{t.isDefault ? 'Default' : users.length ? `${users.length} structure${users.length === 1 ? '' : 's'}` : ''}</span>
+                </button>
+              );
+            })}
+            <button type="button" className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start' }} onClick={() => setCreating(true)}>+ New template</button>
+            <Field label="Template name">
+              <input className="input" value={name} maxLength={60} onChange={(e) => setName(e.target.value)} aria-label="Template name" />
+            </Field>
+            <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+              {current && !current.isDefault && <button className="btn btn-secondary btn-sm" disabled={makeDefault.isPending || dirty} title={dirty ? 'Save your changes first' : undefined} onClick={() => makeDefault.mutate(undefined)}>Set as default</button>}
+              {current && <button className="btn btn-ghost btn-sm" disabled={current.isDefault} title={current.isDefault ? 'The default template can’t be deleted. Make another template the default first.' : undefined} onClick={() => setDeleting(true)}>Delete</button>}
+            </div>
+            <div className="faint" style={{ fontSize: 12 }}>
+              {current?.isDefault ? 'The default is used for every salary structure that has no layout of its own, so it can’t be deleted: make another template the default first. ' : ''}
+              {(() => {
+                const users = q.data!.structures.filter((st) => st.templateId === current?.id).map((st) => st.name);
+                return users.length ? `Used by: ${users.join(', ')}. ` : '';
+              })()}
+              Choose a template for each salary structure on the Salary structures page.
+            </div>
+          </section>
+
           <section className="stack" style={{ gap: 8 }}>
             <div className="kicker">Add to the page</div>
             <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
@@ -833,7 +1013,7 @@ export default function PayslipDesignPage() {
             <div className="kicker">Selected: {selected ? PAYSLIP_ELEMENT_LABELS[selected.type] : 'nothing'}</div>
             {selected ? (
               <div style={{ border: '1px solid var(--color-accent)', borderRadius: 6, padding: 12 }}>
-                <Properties e={selected} set={(p) => patchTyped(selected.id, p)} focus={focus} />
+                <Properties e={selected} set={(p) => patchTyped(selected.id, p)} focus={focus} components={q.data!.components} />
                 <div className="row" style={{ gap: 6, marginTop: 12, flexWrap: 'wrap' }}>
                   <button className="btn btn-ghost btn-sm" disabled={selIndex === design.elements.length - 1} onClick={() => reorder(selected.id, 'top')}>Bring to front</button>
                   <button className="btn btn-ghost btn-sm" disabled={selIndex === 0} onClick={() => reorder(selected.id, 'bottom')}>Send to back</button>
@@ -844,6 +1024,24 @@ export default function PayslipDesignPage() {
             ) : (
               <div className="faint" style={{ fontSize: 13, padding: 12, border: '1px dashed var(--color-divider)', borderRadius: 6 }}>Click an item on the page, or in the list below, to change its text, font, colour, size and position.</div>
             )}
+          </section>
+
+          <section className="stack" style={{ gap: 8 }}>
+            <div className="kicker">Font for everything</div>
+            <select
+              className="input"
+              aria-label="Font for everything"
+              value={wholeFont}
+              onChange={(e) => {
+                if (!e.target.value) return;
+                beginChange();
+                setDesign((d) => applyPayslipFont(d!, e.target.value as PayslipStyle['font']));
+              }}
+            >
+              <option value="">{usedFonts.size > 1 ? 'Mixed fonts · pick one for the whole template…' : 'Use one font on this whole template…'}</option>
+              {PAYSLIP_FONTS.map((f) => <option key={f} value={f}>{PAYSLIP_FONT_LABELS[f]}</option>)}
+            </select>
+            <div className="faint" style={{ fontSize: 12 }}>Changes the font of every text, details row, table row and table heading. Sizes, bold, italic and colours stay as they are. You can Undo.</div>
           </section>
 
           <section className="stack" style={{ gap: 8 }}>
@@ -867,14 +1065,6 @@ export default function PayslipDesignPage() {
             <div className="faint" style={{ fontSize: 12 }}>The logo appears where you place a Logo item on the page.</div>
           </section>
 
-          <section className="stack" style={{ gap: 8 }}>
-            <div className="kicker">Start from a template</div>
-            <div className="row" style={{ gap: 8 }}>
-              {(['CLASSIC', 'SUMMARY_CARD'] as const).map((l) => <button key={l} className="btn btn-secondary" onClick={() => setConfirmPreset(l)}>{PAYSLIP_PRESET_LABELS[l]}</button>)}
-            </div>
-            <div className="faint" style={{ fontSize: 12 }}>Replaces everything on the page with that template; your logo choice is kept.</div>
-          </section>
-
           <section className="stack" style={{ gap: 6 }}>
             <div className="kicker">On the page, back to front</div>
             {design.elements.map((e, i) => (
@@ -894,7 +1084,7 @@ export default function PayslipDesignPage() {
           {problems.map((p) => <div key={p} className="field-error">{p}</div>)}
         </div>
 
-        <div className="stack" style={{ gap: 8 }}>
+        <div className="stack pd-page-col" style={{ gap: 8 }}>
           <div className="row" style={{ gap: 8, alignItems: 'center' }}>
             <div className="kicker" style={{ flex: 1 }}>{tab === 'design' ? 'Page (A4) · sample data' : 'PDF check · how the real payslip will print'}</div>
             <button className={`btn btn-sm ${tab === 'design' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setTab('design')}>Design</button>
@@ -930,7 +1120,7 @@ export default function PayslipDesignPage() {
 
       {confirmPreset && (
         <ConfirmDialog
-          title={`Replace the page with the ${PAYSLIP_PRESET_LABELS[confirmPreset]} template?`}
+          title={`Replace the page with the ${PAYSLIP_CANVAS_PRESET_LABELS[confirmPreset]} layout?`}
           body="Everything on the page is replaced. Your logo choice is kept. You can Undo, and nothing is saved until you click Save design."
           confirmLabel="Replace page"
           onConfirm={() => {
@@ -938,6 +1128,45 @@ export default function PayslipDesignPage() {
             setConfirmPreset(null);
           }}
           onClose={() => setConfirmPreset(null)}
+        />
+      )}
+      {switchTo && (
+        <ConfirmDialog
+          title="Discard unsaved changes?"
+          body={`Your changes to ${current?.name ?? 'this template'} have not been saved.`}
+          confirmLabel="Discard & switch"
+          danger
+          onConfirm={() => {
+            setTplId(switchTo);
+            setSwitchTo(null);
+          }}
+          onClose={() => setSwitchTo(null)}
+        />
+      )}
+      {deleting && (
+        <ConfirmDialog
+          title={`Delete ${current?.name ?? 'this template'}?`}
+          body="Salary structures that use it will go back to the default template. Payslips already issued are not changed."
+          confirmLabel="Delete template"
+          danger
+          onConfirm={() => removeTemplate.mutate(undefined)}
+          onClose={() => setDeleting(false)}
+        />
+      )}
+      {creating && (
+        <FormModal
+          title="New payslip template"
+          fields={[
+            { name: 'name', label: 'Template name', type: 'text', span: 2, required: true, placeholder: 'Interns payslip' },
+            { name: 'start', label: 'Start from', type: 'select', span: 2, required: true, options: [{ value: 'copy', label: `Copy of ${current?.name ?? 'this template'}` }, ...PAYSLIP_CANVAS_PRESETS.map((l) => ({ value: l, label: PAYSLIP_CANVAS_PRESET_LABELS[l] }))] },
+          ] as FieldDef[]}
+          initial={{ start: 'copy' }}
+          submitLabel="Create template"
+          onClose={() => setCreating(false)}
+          onSubmit={async (v) => {
+            const base = v.start === 'copy' ? design : bakeCompanyFields(payslipCanvasPreset(v.start as PayslipCanvasPreset), q.data!.company);
+            await create.mutateAsync({ name: String(v.name).trim(), design: { ...base!, ...(v.start === 'copy' ? {} : { logoMode: design.logoMode, customLogo: design.customLogo }) } });
+          }}
         />
       )}
     </div>

@@ -78,7 +78,8 @@ export const NAV: NavGroup[] = [
     items: [
       { id: 'vault', label: 'My digital vault', path: '/vault', permission: 'vault.self' },
       { id: 'idcard', label: 'ID card designer', path: '/id-card', permission: 'idcard.manage' },
-      { id: 'vcard', label: 'Visiting card', path: '/visiting-card', permission: 'vcard.self' },
+      { id: 'vcard', label: 'ID & visiting card', path: '/visiting-card', permission: 'dashboard.view' },
+      { id: 'vcard-designer', label: 'Visiting card designer', path: '/visiting-card-designer', permission: 'settings.vcard' },
       { id: 'assets', label: 'Assets', path: '/assets', permission: 'assets.manage' },
       { id: 'welcomekit', label: 'Welcome kits', path: '/welcome-kits', permission: 'welcomekit.manage' },
       { id: 'policies', label: 'Policies & rulebook', path: '/policies', permission: 'policies.view' },

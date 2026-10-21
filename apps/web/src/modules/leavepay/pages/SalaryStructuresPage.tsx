@@ -59,8 +59,15 @@ export default function SalaryStructuresPage() {
     onSuccess: () => setRemoving(null),
   });
   const rows = q.data ?? [];
+  const layouts = useQuery({ queryKey: lpKeys.payslipTemplate, queryFn: lpApi.payslipTemplates });
+  const layoutOf = (structureId: string) => {
+    const v = layouts.data;
+    if (!v) return null;
+    const id = v.structures.find((x) => x.id === structureId)?.templateId;
+    return v.templates.find((t) => t.id === id) ?? v.templates.find((t) => t.isDefault) ?? null;
+  };
   const cols: Column<SalaryTemplateRow>[] = [
-    { key: 'n', header: 'Structure', render: (t) => <div>{t.name} {t.isDefault && <Tag tone="accent">Default</Tag>} {!t.active && <Tag>Inactive</Tag>}</div> },
+    { key: 'n', header: 'Structure', render: (t) => <div>{t.name} {t.isDefault && <Tag tone="accent">Default</Tag>} {!t.active && <Tag>Inactive</Tag>}<div className="faint" style={{ fontSize: 11.5 }}>Payslip layout: {layoutOf(t.id)?.name ?? '—'}</div></div> },
     {
       key: 'a',
       header: 'Applies to',
@@ -76,8 +83,9 @@ export default function SalaryStructuresPage() {
     {
       key: 'x',
       header: '',
+      width: '150px',
       render: (t) => (
-        <span className="row" style={{ gap: 6, justifyContent: 'flex-end' }}>
+        <span className="row" style={{ gap: 6, justifyContent: 'flex-end', flexWrap: 'nowrap', whiteSpace: 'nowrap' }}>
           <button className="btn btn-ghost btn-sm" onClick={() => setEditing(t)}>Edit</button>
           <button className="btn btn-ghost btn-sm" onClick={() => setRemoving(t)}>Delete</button>
         </span>
@@ -132,6 +140,25 @@ const methodsFor = (l: Pick<EditorLine, 'kind' | 'code'>): EditorLine['calc'][] 
 
 const toEditor = (l: SalaryTemplateLine): EditorLine => ({ code: l.componentCode, locked: true, label: l.label, kind: l.kind, calc: l.calc, value: l.value != null ? String(l.value) : '', base: l.calc === 'PERCENT_OF_COMPONENT' ? 'BASIC' : (l.base ?? '') });
 const toLine = (e: EditorLine): SalaryTemplateLine => ({ componentCode: e.code, label: e.label.trim(), kind: e.kind, calc: e.calc, ...(e.calc === 'BALANCING' ? {} : { value: e.value === '' ? undefined : Number(e.value) }), ...(e.calc === 'PERCENT_OF_COMPONENT' ? { base: 'BASIC' } : {}) });
+
+/** Which payslip template employees on this structure get. Saved as soon as it is chosen. */
+function PayslipLayoutPicker({ structureId }: { structureId: string }) {
+  const q = useQuery({ queryKey: lpKeys.payslipTemplate, queryFn: lpApi.payslipTemplates });
+  const assign = useAction((templateId: string | null) => lpApi.assignPayslipTemplate({ salaryTemplateId: structureId, templateId }), { success: 'Payslip layout saved · it applies from the next payroll run', invalidate: [lpKeys.payslipTemplate] });
+  if (!q.data) return null;
+  const chosen = q.data.structures.find((x) => x.id === structureId)?.templateId ?? '';
+  const defaultName = q.data.templates.find((t) => t.isDefault)?.name ?? 'Default';
+  return (
+    <div className="field span-2">
+      <label htmlFor="ss-layout">Payslip layout</label>
+      <select id="ss-layout" className="input" value={chosen} disabled={assign.isPending} onChange={(e) => assign.mutate(e.target.value || null)}>
+        <option value="">Default template ({defaultName})</option>
+        {q.data.templates.filter((t) => !t.isDefault).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+      </select>
+      <span className="field-hint">Payslips for employees on this structure use this layout. Design layouts in Payslip design.</span>
+    </div>
+  );
+}
 
 function TemplateEditor({ row, fromStandard, onClose }: { row: SalaryTemplateRow | null; fromStandard: boolean; onClose: () => void }) {
   const [name, setName] = useState(row?.name ?? (fromStandard ? 'Standard' : ''));
@@ -259,18 +286,19 @@ function TemplateEditor({ row, fromStandard, onClose }: { row: SalaryTemplateRow
               ))}
             </div>
           </div>
-          <label className="radio" style={{ gridColumn: 'span 2' }}>
+          <label className="radio span-2">
             <input type="checkbox" checked={isDefault} onChange={(e) => setIsDefault(e.target.checked)} />
             <span className="dot" style={{ borderRadius: 3 }} />
             Default structure — used when no CTC range matches
           </label>
           {row && (
-            <label className="radio" style={{ gridColumn: 'span 2' }}>
+            <label className="radio span-2">
               <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
               <span className="dot" style={{ borderRadius: 3 }} />
               Active
             </label>
           )}
+          {row && <PayslipLayoutPicker structureId={row.id} />}
         </div>
 
         <div className="stack" style={{ gap: 8 }}>
@@ -279,7 +307,7 @@ function TemplateEditor({ row, fromStandard, onClose }: { row: SalaryTemplateRow
             Earnings add up to the monthly gross. Company deductions are taken from pay after PF, ESI and tax. Keep exactly one “Balance” earning so the parts add up.
           </div>
           {lines.map((l, i) => (
-            <div key={i} style={{ display: 'grid', gridTemplateColumns: 'minmax(140px,1.4fr) 110px minmax(150px,1.3fr) 100px minmax(120px,1fr) 32px', gap: 8, alignItems: 'center' }}>
+            <div key={i} className="st-line">
               <input className="input" aria-label="Component name" value={l.label} maxLength={40} onChange={(e) => rename(i, e.target.value)} placeholder="Component name" />
               <select className="input" aria-label="Type" value={l.kind} onChange={(e) => {
                 const kind = e.target.value as EditorLine['kind'];

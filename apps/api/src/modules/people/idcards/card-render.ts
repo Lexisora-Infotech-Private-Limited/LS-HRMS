@@ -11,7 +11,7 @@ import { applyTextCase, fillIdCardText, idCardBgPlacement, idCardFontAvg, idCard
 export const PX_PER_MM_300DPI = 300 / 25.4;
 export const PT_PER_MM = 72 / 25.4;
 
-export type CardImages = { photo?: string | null; photoSize?: { w: number; h: number } | null; qr?: string | null; logo?: string | null; bg?: string | null; /** the background picture's own size and how it sits on the card */ bgSize?: { w: number; h: number } | null; bgFit?: IdCardBgFit | null; /** uploaded pictures by file id, for IMAGE elements */ custom?: Record<string, string | null> };
+export type CardImages = { /** a styled QR for particular QR elements, by element id */ qrStyled?: Record<string, string | null>; photo?: string | null; photoSize?: { w: number; h: number } | null; qr?: string | null; logo?: string | null; bg?: string | null; /** the background picture's own size and how it sits on the card */ bgSize?: { w: number; h: number } | null; bgFit?: IdCardBgFit | null; /** uploaded pictures by file id, for IMAGE elements */ custom?: Record<string, string | null> };
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[c]!);
 
@@ -101,7 +101,7 @@ export function renderCardSvg(
         }
         break;
       case 'QR':
-        if (images.qr) parts.push(`<image href="${images.qr}" x="${m(x)}" y="${m(y)}" width="${m(w)}" height="${m(h)}"/>`);
+        if (images.qrStyled?.[el.id] ?? images.qr) parts.push(`<image href="${images.qrStyled?.[el.id] ?? images.qr}" x="${m(x)}" y="${m(y)}" width="${m(w)}" height="${m(h)}"/>`);
         else parts.push(`<rect x="${m(x)}" y="${m(y)}" width="${m(w)}" height="${m(h)}" fill="none" stroke="#9a9696" stroke-dasharray="6 5" stroke-width="2"/>`);
         break;
       case 'IMAGE': {
@@ -162,6 +162,36 @@ export async function dataUrlSize(url: string | null): Promise<{ w: number; h: n
 
 export async function qrDataUrl(text: string): Promise<string> {
   return QRCode.toDataURL(text, { margin: 0, width: 360, errorCorrectionLevel: 'M', color: { dark: '#201f1dff', light: '#ffffffff' } });
+}
+
+/** A colour made darker (0 to 1, lower = darker) so a QR drawn in it keeps enough contrast to scan. */
+export function darkenHex(hex: string, factor: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  const ch = (v: number) => Math.max(0, Math.min(255, Math.round(v * factor))).toString(16).padStart(2, '0');
+  return `#${ch(n >> 16)}${ch((n >> 8) & 255)}${ch(n & 255)}`;
+}
+
+/**
+ * A QR in the company colours: square modules in a diagonal gradient (`from` top-left to `to` bottom-right) on a white rounded tile
+ * with its own clear margin, and a white rounded spot in the centre that holds the logo. Error correction is Q (25%), the centre
+ * covers about 6% of the code, so it still scans. Returns a PNG data URL.
+ */
+export async function brandedQrDataUrl(text: string, o: { from: string; to: string; logo?: string | null }): Promise<string> {
+  const q = QRCode.create(text, { errorCorrectionLevel: 'Q' });
+  const n = q.modules.size;
+  const margin = 4;
+  const total = n + margin * 2;
+  const box = Math.max(7, Math.round(n * 0.26));
+  const c0 = Math.floor((n - box) / 2);
+  const inBox = (r: number, c: number) => r >= c0 && r < c0 + box && c >= c0 && c < c0 + box;
+  let path = '';
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (q.modules.get(r, c) && !inBox(r, c)) path += `M${c + margin} ${r + margin}h1v1h-1z`;
+  const u = 20;
+  const spot = c0 + margin;
+  const logo = o.logo ? `<image href="${o.logo}" x="${spot + 0.6}" y="${spot + 0.6}" width="${box - 1.2}" height="${box - 1.2}" preserveAspectRatio="xMidYMid meet"/>` : '';
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${total * u}" height="${total * u}" viewBox="0 0 ${total} ${total}"><defs><linearGradient id="g" gradientUnits="userSpaceOnUse" x1="${margin}" y1="${margin}" x2="${margin + n}" y2="${margin + n}"><stop offset="0" stop-color="${o.from}"/><stop offset="1" stop-color="${o.to}"/></linearGradient></defs><rect width="${total}" height="${total}" rx="${margin * 0.7}" fill="#ffffff"/><path d="${path}" fill="url(#g)" shape-rendering="crispEdges"/><rect x="${spot}" y="${spot}" width="${box}" height="${box}" rx="1.6" fill="#ffffff"/>${logo}</svg>`;
+  const png = await sharp(Buffer.from(svg), { density: 72 }).png().toBuffer();
+  return `data:image/png;base64,${png.toString('base64')}`;
 }
 
 /** Image bytes → data URL (resized so SVGs stay small). */

@@ -83,6 +83,7 @@ export const PERMISSIONS = {
   'vault.self': { label: 'Own digital vault', group: 'Workplace', roles: ALL },
   'idcard.manage': { label: 'ID card designer', group: 'Workplace', roles: HRA },
   'vcard.self': { label: 'Visiting card', group: 'Workplace', roles: ALL },
+  'settings.vcard': { label: 'Choose who gets a visiting card', group: 'Workplace', roles: HRA },
   'assets.manage': { label: 'Assets & inventory', group: 'Workplace', roles: HRA },
   'welcomekit.manage': { label: 'Welcome kits', group: 'Workplace', roles: HRA },
   'policies.view': { label: 'Read policies', group: 'Workplace', roles: ALL },

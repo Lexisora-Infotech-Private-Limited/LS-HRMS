@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { formatDate } from '@lexisora/shared';
 import { authUrl, download } from '@/lib/api';
+import { useCan } from '@/lib/auth';
 import { useAction } from '@/lib/query';
 import { useToast } from '@/lib/toast';
 import { FormModal, type FieldDef } from '@/components/form';
@@ -16,17 +17,20 @@ import '../people.css';
  */
 export default function VisitingCardPage() {
   const { toast, toastError } = useToast();
-  const q = useQuery({ queryKey: peopleKeys.vcard, queryFn: () => peopleApi.vcard() });
+  const can = useCan();
+  // Everyone sees their ID card here; the visiting card itself only for people the HR setting covers.
+  const hasCard = can('vcard.self');
+  const q = useQuery({ queryKey: peopleKeys.vcard, queryFn: () => peopleApi.vcard(), enabled: hasCard });
   const myId = useQuery({ queryKey: [...peopleKeys.idcards, 'mine'], queryFn: () => peopleApi.myIdCard() });
-  const [busy, setBusy] = useState<'png' | 'pdf' | 'vcf' | null>(null);
+  const [busy, setBusy] = useState<'png' | 'back' | 'pdf' | 'vcf' | null>(null);
   const [emailing, setEmailing] = useState(false);
   const [wa, setWa] = useState(false);
   const [settings, setSettings] = useState(false);
 
-  async function save(kind: 'png' | 'pdf' | 'vcf') {
+  async function save(kind: 'png' | 'back' | 'pdf' | 'vcf') {
     setBusy(kind);
     try {
-      await download(`/vcard/${kind}`);
+      await download(kind === 'back' ? '/vcard/png?side=back' : `/vcard/${kind}`);
       toast(kind === 'vcf' ? 'Contact file saved' : 'Saved');
     } catch (e) {
       toastError(e);
@@ -43,31 +47,38 @@ export default function VisitingCardPage() {
     }
   }
 
-  if (q.error) return <ErrorBlock error={q.error} retry={() => void q.refetch()} />;
-  if (q.isLoading || !q.data) return <Loading />;
+  if (hasCard && q.error) return <ErrorBlock error={q.error} retry={() => void q.refetch()} />;
+  if (hasCard && (q.isLoading || !q.data)) return <Loading />;
+  if (!hasCard && myId.error) return <ErrorBlock error={myId.error} retry={() => void myId.refetch()} />;
+  if (!hasCard && myId.isLoading) return <Loading />;
   const c = q.data;
   const id = myId.data;
 
   return (
     <div data-screen-label="Visiting card" className="stack" style={{ gap: 18 }}>
-      <PageHeader title="Digital visiting card" sub="Auto-filled from your profile using the corporate template." actions={<button className="btn btn-ghost" onClick={() => setSettings(true)}>Card settings</button>} />
+      <PageHeader
+        title={c ? 'Digital visiting card' : 'My ID card'}
+        sub={c ? 'Auto-filled from your profile using the corporate template.' : 'Your company ID card.'}
+        actions={c ? <button className="btn btn-ghost" onClick={() => setSettings(true)}>Card settings</button> : undefined}
+      />
+      {c && (<>
       <div className="pp-vc">
-        <div className="pp-vc-card" aria-label="Visiting card preview">
-          <div className="row-between" style={{ alignItems: 'flex-start', gap: 12 }}>
-            <span style={{ fontFamily: 'var(--font-heading)', fontSize: 18 }}>{c.company}</span>
-            <img src={c.qrDataUrl} alt={c.isPublic ? 'QR code: opens the public card' : 'QR code: contact details'} width={54} height={54} style={{ flex: 'none' }} />
-          </div>
-          <div>
-            <div className="pp-vc-name">{c.name}</div>
-            <div className="pp-vc-title">{c.title}</div>
-          </div>
-          <div className="pp-vc-foot">
-            <span>{c.email}</span>
-            {c.phone && <span className="tnum">{c.phone}</span>}
-          </div>
+        {/* The same server-drawn images Download PNG / PDF use, so the preview is exactly the designed card. */}
+        <div className="stack" style={{ gap: 14 }}>
+          {([['front', `/vcard/png?v=${q.dataUpdatedAt}`], ...(c.hasBack ? [['back', `/vcard/png?side=back&v=${q.dataUpdatedAt}`]] : [])] as [string, string][]).map(([side, path]) => (
+            <img
+              key={side}
+              className="pp-vc-card"
+              src={authUrl(path)}
+              alt={`Visiting card ${side} for ${c.name}`}
+              width={420}
+              style={{ height: 'auto', padding: 0, aspectRatio: '88.9 / 50.8', background: '#fff' }}
+            />
+          ))}
         </div>
         <div className="pp-vc-actions">
-          <button className="btn btn-secondary" disabled={busy === 'png'} onClick={() => void save('png')}>{busy === 'png' ? 'Preparing…' : 'Download PNG'}</button>
+          <button className="btn btn-secondary" disabled={busy === 'png'} onClick={() => void save('png')}>{busy === 'png' ? 'Preparing…' : c.hasBack ? 'Download PNG (front)' : 'Download PNG'}</button>
+          {c.hasBack && <button className="btn btn-secondary" disabled={busy === 'back'} onClick={() => void save('back')}>{busy === 'back' ? 'Preparing…' : 'Download PNG (back)'}</button>}
           <button className="btn btn-secondary" disabled={busy === 'pdf'} onClick={() => void save('pdf')}>{busy === 'pdf' ? 'Preparing…' : 'Download PDF'}</button>
           <button className="btn btn-primary" onClick={() => setEmailing(true)}>Share by email</button>
           <button className="btn btn-primary" onClick={() => setWa(true)}>Share on WhatsApp</button>
@@ -91,7 +102,9 @@ export default function VisitingCardPage() {
         </div>
       </div>
       <div className="faint" style={{ fontSize: 12.5 }}>Name, designation and email come from your profile. To change them, ask HR to update your profile.</div>
+      </>)}
 
+      {!id && !c && <div className="faint" style={{ fontSize: 13 }}>No ID card has been issued for you yet. HR will add it once your profile is complete.</div>}
       {id && (
         <Card kicker="My ID card" title={id.serial} actions={<Tag tone={id.status === 'REVOKED' ? 'danger' : id.status === 'QUEUED' ? 'outline' : 'accent'}>{id.statusLabel}</Tag>}>
           {id.status === 'QUEUED' ? (
@@ -112,9 +125,9 @@ export default function VisitingCardPage() {
         </Card>
       )}
 
-      {emailing && <EmailModal card={c} onClose={() => setEmailing(false)} />}
-      {wa && <WhatsappModal onClose={() => setWa(false)} />}
-      {settings && <SettingsModal card={c} onClose={() => setSettings(false)} />}
+      {c && emailing && <EmailModal card={c} onClose={() => setEmailing(false)} />}
+      {c && wa && <WhatsappModal onClose={() => setWa(false)} />}
+      {c && settings && <SettingsModal card={c} onClose={() => setSettings(false)} />}
     </div>
   );
 }
