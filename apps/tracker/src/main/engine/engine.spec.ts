@@ -180,16 +180,17 @@ describe('idle resolutions', () => {
     expect(e.status).toBe('WORKING');
   });
 
-  it('"I was working" → IDLE_WORK on the active task, counted as worked, pending review', () => {
+  it('"I was working" → IDLE_WORK on the active task, kept out of worked until the PL approves', () => {
     const e = scenario();
     const out = e.resolveIdle(ist('11:51'), 'WORKING', 'Client call');
     expect(out.segments[0]).toMatchObject({ kind: 'IDLE_WORK', taskId: 'AT-101', startedAt: ist('11:42'), endedAt: ist('11:50') });
     expect(out.events[0]).toMatchObject({ resolution: 'WORKING', note: 'Client call' });
     const t = e.totals(ist('11:51'));
-    expect(mins(t.workedSec)).toBe(51);
+    expect(mins(t.workedSec)).toBe(43);
     expect(mins(t.claimedSec)).toBe(8);
-    expect(t.idleSec).toBe(0);
-    expect(mins(t.perTask.get('AT-101')!)).toBe(51);
+    expect(mins(t.idleSec)).toBe(8);
+    expect(mins(t.perTask.get('AT-101')!)).toBe(43);
+    expect((ist('11:51') - ist('11:00')) / 1000).toBe(spanInvariant(e, ist('11:51')));
   });
 
   it('"Count it as a break" → BREAK segment, status back to working', () => {
@@ -254,6 +255,71 @@ describe('lock / suspend / app gaps', () => {
     const r = e.unlock(ist('12:20'), 'RESUME');
     expect(r.events.map((x) => x.type)).toEqual(['RESUME', 'IDLE_START']);
     expect(e.idleCause()).toBe('SUSPEND');
+  });
+
+  it('sleep → wake to the lock screen → sleep again → unlock: idle runs until the unlock', () => {
+    // Real sequence from a laptop: asleep 09:11, woke to the lock screen 10:43, slept 10:50–10:58, unlocked 10:58:56.
+    const e = make({ idleThresholdSec: 180 });
+    e.punchIn(ist('09:05', 42), 'AT-101');
+    e.tick(ist('09:11', 3), 0);
+    e.lock(ist('09:11', 14), 'SUSPEND', ist('09:11', 3));
+    e.lock(ist('10:43', 11), 'LOCK');
+    const woke = e.unlock(ist('10:43', 11), 'RESUME');
+    expect(woke.idleStarted).toBe(false);
+    expect(e.away).toBe(true);
+    e.tick(ist('10:45'), 0, true); // keys on the lock screen are not the user being back
+    e.lock(ist('10:50', 1), 'SUSPEND');
+    e.unlock(ist('10:58', 28), 'RESUME');
+    expect(e.unlock(ist('10:58', 56), 'UNLOCK').idleStarted).toBe(true);
+    expect(e.idleCause()).toBe('SUSPEND');
+    const out = e.resolveIdle(ist('10:59', 11), 'IDLE');
+    expect(out.segments.map((s) => [s.kind, s.startedAt, s.endedAt])).toEqual([
+      ['IDLE', ist('09:11', 3), ist('10:58', 56)],
+      ['WORK', ist('10:58', 56), ist('10:59', 11)],
+    ]);
+  });
+
+  it('a resume without the lock screen waits for real input before the idle span ends', () => {
+    const e = make();
+    e.punchIn(ist('09:30'), 'AT-101');
+    e.lock(ist('12:00'), 'SUSPEND', ist('12:00'));
+    expect(e.unlock(ist('12:20'), 'RESUME').idleStarted).toBe(true);
+    e.tick(ist('12:21'), 75, false); // awake, nobody at the PC yet
+    e.tick(ist('12:25'), 0, false); // mouse moved
+    const out = e.resolveIdle(ist('12:26'), 'IDLE');
+    expect(out.segments.map((s) => [s.kind, s.startedAt, s.endedAt])).toEqual([
+      ['IDLE', ist('12:00'), ist('12:25')],
+      ['WORK', ist('12:25'), ist('12:26')],
+    ]);
+  });
+
+  it('locking again with the idle dialog open keeps the span idle; the time back in between is work', () => {
+    const e = make();
+    e.punchIn(ist('10:00'), 'AT-101');
+    e.tick(ist('11:05'), 300); // no input since 11:00 → dialog
+    e.tick(ist('11:10'), 0); // back at 11:10, works without answering
+    e.lock(ist('11:30'), 'LOCK', ist('11:30'));
+    e.tick(ist('11:45'), 0, true);
+    e.unlock(ist('12:00'), 'UNLOCK');
+    const out = e.resolveIdle(ist('12:01'), 'IDLE');
+    expect(out.segments.map((s) => [s.kind, s.startedAt, s.endedAt])).toEqual([
+      ['IDLE', ist('11:00'), ist('11:10')],
+      ['WORK', ist('11:10'), ist('11:30')],
+      ['IDLE', ist('11:30'), ist('12:00')],
+      ['WORK', ist('12:00'), ist('12:01')],
+    ]);
+    expect(mins(e.totals(ist('12:01')).idleDeductedSec)).toBe(40);
+    expect((ist('12:01') - ist('10:00')) / 1000).toBe(spanInvariant(e, ist('12:01')));
+  });
+
+  it('input on an unlocked screen ends an away even when the unlock signal was lost', () => {
+    const e = make();
+    e.punchIn(ist('09:30'), 'AT-101');
+    e.lock(ist('13:00'), 'LOCK', ist('13:00'));
+    expect(e.tick(ist('13:20'), 0, true).idleStarted).toBe(false);
+    expect(e.tick(ist('13:40'), 0, false).idleStarted).toBe(true);
+    const out = e.resolveIdle(ist('13:41'), 'BREAK');
+    expect(out.segments[0]).toMatchObject({ kind: 'BREAK', startedAt: ist('13:00'), endedAt: ist('13:40') });
   });
 
   it('app quit then restart after the threshold → "Tracker wasn\'t running" prompt', () => {

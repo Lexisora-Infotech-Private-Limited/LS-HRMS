@@ -164,6 +164,47 @@ export function addDays(dateKey: string, n: number): string {
 }
 
 /** @db.Date value for an IST date key (UTC midnight of that date). */
+export type LiveState = { status: 'OUT' | 'WORKING' | 'BREAK' | 'IDLE' | null; taskId: string | null };
+
+/**
+ * A device's live state (what the task board shows as Running / Paused) after a batch of its events,
+ * in the order the device produced them. A task switch changes the task only (it can happen on a
+ * break); a resume is left to the next heartbeat, since the PC may have woken to the lock screen.
+ */
+export function foldLiveState(start: LiveState, events: readonly { type: string; taskId?: string | null }[]): LiveState {
+  let { status, taskId } = start;
+  for (const e of events) {
+    switch (e.type) {
+      case 'TASK_SWITCH':
+        taskId = e.taskId ?? null;
+        if (status !== 'BREAK') status = 'WORKING';
+        break;
+      case 'PUNCH_IN':
+      case 'BREAK_END':
+      case 'IDLE_RESOLVED':
+      case 'UNLOCK':
+        status = 'WORKING';
+        if (e.taskId !== undefined) taskId = e.taskId ?? null;
+        break;
+      case 'BREAK_START':
+        status = 'BREAK';
+        break;
+      case 'IDLE_START':
+      case 'LOCK':
+      case 'SUSPEND':
+        status = 'IDLE';
+        break;
+      case 'PUNCH_OUT':
+      case 'APP_QUIT':
+        status = 'OUT';
+        break;
+      default:
+        break;
+    }
+  }
+  return { status, taskId };
+}
+
 export const dbDate = (key: string) => new Date(`${key}T00:00:00.000Z`);
 export const dateKeyOf = (d: Date) => d.toISOString().slice(0, 10);
 

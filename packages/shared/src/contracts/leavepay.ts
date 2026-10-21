@@ -161,6 +161,8 @@ export type LeaveRequestRow = {
   appliedOn: string;
   decidedAt: string | null;
   decisionNote: string | null;
+  /** Created by the system: LATE_ARRIVAL = late by the shift's half-day threshold. */
+  autoReason: string | null;
   /** Actions the viewer may take. */
   can: { withdraw: boolean; cancel: boolean; requestCancel: boolean; approve: boolean; reject: boolean; decideCancellation: boolean };
 };
@@ -292,7 +294,11 @@ export const compOffRequestSchema = z.object({
 });
 export type CompOffRequestInput = z.infer<typeof compOffRequestSchema>;
 
+/** source: REQUEST (employee asked) | TIMESHEET (credited when the timesheet was approved) | MANUAL (HR credit). */
 export type CompOffRow = { id: string; employeeName: string; workedDate: string; units: number; remaining: number; expiresOn: string; status: string; reason: string | null; source: string };
+
+/** How work on a weekly off / holiday turns into comp-off for the signed-in employee. */
+export type CompOffRules = { enabled: boolean; fullDayMinutes: number; halfDayMinutes: number; expiryDays: number };
 
 export const yearEndSchema = z.object({ year: z.coerce.number().int().min(2020).max(2100) });
 export type YearEndPreviewRow = { employeeId: string; employeeName: string; leaveType: string; closing: number; carry: number; encash: number; lapse: number };
@@ -305,6 +311,8 @@ export const leaveSettingsSchema = z.object({
   compOffFullDayMinMinutes: z.coerce.number().int().min(120).max(720),
   compOffRequestWindowDays: z.coerce.number().int().min(1).max(120),
   teamOverlapWarnPct: z.coerce.number().int().min(0).max(100),
+  /** Leave type (code) that late-mark penalties and late-arrival half days are taken from before LOP. */
+  latePenaltyLeaveCode: z.string().trim().min(1).max(10).default('CL'),
 });
 export type LeaveSettings = z.infer<typeof leaveSettingsSchema>;
 

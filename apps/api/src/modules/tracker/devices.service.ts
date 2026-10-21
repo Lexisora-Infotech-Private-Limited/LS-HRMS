@@ -28,6 +28,7 @@ import { RealtimeGateway } from '../../core/realtime/realtime.gateway';
 import { OrgService } from '../../core/org/org.service';
 import { requireContext, runAsTenant } from '../../core/context/request-context';
 import { hasPerm } from '../../core/auth/decorators';
+import { EventsService } from '../../core/registry/events.service';
 import { TrackerContextService } from './tracker-context.service';
 import {
   compareVersions,
@@ -61,6 +62,7 @@ export class DevicesService {
     private readonly realtime: RealtimeGateway,
     private readonly org: OrgService,
     private readonly tctx: TrackerContextService,
+    private readonly events: EventsService,
   ) {}
 
   // ── auth-middleware hook ────────────────────────────────────────────────
@@ -468,6 +470,7 @@ export class DevicesService {
   }
 
   async heartbeat(deviceId: string, employeeId: string, input: TrackerHeartbeatInput): Promise<TrackerHeartbeatResult> {
+    const prev = await this.prisma.trackerDevice.findUnique({ where: { id: deviceId }, select: { liveStatus: true, liveTaskId: true } });
     const d = await this.prisma.trackerDevice.update({
       where: { id: deviceId },
       data: {
@@ -479,6 +482,10 @@ export class DevicesService {
         ...(input.displays ? { displays: input.displays } : {}),
       },
     });
+    // The task board shows Running / Paused from this; tell it when it changed.
+    if (prev && (prev.liveStatus !== d.liveStatus || prev.liveTaskId !== d.liveTaskId)) {
+      this.events.emit('tracker.liveChanged', { employeeId, deviceId, status: d.liveStatus, taskId: d.liveTaskId, prevTaskId: prev.liveTaskId });
+    }
     const policy = await this.tctx.policyFor(employeeId);
     return { serverTime: new Date().toISOString(), deviceStatus: d.status === 'ACTIVE' ? 'ACTIVE' : 'REVOKED', policyUpdatedAt: policy.updatedAt };
   }

@@ -89,6 +89,7 @@ export class ApprovalService {
         statusLabel: s.status === 'RETURNED' ? 'Sent back' : TIMESHEET_STATUS_LABEL[st],
         stepStatus: s.status,
         projectName: s.projectId ? (projects.get(s.projectId)?.name ?? null) : null,
+        pendingMinutes: t.pendingMinutes,
       });
     }
     const counts = await this.pendingCounts(ctx);
@@ -109,8 +110,9 @@ export class ApprovalService {
       this.prisma.outsideHoursEntry.count({ where: ohWhere }),
       this.prisma.timesheetAdjustment.count({ where: { timesheetId: s.timesheetId, reviewStatus: 'PENDING_PL' } }),
     ]);
-    const claims = (await this.cross.idleClaims(s.timesheet.employeeId, keyOf(s.timesheet.weekStart), keyOf(s.timesheet.weekEnd))).filter((c) => c.status === 'PENDING').length;
-    return oh + adj + claims;
+    const pending = (await this.cross.idleClaims(s.timesheet.employeeId, keyOf(s.timesheet.weekStart), keyOf(s.timesheet.weekEnd))).filter((c) => c.status === 'PENDING');
+    const decided = pending.length ? await this.prisma.timesheetItemDecision.count({ where: { itemType: 'IDLE_CLAIM', refId: { in: pending.map((c) => c.id) } } }) : 0;
+    return oh + adj + pending.length - decided;
   }
 
   private async loadStep(stepId: string) {
@@ -150,6 +152,9 @@ export class ApprovalService {
       items.push({ type: 'MANUAL_INCREASE', id: a.id, date: c.date, dateLabel: dayLabel(c.date), minutes: a.deltaMinutes, task: c.line.label, reason: a.reason, status: a.reviewStatus === 'PENDING_PL' ? 'PENDING' : a.reviewStatus });
     }
     const claims = await this.cross.idleClaims(t.employeeId, from, to);
+    const claimDecisions = new Map(
+      claims.length ? (await this.prisma.timesheetItemDecision.findMany({ where: { itemType: 'IDLE_CLAIM', refId: { in: claims.map((c) => c.id) } }, select: { refId: true, decision: true } })).map((d) => [d.refId, d.decision] as const) : [],
+    );
     for (const c of claims) {
       if (scopeProjectId !== undefined) {
         const task = c.taskId ? tasks.get(c.taskId) : undefined;
@@ -157,7 +162,7 @@ export class ApprovalService {
         if (proj !== scopeProjectId) continue;
       }
       const d = keyOf(c.workDate);
-      items.push({ type: 'IDLE_AS_WORK', id: c.id, date: d, dateLabel: `${dayLabel(d)} · ${istHm(c.startAt)}–${istHm(c.endAt)}`, minutes: c.minutes, task: (c.taskId && tasks.get(c.taskId)?.key) || 'Idle marked as work', reason: c.note ?? '', status: c.status });
+      items.push({ type: 'IDLE_AS_WORK', id: c.id, date: d, dateLabel: `${dayLabel(d)} · ${istHm(c.startAt)}–${istHm(c.endAt)}`, minutes: c.minutes, task: (c.taskId && tasks.get(c.taskId)?.key) || 'Idle marked as work', reason: c.note ?? '', status: claimDecisions.get(c.id) ?? c.status });
     }
 
     // screenshots mapped to tasks
@@ -197,34 +202,12 @@ export class ApprovalService {
     };
   }
 
-  /** Apply Accept/Reject decisions on outside-hours entries and manual increases (default: accept pending items in scope). */
-  private async applyDecisions(step: TimesheetApprovalStep, decisions: ApproveStepInput['decisions'], actor: string) {
-    const now = new Date();
-    const scope = step.level === 1 ? { projectId: step.projectId } : {};
-    const pendingOh = await this.prisma.outsideHoursEntry.findMany({ where: { timesheetId: step.timesheetId, reviewStatus: 'PENDING_PL', ...scope } });
-    let changed = false;
-    for (const o of pendingOh) {
-      const d = decisions.find((x) => x.type === 'OUTSIDE_HOURS' && x.id === o.id);
-      const status = d?.decision === 'REJECT' ? 'REJECTED' : 'ACCEPTED';
-      await this.prisma.outsideHoursEntry.update({ where: { id: o.id }, data: { reviewStatus: status, reviewedByName: actor, reviewedAt: now, reviewComment: d?.note ?? null } });
-      changed = changed || status === 'REJECTED';
-    }
-    const sheet = await this.sheets.load(step.timesheetId);
-    const scopedCells = new Map(sheet.lines.filter((l) => step.level !== 1 || l.projectId === step.projectId).flatMap((l) => l.cells.map((c) => [c.id, c] as const)));
-    const pendingAdj = await this.prisma.timesheetAdjustment.findMany({ where: { timesheetId: step.timesheetId, reviewStatus: 'PENDING_PL' } });
-    for (const a of pendingAdj) {
-      const cell = scopedCells.get(a.cellId);
-      if (!cell) continue;
-      const d = decisions.find((x) => x.type === 'MANUAL_INCREASE' && x.id === a.id);
-      const reject = d?.decision === 'REJECT';
-      await this.prisma.timesheetAdjustment.update({ where: { id: a.id }, data: { reviewStatus: reject ? 'REJECTED' : 'ACCEPTED', reviewedByName: actor, reviewedAt: now } });
-      if (reject) {
-        const adj = cell.adjustmentMinutes - a.deltaMinutes;
-        await this.prisma.timesheetCell.update({ where: { id: cell.id }, data: { adjustmentMinutes: adj, finalMinutes: Math.max(0, cell.trackedMinutes + cell.idleAsWorkMinutes + cell.outsideHoursMinutes + adj) } });
-        changed = true;
-      }
-    }
-    if (changed) await this.sheets.syncOutsideHours(step.timesheetId);
+  /**
+   * Accept / reject outside-hours entries, manual increases and idle claims (default: accept what
+   * waits in scope). Accepted time starts counting in the sheet's totals; rejected time drops.
+   */
+  private applyDecisions(step: TimesheetApprovalStep, decisions: ApproveStepInput['decisions'], actor: string) {
+    return this.sheets.applyReview(step.timesheetId, step.level === 1 ? { projectId: step.projectId } : {}, decisions, actor);
   }
 
   async approve(stepId: string, input: ApproveStepInput) {
@@ -273,6 +256,8 @@ export class ApprovalService {
   }
 
   private async finalApprove(timesheetId: string, emp: { id: string; userId: string | null; fullName: string }, label: string) {
+    // Anything no step covered (e.g. time on internal work when there is no Reporting Manager step) is accepted with the sheet.
+    await this.sheets.applyReview(timesheetId, {}, [], requireContext().userName ?? 'Approver');
     const t = await this.prisma.timesheet.update({ where: { id: timesheetId }, data: { status: 'APPROVED', approvedAt: new Date() } });
     this.events.emit('timesheet.approved', { timesheetId, employeeId: emp.id, weekStart: keyOf(t.weekStart) });
     if (emp.userId) {

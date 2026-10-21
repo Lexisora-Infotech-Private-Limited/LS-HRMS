@@ -37,11 +37,22 @@ export type ShiftLike = {
   minHalfDayMinutes: number;
   halfDayIfLateByMinutes: number | null;
   earlyOutGraceMinutes: number;
+  /**
+   * Late arrivals allowed a month (0 / undefined = no limit). Lates 1..N are permitted; from late N+1
+   * the first half of that day is a half day (booked as half-day leave, like a 2h+ late).
+   */
+  lateMarksAllowed?: number;
+  /** YYYY-MM-DD the limit took effect: earlier days are never turned into half days by it (null = always). */
+  lateMarksAllowedFrom?: string | null;
 };
 
 export type SessionLike = { startedAt: Date; endedAt: Date | null; source: SourceKey; autoClosed?: boolean };
 export type TrackerDayLike = { workedSec: number; breakSec: number; idleSec: number; idleDeductedSec?: number | null };
-export type LeaveLike = { fraction: number; typeCode: string | null; paid: boolean } | null;
+/**
+ * Leave on the day. `plannedFirstHalf` / `plannedSecondHalf`: a half day the employee applied for
+ * (not the automatic late-arrival half day), which moves the expected start / end to mid-shift.
+ */
+export type LeaveLike = { fraction: number; typeCode: string | null; paid: boolean; plannedFirstHalf?: boolean; plannedSecondHalf?: boolean } | null;
 export type PolicyLike = { deductIdleFromPayroll: boolean; idleDeductionMode: 'SHORTFALL_ONLY' | 'ALL_IDLE' | string; earlyOutCountsAsLate: boolean };
 
 export type DayInput = {
@@ -54,6 +65,8 @@ export type DayInput = {
   sessions: SessionLike[];
   tracker: TrackerDayLike | null;
   lateExcused?: boolean;
+  /** This day's place among the month's late arrivals if it is late (1 = first); see `lateOrdinal`. */
+  lateOrdinal?: number;
   policy: PolicyLike;
 };
 
@@ -70,6 +83,13 @@ export type DayResult = {
   isLate: boolean;
   lateByMinutes: number;
   lateExcused: boolean;
+  /**
+   * The first half is a half day (not excused): arrived `shift.halfDayIfLateByMinutes` or more late,
+   * or this is a late arrival beyond the month's allowed number (`lateOverLimit`).
+   */
+  lateHalfDay: boolean;
+  /** Late arrival number N+1 or later this month (shift.lateMarksAllowed = N). */
+  lateOverLimit: boolean;
   isEarlyOut: boolean;
   presentFraction: number;
   leaveFraction: number;
@@ -106,6 +126,48 @@ export function lateMark(firstIn: Date, expectedStart: Date, graceMinutes: numbe
   const diff = Math.round((firstIn.getTime() - expectedStart.getTime()) / 60_000);
   if (diff > graceMinutes) return { isLate: true, lateByMinutes: diff };
   return { isLate: false, lateByMinutes: 0 };
+}
+
+/** Where the second half of a shift starts (a planned first-half leave moves the expected start here). */
+export function secondHalfStart(expectedStart: Date, shift: Pick<ShiftLike, 'startMinute' | 'endMinute'>): Date {
+  return new Date(expectedStart.getTime() + Math.round(shiftDurationMinutes(shift) / 2) * 60_000);
+}
+
+/** Late by the half-day threshold or more (null threshold = rule off). */
+export function isLateHalfDay(lateByMinutes: number, shift: Pick<ShiftLike, 'halfDayIfLateByMinutes'>): boolean {
+  return shift.halfDayIfLateByMinutes != null && shift.halfDayIfLateByMinutes > 0 && lateByMinutes >= shift.halfDayIfLateByMinutes;
+}
+
+/**
+ * Monthly limit: the late arrival number `ordinal` (1 = first this month) on `date` is over the
+ * shift's allowed number. 0 / no limit set → never; days before the limit took effect → never.
+ */
+export function isOverLateLimit(ordinal: number, date: string, shift: Pick<ShiftLike, 'lateMarksAllowed' | 'lateMarksAllowedFrom'>): boolean {
+  const allowed = shift.lateMarksAllowed ?? 0;
+  if (allowed <= 0 || ordinal <= allowed) return false;
+  return !shift.lateMarksAllowedFrom || date >= shift.lateMarksAllowedFrom;
+}
+
+/**
+ * A late arrival that counts towards the month's number: not excused, and not on a day that ended
+ * as an absence. (Late marks shown to the employee, and the place of each late in the month.)
+ */
+export function isCountedLate(d: { isLate: boolean; lateExcused: boolean; status: string }): boolean {
+  return d.isLate && !d.lateExcused && d.status !== 'ABSENT';
+}
+
+/**
+ * Lateness of a punch-in at `at` (the web punch-in warning): the expected start is the shift start,
+ * or mid-shift when the first half is a planned leave. Off days are never late. `ordinal`: the place
+ * this late would take among the month's late arrivals (for the monthly limit).
+ */
+export function punchLateness(input: { date: string; at: Date; shift: ShiftLike; offDay: boolean; plannedFirstHalf: boolean; ordinal?: number }) {
+  const { expectedStart } = shiftWindow(input.date, input.shift);
+  const start = input.plannedFirstHalf ? secondHalfStart(expectedStart, input.shift) : expectedStart;
+  if (input.offDay) return { expectedStart: start, isLate: false, lateByMinutes: 0, lateHalfDay: false, overLimit: false };
+  const m = lateMark(input.at, start, input.shift.graceMinutes);
+  const overLimit = m.isLate && !input.plannedFirstHalf && isOverLateLimit(input.ordinal ?? 0, input.date, input.shift);
+  return { expectedStart: start, ...m, lateHalfDay: m.isLate && !input.plannedFirstHalf && (isLateHalfDay(m.lateByMinutes, input.shift) || overLimit), overLimit };
 }
 
 /** Idle deduction for one day (E5, D12). */
@@ -163,18 +225,26 @@ export function computeDay(input: DayInput): DayResult {
   }
   const worked = Math.max(0, presence - deductedIdle);
 
-  let isLate = false;
-  let lateByMinutes = 0;
-  if (firstInAt && !offDay) ({ isLate, lateByMinutes } = lateMark(firstInAt, expectedStart, shift.graceMinutes));
-  let isEarlyOut = false;
-  if (lastOutAt && !hasOpen && !offDay && (isPast || now > expectedEnd)) {
-    isEarlyOut = lastOutAt.getTime() < expectedEnd.getTime() - shift.earlyOutGraceMinutes * 60_000;
-    if (isEarlyOut && policy.earlyOutCountsAsLate) isLate = true;
-  }
-
   const leave = input.leave;
   const leaveFull = !!leave && leave.fraction >= 1;
   const leaveHalf = !!leave && leave.fraction > 0 && leave.fraction < 1;
+
+  // A planned first-half leave moves the expected start to mid-shift; a planned second-half leave the expected end.
+  const plannedFirst = leaveHalf && !!leave?.plannedFirstHalf;
+  const plannedSecond = leaveHalf && !!leave?.plannedSecondHalf;
+  const lateStart = plannedFirst ? secondHalfStart(expectedStart, shift) : expectedStart;
+  const outEnd = plannedSecond ? secondHalfStart(expectedStart, shift) : expectedEnd;
+  let isLate = false;
+  let lateByMinutes = 0;
+  if (firstInAt && !offDay) ({ isLate, lateByMinutes } = lateMark(firstInAt, lateStart, shift.graceMinutes));
+  const chargeable = isLate && !input.lateExcused && !plannedFirst;
+  const lateOverLimit = chargeable && isOverLateLimit(input.lateOrdinal ?? 0, date, shift);
+  const lateHalfDay = chargeable && (isLateHalfDay(lateByMinutes, shift) || lateOverLimit);
+  let isEarlyOut = false;
+  if (lastOutAt && !hasOpen && !offDay && (isPast || now > expectedEnd)) {
+    isEarlyOut = lastOutAt.getTime() < outEnd.getTime() - shift.earlyOutGraceMinutes * 60_000;
+    if (isEarlyOut && policy.earlyOutCountsAsLate) isLate = true;
+  }
   let status: DayStatusKey;
   let presentFraction = 0;
   let leaveFraction = 0;
@@ -197,9 +267,9 @@ export function computeDay(input: DayInput): DayResult {
     status = 'HALF_DAY_LEAVE';
     presentFraction = presence >= shift.minHalfDayMinutes ? 0.5 : 0;
   } else if (presence >= shift.minFullDayMinutes) {
-    const cap = shift.halfDayIfLateByMinutes != null && lateByMinutes > shift.halfDayIfLateByMinutes;
-    status = cap ? 'HALF_DAY' : 'PRESENT';
-    presentFraction = cap ? 0.5 : 1;
+    // Late by the half-day threshold, or late beyond the month's limit: only the second half counts.
+    status = lateHalfDay ? 'HALF_DAY' : 'PRESENT';
+    presentFraction = lateHalfDay ? 0.5 : 1;
   } else if (presence >= shift.minHalfDayMinutes) {
     status = 'HALF_DAY';
     presentFraction = 0.5;
@@ -221,6 +291,8 @@ export function computeDay(input: DayInput): DayResult {
     isLate,
     lateByMinutes,
     lateExcused: !!input.lateExcused && isLate,
+    lateHalfDay,
+    lateOverLimit,
     isEarlyOut,
     presentFraction,
     leaveFraction,
@@ -248,10 +320,20 @@ export type MonthDayLike = {
   leaveFraction: number;
   isLate: boolean;
   lateExcused: boolean;
+  lateHalfDay?: boolean;
   workedMinutes: number;
   idleMinutes: number;
   idleDeductibleMinutes: number;
 };
+
+/**
+ * A late arrival counts toward the payroll late-mark penalty unless it was excused, the day is
+ * already a full absence (unpaid anyway), or it was already charged as a late half day (2h+ late or
+ * over the month's limit) — never penalised twice. Shared with payroll.
+ */
+export function countsAsLateMark(d: { isLate: boolean; lateExcused: boolean; status: string; lateHalfDay?: boolean }): boolean {
+  return isCountedLate(d) && !d.lateHalfDay;
+}
 
 /** "This month" card + payroll feed figures from stored days. */
 export function summarizeMonth(days: MonthDayLike[], allowanceMinutes = 0) {
@@ -259,7 +341,11 @@ export function summarizeMonth(days: MonthDayLike[], allowanceMinutes = 0) {
   const sumDeductible = days.reduce((s, d) => s + d.idleDeductibleMinutes, 0);
   return {
     presentDays: round2(days.reduce((s, d) => s + d.presentFraction, 0)),
-    lateMarks: days.filter((d) => d.isLate && !d.lateExcused).length,
+    /** Every late arrival of the month (shown as "Late marks"), including the ones that became half days. */
+    lateMarks: days.filter(isCountedLate).length,
+    /** The ones the payroll late-mark penalty looks at (not already charged as a half day). */
+    penaltyLateMarks: days.filter(countsAsLateMark).length,
+    lateHalfDays: days.filter((d) => d.lateHalfDay).length,
     activeMinutes: days.reduce((s, d) => s + d.workedMinutes, 0),
     idleMinutes: days.reduce((s, d) => s + d.idleMinutes, 0),
     leaveDays: round2(days.reduce((s, d) => s + d.leaveFraction, 0)),
@@ -270,10 +356,10 @@ export function summarizeMonth(days: MonthDayLike[], allowanceMinutes = 0) {
   };
 }
 
-/** Late-mark penalty (B5): every N late marks cost `penaltyDays`. */
-export function latePenaltyDays(lateMarks: number, perPenalty: number, penaltyDays: number): number {
+/** Late-mark penalty (B5): after the shift's `allowed` free marks, every N late marks cost `penaltyDays`. */
+export function latePenaltyDays(lateMarks: number, perPenalty: number, penaltyDays: number, allowed = 0): number {
   if (perPenalty <= 0) return 0;
-  return Math.floor(lateMarks / perPenalty) * penaltyDays;
+  return Math.floor(Math.max(0, lateMarks - allowed) / perPenalty) * penaltyDays;
 }
 
 function round2(n: number) {

@@ -51,6 +51,13 @@ describe('calculateItem', () => {
     expect(r.lines.find((l) => l.componentCode === 'LOP')?.label).toBe('Loss of pay (1 day)');
   });
 
+  it('late-mark penalty not covered by CL is LOP on top of absences', () => {
+    const r = calculateItem(input({ gross: 66_000, days: { workingDays: 22, eligibleDays: 22, paidLeaveDays: 0, unpaidLeaveDays: 0, absentDays: 1, projectedDays: 0, latePenaltyLopDays: 0.5 } }));
+    expect(r.lopDays).toBe(1.5);
+    expect(r.paidDays).toBe(20.5);
+    expect(r.trace[0]).toContain('late-mark penalty 0.5');
+  });
+
   it('half-day LOP: 23 working days, 0.5 LOP → 22.5 paid days', () => {
     const r = calculateItem(input({ period: '2026-07', days: { workingDays: 23, eligibleDays: 23, paidLeaveDays: 0, unpaidLeaveDays: 0, absentDays: 0.5, projectedDays: 0 } }));
     expect(r.paidDays).toBe(22.5);

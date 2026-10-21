@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { TRACKER_SOCKET_EVENTS, type TrackerSwitchCommand } from '@lexisora/shared';
 import { RealtimeGateway } from '../../core/realtime/realtime.gateway';
 import { EventsService } from '../../core/registry/events.service';
 import { getContext } from '../../core/context/request-context';
@@ -25,9 +26,19 @@ export class WorkEvents {
     this.realtime.toUsers(userIds, 'work.boardAccess', { projectId, departmentId });
   }
 
-  /** Tracker "Working on" list should refresh for these users. */
-  trackerTasksChanged(userIds: string[]) {
-    this.realtime.toUsers(userIds.filter(Boolean), 'tracker.tasks_changed', {});
+  /**
+   * The tracker task list should refresh for these users: the web ('tracker.tasks_changed') and their
+   * paired desktop trackers, whose sockets join the same user room ('tasks.updated').
+   */
+  trackerTasksChanged(userIds: (string | null | undefined)[]) {
+    const ids = userIds.filter((x): x is string => !!x);
+    this.realtime.toUsers(ids, 'tracker.tasks_changed', {});
+    this.realtime.toUsers(ids, TRACKER_SOCKET_EVENTS.tasksUpdated, {});
+  }
+
+  /** Start (taskId) or stop (taskId null + ifActive) the employee's desktop timer; the tracker module delivers it. */
+  timerCommand(employeeId: string, cmd: TrackerSwitchCommand) {
+    this.events.emit('task.timerCommand', { employeeId, ...cmd });
   }
 
   taskStatusChanged(taskId: string, from: string, to: string) {

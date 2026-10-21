@@ -8,6 +8,8 @@ import { requireContext } from '../../core/context/request-context';
 import { fileAccessCheckers } from '../../core/storage/files.controller';
 import { WorkAccessService } from './work-access.service';
 import { WorkMetricsService } from './projects/work-metrics.service';
+import { TasksService } from './tasks/tasks.service';
+import { WorkEvents } from './work-events.service';
 
 /**
  * Registers the work domain in core registries:
@@ -27,6 +29,8 @@ export class WorkRegistry implements OnModuleInit {
     private readonly events: EventsService,
     private readonly access: WorkAccessService,
     private readonly metrics: WorkMetricsService,
+    private readonly tasks: TasksService,
+    private readonly workEvents: WorkEvents,
   ) {}
 
   onModuleInit() {
@@ -112,5 +116,15 @@ export class WorkRegistry implements OnModuleInit {
         if (p?.employeeId) await touch(p.employeeId).catch((e) => this.log.warn(`${ev}: ${(e as Error).message}`));
       });
     }
+
+    // A desktop tracker started / stopped timing a task: starting an Allotted card moves it to
+    // In progress, and the boards showing either task refresh (Running / Paused, spent time).
+    this.events.on('tracker.liveChanged', async (p: { employeeId: string; status: string; taskId?: string | null; prevTaskId?: string | null }) => {
+      if (p.status === 'WORKING' && p.taskId) await this.tasks.startFromTracker(p.employeeId, p.taskId);
+      const ids = [...new Set([p.taskId, p.prevTaskId].filter((x): x is string => !!x))];
+      if (!ids.length) return;
+      const rows = await this.prisma.task.findMany({ where: { id: { in: ids } }, select: { projectId: true, departmentId: true } });
+      for (const r of rows) this.workEvents.boardChanged(r.projectId, r.departmentId);
+    });
   }
 }

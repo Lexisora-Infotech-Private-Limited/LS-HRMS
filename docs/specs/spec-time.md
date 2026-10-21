@@ -183,6 +183,7 @@ model Shift {
   minHalfDayMinutes Int @default(240)
   earlyOutGraceMinutes Int @default(15)
   halfDayIfLateByMinutes Int? @default(120)
+  lateMarksAllowed Int @default(0)    // free late marks per calendar month before the penalty
   isDefault Boolean @default(false)   // exactly one per tenant (partial unique index)
   archivedAt DateTime?
   @@unique([tenantId, name])
@@ -241,6 +242,7 @@ model ShiftOverride {   // P2 roster: a single-day swap or extra weekly off
 - **Early out**: `lastOut < expectedEnd − earlyOutGraceMinutes` sets `isEarlyOut`. By default an early out counts as a late mark (`policy.earlyOutCountsAsLate = true`).
 - **Late-mark penalty** (policy): every `lateMarksPerPenalty` (default 3) late marks in a calendar month cost `penaltyDays` (default 0.5).
   - `penaltyDays = floor(lateCount / 3) × 0.5`.
+  - The employee's shift can allow `lateMarksAllowed` free late marks a month; only the ones after them count: `floor(max(0, lateCount − allowed) / lateMarksPerPenalty) × penaltyDays`.
   - It is deducted from Casual leave balance first (via the Leave domain API), otherwise it becomes LOP. The deduction is applied at period lock, not in real time.
   - A late mark excused by an approved regularization (type LATE_EXCUSE) is not counted.
 

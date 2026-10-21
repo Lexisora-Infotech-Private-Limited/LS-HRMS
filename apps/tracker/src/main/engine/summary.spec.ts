@@ -13,7 +13,7 @@ const seg = (kind: Segment['kind'], taskId: string | null, from: string, to: str
 });
 
 describe('computeTotals', () => {
-  it('sums worked (incl. claimed idle), break, idle and per-task', () => {
+  it('sums worked, break, idle (incl. claims waiting for review) and per-task', () => {
     const t = computeTotals([
       seg('WORK', 'AT-101', '09:30', '11:00'),
       seg('IDLE_WORK', 'AT-101', '11:00', '11:28'),
@@ -21,11 +21,12 @@ describe('computeTotals', () => {
       seg('IDLE', null, '15:00', '15:25'),
       seg('WORK', 'INT', '15:25', '16:00'),
     ]);
-    expect(t.workedSec / 60).toBe(90 + 28 + 35);
+    expect(t.workedSec / 60).toBe(90 + 35);
     expect(t.claimedSec / 60).toBe(28);
     expect(t.breakSec / 60).toBe(55);
-    expect(t.idleSec / 60).toBe(25);
-    expect(t.perTask.get('AT-101')! / 60).toBe(118);
+    expect(t.idleDeductedSec / 60).toBe(25);
+    expect(t.idleSec / 60).toBe(25 + 28);
+    expect(t.perTask.get('AT-101')! / 60).toBe(90);
     expect(t.perTask.get('INT')! / 60).toBe(35);
   });
 
@@ -47,6 +48,18 @@ describe('computeTotals', () => {
     expect(c.perTask.get('AT-101')).toBe(5400);
     expect(c.breakSec).toBe(600);
     expect(c.idleSec).toBe(300);
+  });
+
+  it('counts the server’s unreviewed claims as idle, not worked', () => {
+    // Server: 64 min work + a 92-min "I was working" claim waiting for review.
+    const c = combine(
+      { workedSeconds: 64 * 60, breakSeconds: 180, idleSeconds: 0, idlePendingSeconds: 92 * 60, screenshots: 5, byTask: [{ taskId: 'AT-101', key: 'AT-101', title: 'x', seconds: 64 * 60 }] },
+      computeTotals([seg('IDLE_WORK', 'AT-101', '12:00', '12:10')]),
+    );
+    expect(c.workedSec / 60).toBe(64);
+    expect(c.claimedSec / 60).toBe(92 + 10);
+    expect(c.idleSec / 60).toBe(92 + 10);
+    expect(c.perTask.get('AT-101')! / 60).toBe(64);
   });
 });
 

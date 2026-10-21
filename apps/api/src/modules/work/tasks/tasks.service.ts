@@ -1,18 +1,19 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { Prisma, Task } from '@prisma/client';
-import type { MyTask, TaskCreateInput, TaskDetail, TaskMoveInput, TaskMoveResult, TaskStatusKey, TaskUpdateInput } from '@lexisora/shared';
+import { formatEstimate, formatSpent, type MyTask, type TaskCard, type TaskCreateInput, type TaskDetail, type TaskMoveInput, type TaskMoveResult, type TaskStatusKey, type TaskUpdateInput } from '@lexisora/shared';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { AuditService } from '../../../core/audit/audit.service';
 import { NotificationsService } from '../../../core/notifications/notifications.service';
 import { currentTenantId } from '../../../core/context/request-context';
 import { AppError, badRequest, conflict, forbidden } from '../../../core/http/errors';
-import { WorkAccessService } from '../work-access.service';
+import { WorkAccessService, type BoardRights } from '../work-access.service';
 import { WorkEvents } from '../work-events.service';
 import { WorkMetricsService } from '../projects/work-metrics.service';
 import { GitService } from '../git/git.service';
-import { moveMessage, planTransition, STATUS_LABEL, type TaskStatus } from '../work.rules';
+import { gitNote, moveMessage, planTransition, shortName, STATUS_LABEL, timerAction, timerStartMessage, timerStopMessage, type TaskStatus } from '../work.rules';
 import { dateKey, dateOnly, iso } from '../work.util';
-import { toCard } from './task-mapper';
+import { toCard, type CardExtras } from './task-mapper';
+import { TaskTimerService, type RunningTimer } from './task-timer.service';
 
 const LOCKED_PROJECT = ['ARCHIVED', 'COMPLETED', 'CANCELLED'];
 
@@ -28,7 +29,32 @@ export class TasksService {
     private readonly events: WorkEvents,
     private readonly metrics: WorkMetricsService,
     private readonly git: GitService,
+    private readonly timer: TaskTimerService,
   ) {}
+
+  /** One card with spent time, the live timer and the allowed moves (move result, drawer). */
+  private async cardFor(
+    t: Task,
+    rights: BoardRights,
+    me: string | null,
+    project: { id: string; isSystem: boolean; status: string },
+    over: { timer?: RunningTimer | null; addSeconds?: number } = {},
+  ): Promise<TaskCard> {
+    const [spent, running, people] = await Promise.all([
+      this.metrics.spentSecondsByTask([t.id]),
+      'timer' in over ? Promise.resolve(null) : this.timer.running([t.id]),
+      this.boardPeople(project.id, t.departmentId, project.isSystem),
+    ]);
+    const timer = 'timer' in over ? (over.timer ?? null) : (running?.get(t.id) ?? null);
+    const names = await this.access.names([t.assigneeEmployeeId, timer?.employeeId]);
+    const extras: CardExtras = {
+      spentSeconds: t.openingLoggedMinutes * 60 + (spent.byTask.get(t.id) ?? 0) + (over.addSeconds ?? 0),
+      timer,
+      boardPeople: new Set(people),
+      locked: LOCKED_PROJECT.includes(project.status),
+    };
+    return toCard(t, names, rights, me, extras);
+  }
 
   private assertWritable(p: { status: string; name: string }) {
     if (LOCKED_PROJECT.includes(p.status)) throw new AppError(423, 'PROJECT_LOCKED', `${p.name} is ${p.status.toLowerCase()} — its board is read-only`);
@@ -96,7 +122,7 @@ export class TasksService {
         rank: (maxRank._max.rank ?? 0) + 1,
         assigneeEmployeeId: input.assigneeEmployeeId,
         reporterEmployeeId: v.employeeId,
-        estimatedMinutes: input.estimatedHours != null ? Math.round(input.estimatedHours * 60) : null,
+        estimatedMinutes: Math.round(input.estimatedHours * 60),
         dueDate: input.dueDate ? dateOnly(input.dueDate) : null,
         transitions: { create: [{ tenantId: currentTenantId(), fromStatus: null, toStatus: status, kind: 'CREATE', note: `Created on the ${dept.name} board`, byEmployeeId: v.employeeId, byName: v.name }] },
       },
@@ -156,11 +182,11 @@ export class TasksService {
     ]);
     const people = await this.boardPeople(project.id, t.departmentId, project.isSystem);
     const names = await this.access.names([t.assigneeEmployeeId, t.reporterEmployeeId, ...people]);
-    const card = toCard(t, names, rights, v.employeeId);
+    const card = await this.cardFor(t, rights, v.employeeId, project);
     const canEdit = !LOCKED_PROJECT.includes(project.status) && (rights.canManage || (!!v.employeeId && t.assigneeEmployeeId === v.employeeId));
     return {
       ...card,
-      canMove: card.canMove && !LOCKED_PROJECT.includes(project.status),
+      canMove: card.canMove,
       projectId: project.id,
       projectKey: project.key,
       projectName: project.name,
@@ -243,30 +269,23 @@ export class TasksService {
     if (newAssignee && newAssignee !== v.employeeId) {
       await this.notifications.notify({ userIds: await this.userIds([newAssignee]), type: 'task.assigned', title: `${t.key} assigned to you: ${input.title ?? t.title}`, link: `/board?project=${project.id}&board=${t.departmentId ?? ''}&task=${id}`, from: v.name });
     }
-    if (newAssignee !== undefined) this.events.trackerTasksChanged(await this.userIds([newAssignee, t.assigneeEmployeeId]));
+    if (newAssignee !== undefined) {
+      this.events.trackerTasksChanged(await this.userIds([newAssignee, t.assigneeEmployeeId]));
+      // The previous assignee's tracker stops timing a card that is no longer theirs.
+      if (t.assigneeEmployeeId) this.events.timerCommand(t.assigneeEmployeeId, { taskId: null, ifActive: id, key: t.key, by: v.name });
+    }
     if (statusChange) this.events.taskStatusChanged(id, statusChange.from, statusChange.to);
     this.events.boardChanged(project.id, t.departmentId, id);
     if (changes.includes('estimate') || statusChange) this.recompute(project.id);
     return this.detail(id);
   }
 
-  // ── Move (kanban drag / "Move to …" / "Mark done") ──────────────────────────
-  private async reorder(t: Task, to: TaskStatus, beforeTaskId?: string) {
-    const col = await this.prisma.task.findMany({
-      where: { projectId: t.projectId, departmentId: t.departmentId, status: to, isStanding: false, id: { not: t.id } },
-      orderBy: [{ rank: 'asc' }, { number: 'asc' }],
-      select: { id: true, rank: true },
-    });
-    const idx = beforeTaskId ? col.findIndex((c) => c.id === beforeTaskId) : -1;
-    const order = col.map((c) => c.id);
-    order.splice(idx >= 0 ? idx : order.length, 0, t.id);
-    const updates = order
-      .map((taskId, i) => ({ taskId, rank: i + 1 }))
-      .filter((u) => u.taskId === t.id || col.find((c) => c.id === u.taskId)?.rank !== u.rank);
-    for (const u of updates) if (u.taskId !== t.id) await this.prisma.task.update({ where: { id: u.taskId }, data: { rank: u.rank } });
-    return order.indexOf(t.id) + 1;
-  }
-
+  // ── Move (drag and drop / ← / "Move to … →") ────────────────────────────────
+  /**
+   * One backend action for every move. Besides the status it drives the assignee's desktop timer
+   * (work.rules timerAction): into In progress starts it, out of In progress stops it. Columns are
+   * ordered by overdue → due date → key, so the drop position (beforeTaskId) is ignored.
+   */
   async move(id: string, input: TaskMoveInput): Promise<TaskMoveResult> {
     const v = await this.access.viewer();
     const { task: t, project, rights } = await this.access.requireTask(v, id);
@@ -278,32 +297,40 @@ export class TasksService {
     if (input.version !== undefined && input.version !== t.version) throw conflict(`${t.key} was just changed by someone else — the board has been refreshed`, 'VERSION_CONFLICT');
     const from = t.status as TaskStatus;
     const to = input.toStatus as TaskStatus;
-    const names0 = await this.access.names([t.assigneeEmployeeId, me]);
-
-    if (from === to) {
-      const rank = await this.reorder(t, to, input.beforeTaskId);
-      const updated = await this.prisma.task.update({ where: { id }, data: { rank, version: { increment: 1 } } });
-      this.events.boardChanged(project.id, t.departmentId, id);
-      return { task: toCard(updated, names0, rights, me), message: `${t.key} reordered` };
-    }
+    if (from === to) return { task: await this.cardFor(t, rights, me, project), message: '' };
     if (to === 'OPEN' && t.assigneeEmployeeId && !rights.canManage && t.assigneeEmployeeId !== me) throw forbidden('Only the board lead can return a task to Open');
-    if (from !== 'OPEN' && !t.assigneeEmployeeId && !me) throw new AppError(422, 'ASSIGNEE_REQUIRED', 'Assign the task before moving it');
+    // Leaving Open without an assignee: the mover picks the card up, so they must be on the board.
+    if (!t.assigneeEmployeeId && to !== 'OPEN') {
+      if (!me) throw new AppError(422, 'ASSIGNEE_REQUIRED', `Assign ${t.key} to a board member before moving it`);
+      const people = await this.boardPeople(project.id, t.departmentId, project.isSystem);
+      if (!people.includes(me)) throw new AppError(422, 'ASSIGNEE_REQUIRED', `${t.key} has no assignee and you're not on this board — assign it to a board member first`);
+    }
 
-    const plan = planTransition({ from, to, hasRepo: !!project.gitRepoUrl, assigneeEmployeeId: t.assigneeEmployeeId, moverEmployeeId: me, startedAt: t.startedAt, now: new Date() });
-    const rank = await this.reorder(t, to, input.beforeTaskId);
-    const updated = await this.prisma.task.update({
-      where: { id },
+    const now = new Date();
+    const running = (await this.timer.running([id], now)).get(id) ?? null;
+    const plan = planTransition({ from, to, hasRepo: !!project.gitRepoUrl, assigneeEmployeeId: t.assigneeEmployeeId, moverEmployeeId: me, startedAt: t.startedAt, now });
+    const res = await this.prisma.task.updateMany({
+      where: { id, version: t.version },
       data: {
         status: to,
-        rank,
-        statusChangedAt: new Date(),
+        statusChangedAt: now,
         version: { increment: 1 },
         ...plan.set,
         ...(plan.git !== 'none' ? { gitSyncStatus: 'PENDING' as const } : {}),
       },
     });
+    if (!res.count) throw conflict(`${t.key} was just changed by someone else — the board has been refreshed`, 'VERSION_CONFLICT');
     await this.prisma.taskTransition.create({
-      data: { tenantId: currentTenantId(), taskId: id, fromStatus: from, toStatus: to, kind: 'MOVE', note: input.reason ?? (plan.backward ? 'Moved back' : null), byEmployeeId: me, byName: v.name },
+      data: {
+        tenantId: currentTenantId(),
+        taskId: id,
+        fromStatus: from,
+        toStatus: to,
+        kind: 'MOVE',
+        note: input.reason ?? (plan.rework ? 'Reopened for rework' : plan.backward ? 'Moved back' : null),
+        byEmployeeId: me,
+        byName: v.name,
+      },
     });
     await this.audit.record({ action: to === 'DONE' ? 'task.done' : 'task.moved', entity: 'Task', entityId: id, meta: { key: t.key, from, to, reason: input.reason ?? null } });
 
@@ -315,9 +342,29 @@ export class TasksService {
       git = { action: r.action, status: r.status, branch: r.branch ?? null, mrUrl: r.mrUrl ?? null, error: r.error ?? null };
       targetBranch = r.targetBranch;
     }
-    const fresh = plan.git !== 'none' ? await this.prisma.task.findFirstOrThrow({ where: { id } }) : updated;
+    const fresh = await this.prisma.task.findFirstOrThrow({ where: { id } });
     const assignee = fresh.assigneeEmployeeId;
-    const names = await this.access.names([assignee, me]);
+    const names = await this.access.names([assignee, me, running?.employeeId]);
+
+    // Timer: one running timer per person — the tracker pauses its previous task when it switches.
+    const action = timerAction(from, to, !!running);
+    let timerMsg: string | null = null;
+    let cardTimer: RunningTimer | null = null;
+    let addSeconds = 0;
+    if (action === 'start' && assignee) {
+      const state = await this.timer.assigneeState(assignee, now);
+      this.events.timerCommand(assignee, { taskId: id, key: t.key, by: v.name });
+      timerMsg = timerStartMessage(t.key, state, { isMover: assignee === me, short: shortName(names.get(assignee)) });
+      if (state.hasDevice && state.punchedIn && !state.onBreak) cardTimer = { employeeId: assignee, since: now };
+    } else if (action === 'stop') {
+      for (const e of new Set([running?.employeeId, t.assigneeEmployeeId].filter((x): x is string => !!x))) {
+        this.events.timerCommand(e, { taskId: null, ifActive: id, key: t.key, by: v.name });
+      }
+      // The tracker syncs its last stretch in a moment; count it now so the toast and card are right.
+      if (running) addSeconds = Math.max(0, (now.getTime() - running.since.getTime()) / 1000);
+    }
+    const card = await this.cardFor(fresh, rights, me, project, { timer: cardTimer, addSeconds });
+    if (action === 'stop') timerMsg = timerStopMessage(t.key, formatSpent(card.spentSeconds), fresh.estimatedMinutes ? formatEstimate(fresh.estimatedMinutes) : null);
 
     // Notifications
     if (to === 'QA') {
@@ -337,8 +384,36 @@ export class TasksService {
     this.events.boardChanged(project.id, t.departmentId, id);
     this.events.trackerTasksChanged(await this.userIds([assignee, t.assigneeEmployeeId]));
     this.recompute(project.id);
-    const message = moveMessage(t.key, to, { action: git.action, status: git.status, branch: git.branch, targetBranch });
-    return { task: toCard(fresh, names, rights, me), message, git };
+    const gitInfo = { action: git.action, status: git.status, branch: git.branch, targetBranch };
+    const message = timerMsg ? [timerMsg, gitNote(gitInfo)].filter(Boolean).join(' · ') : moveMessage(t.key, to, gitInfo);
+    return { task: card, message, git };
+  }
+
+  /**
+   * The desktop tracker started timing a task (task switch / punch-in on it): an Allotted card of
+   * that employee moves to In progress, the same transition the board makes (startedAt, branch, history).
+   * Runs inside the device's request context from the tracker.liveChanged event.
+   */
+  async startFromTracker(employeeId: string, taskId: string) {
+    const t = await this.prisma.task.findFirst({ where: { id: taskId }, include: { project: true } });
+    if (!t || t.isStanding || t.status !== 'ALLOTTED' || t.assigneeEmployeeId !== employeeId || LOCKED_PROJECT.includes(t.project.status)) return;
+    const now = new Date();
+    const plan = planTransition({ from: 'ALLOTTED', to: 'WIP', hasRepo: !!t.project.gitRepoUrl, assigneeEmployeeId: employeeId, moverEmployeeId: employeeId, startedAt: t.startedAt, now });
+    const res = await this.prisma.task.updateMany({
+      where: { id: taskId, status: 'ALLOTTED', version: t.version },
+      data: { status: 'WIP', statusChangedAt: now, version: { increment: 1 }, ...plan.set, ...(plan.git !== 'none' ? { gitSyncStatus: 'PENDING' as const } : {}) },
+    });
+    if (!res.count) return;
+    const name = (await this.access.names([employeeId])).get(employeeId) ?? 'Desktop tracker';
+    await this.prisma.taskTransition.create({
+      data: { tenantId: currentTenantId(), taskId, fromStatus: 'ALLOTTED', toStatus: 'WIP', kind: 'MOVE', note: 'Started on the desktop tracker', byEmployeeId: employeeId, byName: name },
+    });
+    await this.audit.record({ action: 'task.moved', entity: 'Task', entityId: taskId, meta: { key: t.key, from: 'ALLOTTED', to: 'WIP', source: 'tracker' } });
+    if (plan.git !== 'none') await this.git.syncTask(taskId, plan.git).catch((e) => this.log.warn(`git ${t.key}: ${(e as Error).message}`));
+    this.events.taskStatusChanged(taskId, 'ALLOTTED', 'WIP');
+    this.events.boardChanged(t.projectId, t.departmentId, taskId);
+    this.events.trackerTasksChanged(await this.userIds([employeeId]));
+    this.recompute(t.projectId);
   }
 
   // ── Comments ────────────────────────────────────────────────────────────

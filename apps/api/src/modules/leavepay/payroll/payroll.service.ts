@@ -23,6 +23,7 @@ import { NotificationsService } from '../../../core/notifications/notifications.
 import { StorageService } from '../../../core/storage/storage.service';
 import { addDays, dd, dk, monthBounds, periodLabel, periodOf, prevPeriod, todayKey } from '../common/dates';
 import { fmtDays } from '../leave/leave-calc';
+import { LeaveLedgerService } from '../leave/leave-ledger.service';
 import { fmtHm } from './payroll-calc';
 import { GATE_OK } from './payroll-days';
 import { ADJ_LABEL, PayrollEngineService, type EngineRow } from './payroll-engine.service';
@@ -96,6 +97,7 @@ export class PayrollService implements OnModuleInit {
     private readonly notifications: NotificationsService,
     private readonly storage: StorageService,
     private readonly crypto: CryptoService,
+    private readonly ledger: LeaveLedgerService,
   ) {}
 
   onModuleInit() {
@@ -236,6 +238,7 @@ export class PayrollService implements OnModuleInit {
         { label: 'Paid leave', value: fmtDays(i.paidLeaveDays) },
         { label: 'Unpaid leave', value: fmtDays(i.unpaidLeaveDays) },
         { label: 'Absent (LOP)', value: fmtDays(i.absentDays) },
+        { label: 'Late marks · penalty', value: i.lateMarks ? `${i.lateMarks} · ${fmtDays(i.latePenaltyLeaveDays + i.latePenaltyLopDays)} day (CL ${fmtDays(i.latePenaltyLeaveDays)} · LOP ${fmtDays(i.latePenaltyLopDays)})` : '0' },
         { label: 'Paid days', value: fmtDays(i.paidDays) },
         { label: 'Projected after lock', value: fmtDays(i.projectedDays) },
         { label: 'Holidays · weekly offs', value: `${i.holidays} · ${i.weeklyOffs}` },
@@ -444,11 +447,37 @@ export class PayrollService implements OnModuleInit {
       const adjIds = i.lines.map((l) => l.adjustmentId).filter((x): x is string => !!x);
       if (adjIds.length) await this.prisma.payrollAdjustment.updateMany({ where: { id: { in: adjIds } }, data: { status: 'APPLIED', appliedRunId: id } });
     }
+    if (run.runType === 'REGULAR') await this.bookLatePenalties(run, finals);
     const saved = await this.aggregate(id, { status: 'FINALIZED', finalizedAt: new Date(), finalizedByName: ctx.userName ?? 'HR' });
     await this.audit.record({ action: 'payroll.run.finalized', entity: 'PayrollRun', entityId: id, meta: { period: run.period, employees: finals.length, netPaise: saved.netPaise } });
     this.events.emit('payroll.finalized', { runId: id, period: run.period, totals: { grossPaise: saved.grossPaise, netPaise: saved.netPaise, deductionsPaise: saved.deductionsPaise, employerPfPaise: saved.employerPfPaise } });
     await this.jobs.enqueue(JOB_PUBLISH, { tenantId, runId: id });
     return { run: this.runView(saved, null), payslips: finals.length };
+  }
+
+  /** Finalize: debit the leave part (CL by default) of each late-mark penalty in the leave ledger (once per run). */
+  private async bookLatePenalties(run: PayrollRun, items: PayrollItem[]) {
+    const due = items.filter((i) => i.latePenaltyLeaveDays > 0);
+    if (!due.length) return;
+    const cl = await this.engine.latePenaltyType();
+    if (!cl) return;
+    const batchId = `late-penalty:${run.id}`;
+    const booked = new Set((await this.prisma.leaveLedgerEntry.findMany({ where: { batchId }, select: { employeeId: true } })).map((x) => x.employeeId));
+    const end = dk(run.periodEnd);
+    await this.ledger.post(
+      due
+        .filter((i) => !booked.has(i.employeeId))
+        .map((i) => ({
+          employeeId: i.employeeId,
+          leaveTypeId: cl.id,
+          leaveYear: Number(end.slice(0, 4)),
+          txType: 'MANUAL_DEBIT' as const,
+          days: -i.latePenaltyLeaveDays,
+          effectiveDate: end,
+          batchId,
+          note: `Late-mark penalty · ${periodLabel(run.period)} (${i.lateMarks} late ${i.lateMarks === 1 ? 'mark' : 'marks'})`,
+        })),
+    );
   }
 
   async cancel(id: string, reason: string) {

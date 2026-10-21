@@ -1,26 +1,38 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { EMPLOYMENT_TYPE_LABEL, LEAVE_STATUS_LABEL, LEAVE_STATUS_TONE, type CreditRuleRow, type LeaveRequestRow, type LeaveTypeRow, type ManualCreditRow } from '@lexisora/shared';
+import { EMPLOYMENT_TYPE_LABEL, LEAVE_STATUS_LABEL, LEAVE_STATUS_TONE, holidayLocationsOverlap, type CreditRuleRow, type HolidayRow, type LeaveRequestRow, type LeaveTypeRow, type ManualCreditRow } from '@lexisora/shared';
+import { useCan } from '@/lib/auth';
 import { useAction } from '@/lib/query';
 import { FormModal, type FieldDef } from '@/components/form';
 import { useLookups, opts } from '@/components/lookups';
 import { DataTable, Pager, type Column } from '@/components/table';
-import { ConfirmDialog, ErrorBlock, PageHeader, Tabs, Tag } from '@/components/ui';
-import { LEAVE_ALL, fmtDays, lpApi, lpKeys } from '../api';
+import { ConfirmDialog, ErrorBlock, PageHeader, Seg, Tabs, Tag } from '@/components/ui';
+import { dur } from '@/modules/time/api';
+import { HOLIDAY_CALENDARS, HOLIDAY_DEPENDENTS, LEAVE_ALL, currentPeriod, fmtDays, lpApi, lpKeys, useCompOffRules, type HolidayCalendar } from '../api';
 import { RejectModal } from '../components';
 import '../leavepay.css';
 
 type Tab = 'types' | 'basic' | 'manual' | 'requests' | 'holidays';
 
 export default function LeaveSetupPage() {
-  const [tab, setTab] = useState<Tab>('types');
+  const can = useCan();
+  // Roles & access can grant "Add & edit holidays" without the rest of leave setup.
+  const leaveAdmin = can('leave.manage');
+  const [tab, setTab] = useState<Tab>(leaveAdmin ? 'types' : 'holidays');
   const [form, setForm] = useState<'credit' | 'type' | LeaveTypeRow | null>(null);
+  if (!leaveAdmin) {
+    return (
+      <div data-screen-label="Holidays" className="stack" style={{ gap: 18 }}>
+        <PageHeader title="Holidays" sub="The company holiday calendar used by attendance, timesheets, leave and payroll." />
+        <HolidaysTab />
+      </div>
+    );
+  }
   return (
     <div data-screen-label="Leave setup" className="stack" style={{ gap: 18 }}>
       <PageHeader
         title="Leave setup"
-        sub="Leave types, annual credit rules and manual credits."
+        sub="Leave types, annual credit rules, manual credits and holidays."
         actions={
           <>
             <button className="btn btn-secondary" onClick={() => setForm('type')}>Add leave type</button>
@@ -255,29 +267,173 @@ function RequestsTab() {
   );
 }
 
+const HOLIDAY_TYPES = [
+  { value: 'MANDATORY', label: 'Mandatory (office closed)' },
+  { value: 'OPTIONAL', label: 'Optional (restricted)' },
+];
+
 function HolidaysTab() {
-  const q = useQuery({ queryKey: lpKeys.holidays, queryFn: lpApi.holidays });
+  const can = useCan();
+  const manage = can('holidays.manage');
+  const thisYear = Number(currentPeriod().slice(0, 4));
+  const [year, setYear] = useState(thisYear);
+  const [form, setForm] = useState<'add' | HolidayRow | null>(null);
+  const [tool, setTool] = useState<'import' | 'copy' | null>(null);
+  const [removing, setRemoving] = useState<HolidayRow | null>(null);
+  const q = useQuery({ queryKey: lpKeys.holidays(year), queryFn: () => lpApi.holidays(year) });
+  const rules = useCompOffRules();
+  const remove = useAction((h: HolidayRow) => lpApi.deleteHoliday(h.id), { success: (_r, h) => `${h.name} removed from the calendar`, invalidate: HOLIDAY_DEPENDENTS, onSuccess: () => setRemoving(null) });
+  const copy = useAction((toYear: number) => lpApi.copyHolidays({ fromYear: toYear - 1, toYear }), {
+    success: (r, toYear) =>
+      (r.count ? `${r.count} holidays copied to ${toYear}` : `Nothing to copy — ${toYear - 1} has no holidays missing from ${toYear}`) +
+      (r.skipped ? ` · ${r.skipped} skipped (that date already has a holiday)` : ''),
+    invalidate: HOLIDAY_DEPENDENTS,
+    onSuccess: () => setTool(null),
+  });
+  // Holidays added before the one-per-date rule can still clash: flag them so HR deletes the extra one.
+  const clashWith = (h: HolidayRow) => (q.data ?? []).find((o) => o.id !== h.id && o.date === h.date && holidayLocationsOverlap(o.locationIds, h.locationIds));
+  const clashDates = [...new Set((q.data ?? []).filter((h) => clashWith(h)).map((h) => h.dateLabel))];
+  const cols: Column<HolidayRow>[] = [
+    { key: 'd', header: 'Date', render: (h) => <span className="tnum">{h.date}</span> },
+    { key: 'w', header: 'Day', render: (h) => h.weekday },
+    {
+      key: 'n',
+      header: 'Holiday',
+      render: (h) => {
+        const other = clashWith(h);
+        return (
+          <span>
+            {h.name}{' '}
+            {other && (
+              <Tag tone="danger" title="Two holidays on one date for the same people — keep one and delete the other">
+                Same date as {other.name}
+              </Tag>
+            )}
+          </span>
+        );
+      },
+    },
+    { key: 't', header: 'Type', render: (h) => <Tag tone={h.type === 'MANDATORY' ? 'accent' : 'outline'}>{h.type === 'MANDATORY' ? 'Mandatory' : 'Optional'}</Tag> },
+    { key: 'l', header: 'Locations', render: (h) => h.locations },
+    ...(manage
+      ? [
+          {
+            key: 'x',
+            header: '',
+            render: (h: HolidayRow) => (
+              <div className="row" style={{ justifyContent: 'flex-end', flexWrap: 'nowrap' }} onClick={(e) => e.stopPropagation()}>
+                <button className="btn btn-ghost btn-sm" onClick={() => setForm(h)}>Edit</button>
+                <button className="btn btn-ghost btn-sm" onClick={() => setRemoving(h)}>Delete</button>
+              </div>
+            ),
+          },
+        ]
+      : []),
+  ];
   return (
     <div className="stack" style={{ gap: 12 }}>
-      <div className="note">
-        Holidays are excluded from leave day counts and payroll working days. The calendar is maintained by Attendance — <Link to="/attendance">manage holidays in Attendance</Link>.
+      <div className="lp-toolbar">
+        {manage && (
+          <>
+            <button className="btn btn-primary btn-sm" onClick={() => setForm('add')}>Add holiday</button>
+            <button className="btn btn-secondary btn-sm" onClick={() => setTool('import')}>Import list</button>
+            <button className="btn btn-secondary btn-sm" onClick={() => setTool('copy')}>Copy from {year - 1}</button>
+          </>
+        )}
+        <span className="spacer" />
+        <Seg options={[thisYear - 1, thisYear, thisYear + 1].map((y) => ({ value: String(y), label: String(y) }))} value={String(year)} onChange={(v) => setYear(Number(v))} />
       </div>
+      <div className="note">
+        Mandatory holidays are paid days off: they are skipped in leave day counts, attendance and payroll working days. Optional holidays stay working days — employees take them as leave.{' '}
+        {rules.data &&
+          (rules.data.enabled
+          ? `Anyone called in to work on a holiday or weekly off logs the hours in their timesheet; when the timesheet gets final approval, comp-off is credited automatically — 1 day for ${dur(rules.data.fullDayMinutes)} or more (capped at the shift length), ½ day for ${dur(rules.data.halfDayMinutes)} or more — valid for ${rules.data.expiryDays} days.`
+          : 'Comp-off is switched off (no active comp-off leave type), so holiday work is not credited.')}
+      </div>
+      {clashDates.length > 0 && (
+        <div className="note" style={{ borderColor: 'var(--color-danger)', color: 'var(--color-danger)' }}>
+          {clashDates.join(', ')} {clashDates.length === 1 ? 'has' : 'have'} two holidays for the same people. Keep one and delete the other — only one holiday per date is allowed.
+        </div>
+      )}
       {q.error ? (
-        <ErrorBlock error={q.error} />
+        <ErrorBlock error={q.error} retry={() => q.refetch()} />
       ) : (
-        <DataTable
-          columns={[
-            { key: 'd', header: 'Date', render: (h) => h.date },
-            { key: 'w', header: 'Day', render: (h) => h.day },
-            { key: 'n', header: 'Holiday', render: (h) => h.name },
-            { key: 't', header: 'Type', render: (h) => <Tag tone={h.type === 'MANDATORY' ? 'accent' : 'outline'}>{h.type === 'MANDATORY' ? 'Mandatory' : 'Optional'}</Tag> },
-          ]}
-          rows={q.data}
-          loading={q.isLoading}
-          rowKey={(h) => h.id}
-          empty="No holidays published for this year yet."
+        <DataTable columns={cols} rows={q.data} loading={q.isLoading} rowKey={(h) => h.id} onRowClick={manage ? (h) => setForm(h) : undefined} empty={manage ? `No holidays for ${year} yet — add one or import a ready-made list.` : `No holidays published for ${year} yet.`} />
+      )}
+      {form && <HolidayForm row={form === 'add' ? null : form} onClose={() => setForm(null)} />}
+      {tool === 'import' && <HolidayImportForm year={year} onClose={() => setTool(null)} />}
+      {tool === 'copy' && (
+        <ConfirmDialog
+          title={`Copy ${year - 1} holidays to ${year}?`}
+          body={`Every ${year - 1} holiday is added on the same date in ${year}. Holidays already on the ${year} calendar are skipped. Festivals that move every year (Diwali, Holi, Eid…) need their dates corrected afterwards.`}
+          confirmLabel="Copy holidays"
+          busy={copy.isPending}
+          onConfirm={() => copy.mutate(year)}
+          onClose={() => setTool(null)}
+        />
+      )}
+      {removing && (
+        <ConfirmDialog
+          title={`Delete ${removing.name}?`}
+          body={`${removing.dateLabel} becomes a normal working day again. Attendance for past dates is recalculated.`}
+          confirmLabel="Delete"
+          danger
+          busy={remove.isPending}
+          onConfirm={() => remove.mutate(removing)}
+          onClose={() => setRemoving(null)}
         />
       )}
     </div>
+  );
+}
+
+function HolidayForm({ row, onClose }: { row: HolidayRow | null; onClose: () => void }) {
+  const look = useLookups(['locations']);
+  const save = useAction(
+    (v: Record<string, any>): Promise<{ ok: boolean; count?: number }> => {
+      const body = { name: v.name, date: v.date, type: v.type, locationIds: v.locationIds ?? [] };
+      return row ? lpApi.updateHoliday(row.id, body) : lpApi.createHoliday({ ...body, endDate: v.endDate || null });
+    },
+    { success: (r) => (row ? 'Holiday updated' : (r.count ?? 1) > 1 ? `${r.count} holiday days added` : 'Holiday added'), invalidate: HOLIDAY_DEPENDENTS },
+  );
+  const fields: FieldDef[] = [
+    { name: 'name', label: 'Holiday name', type: 'text', span: 2, required: true, placeholder: 'Diwali' },
+    { name: 'date', label: row ? 'Date' : 'From date', type: 'date', required: true },
+    ...(row ? [] : [{ name: 'endDate', label: 'To date', type: 'date', hint: 'Only for holidays longer than one day' } satisfies FieldDef]),
+    { name: 'type', label: 'Type', type: 'select', required: true, options: HOLIDAY_TYPES },
+    { name: 'locationIds', label: 'Locations', type: 'multiselect', span: 2, options: opts(look.data, 'locations'), hint: 'Leave empty to apply to every location' },
+  ];
+  if (look.isLoading) return null;
+  return (
+    <FormModal
+      title={row ? `Edit ${row.name}` : 'Add holiday'}
+      fields={fields}
+      initial={row ? { name: row.name, date: row.date, type: row.type, locationIds: row.locationIds } : { type: 'MANDATORY' }}
+      submitLabel={row ? 'Save' : 'Add holiday'}
+      onSubmit={(v) => {
+        if (v.endDate && v.endDate < v.date) throw new Error('To date must be on or after the from date');
+        return save.mutateAsync(v);
+      }}
+      onClose={onClose}
+    />
+  );
+}
+
+function HolidayImportForm({ year, onClose }: { year: number; onClose: () => void }) {
+  const run = useAction((v: { calendar: HolidayCalendar }) => lpApi.importHolidays({ year, calendar: v.calendar }), {
+    success: (r) =>
+      (r.count ? `${r.count} holidays imported` : 'Every holiday in that list is already on the calendar') + (r.skipped && r.count ? ` · ${r.skipped} skipped (that date already has a holiday)` : ''),
+    invalidate: HOLIDAY_DEPENDENTS,
+  });
+  const fields: FieldDef[] = [{ name: 'calendar', label: 'Holiday list', type: 'select', span: 2, required: true, options: HOLIDAY_CALENDARS.map((c) => ({ value: c, label: c === 'National' ? 'National (all India)' : `${c} (national + state)` })) }];
+  return (
+    <FormModal
+      title={`Import ${year} holidays`}
+      intro="Adds the built-in list for the year. Holidays already on the calendar are skipped, so importing twice is safe."
+      fields={fields}
+      submitLabel="Import"
+      onSubmit={(v) => run.mutateAsync(v as { calendar: HolidayCalendar })}
+      onClose={onClose}
+    />
   );
 }

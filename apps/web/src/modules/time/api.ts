@@ -69,10 +69,12 @@ export const useMonth = (employeeId: string | null, month: string) =>
     queryFn: () => get<AttendanceMonth>(employeeId ? `/attendance/employees/${employeeId}/month` : '/attendance/me/month', { month }),
   });
 
-export const useTimeline = (employeeId: string | null, date: string) =>
+/** `live`: refetch every minute (today's strip keeps growing while someone is punched in). */
+export const useTimeline = (employeeId: string | null, date: string, live = false) =>
   useQuery({
     queryKey: tk.timeline(employeeId ?? 'me', date),
     queryFn: () => get<AttendanceTimeline>(employeeId ? `/attendance/employees/${employeeId}/timeline` : '/attendance/me/timeline', { date }),
+    refetchInterval: live ? 60_000 : false,
   });
 
 export const useMyIdCheck = () => useQuery({ queryKey: tk.idMine, queryFn: () => get<MyIdCheckCard>('/attendance/me/id-check') });

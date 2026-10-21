@@ -240,6 +240,8 @@ model LeaveRequest {
   cancelRequestedAt  DateTime?
   cancelledAt        DateTime?
   touchesLockedPeriod Boolean           @default(false)
+  /// Set when the system created the request: LATE_ARRIVAL = late by the shift's half-day threshold.
+  autoReason         String?
   version            Int                @default(0)
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
@@ -504,6 +506,10 @@ model PayrollItem {
   paidLeaveDays          Float             @default(0)
   unpaidLeaveDays        Float             @default(0)
   absentDays             Float             @default(0)
+  /// Late marks in the period and their penalty: the CL part is debited at finalize, the rest is in lopDays.
+  lateMarks              Int               @default(0)
+  latePenaltyLeaveDays   Float             @default(0)
+  latePenaltyLopDays     Float             @default(0)
   lopDays                Float             @default(0)
   paidDays               Float             @default(0)
   projectedDays          Float             @default(0)

@@ -33,7 +33,7 @@ export const NAV: NavGroup[] = [
       { id: 'timesheet', label: 'My timesheet', path: '/timesheet', permission: 'timesheet.self' },
       { id: 'approvals', label: 'Timesheet approvals', path: '/approvals', permission: ['timesheet.approve.l1', 'timesheet.approve.l2', 'attendance.regularize.approve'] },
       { id: 'leave', label: 'Time off', path: '/leave', permission: 'leave.self' },
-      { id: 'leaveAdmin', label: 'Leave setup', path: '/leave-setup', permission: 'leave.manage' },
+      { id: 'leaveAdmin', label: 'Leave setup', path: '/leave-setup', permission: ['leave.manage', 'holidays.manage'] },
       { id: 'idcompliance', label: 'ID card compliance', path: '/id-compliance', permission: 'idcompliance.manage' },
     ],
   },

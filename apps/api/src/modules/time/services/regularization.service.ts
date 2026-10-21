@@ -37,8 +37,8 @@ export class RegularizationService {
     if (!emp) throw notFound('Employee');
     const today = istKeyOf(new Date());
     if (input.date > today) throw new AppError(422, 'REGULARIZATION_FUTURE', "You can't regularize a future date");
-    const audience = emp.workMode === 'OFFICE' ? 'OFFICE' : 'REMOTE';
-    const policy = await this.policies.get(audience);
+    // Same policy column as My attendance shows for that day (HYBRID / WFH days use the effective one).
+    const { policy } = await this.attendance.resolve(emp, input.date);
     if (input.date < addDays(today, -policy.regularizationWindowDays)) {
       throw new AppError(422, 'REGULARIZATION_WINDOW', `Corrections must be requested within ${policy.regularizationWindowDays} days`);
     }
@@ -52,10 +52,22 @@ export class RegularizationService {
     if (used >= policy.maxRegularizationsPerMonth) {
       throw new AppError(422, 'REGULARIZATION_LIMIT', `You've used all ${policy.maxRegularizationsPerMonth} corrections for this month`);
     }
-    const inAt = input.correctedIn ? istInstant(input.date, parseHm(input.correctedIn)) : null;
-    let outAt = input.correctedOut ? istInstant(input.date, parseHm(input.correctedOut)) : null;
-    if (inAt && outAt && outAt <= inAt) outAt = new Date(outAt.getTime() + 86_400_000); // night shift out after midnight
-    if (inAt && outAt && outAt.getTime() - inAt.getTime() > 16 * 3600_000) throw new AppError(422, 'REGULARIZATION_SPAN', 'The corrected span can be at most 16 hours');
+    let inAt: Date | null = null;
+    let outAt: Date | null = null;
+    if (input.type === 'LATE_EXCUSE') {
+      const day = await this.prisma.attendanceDay.findFirst({ where: { employeeId, date: dateOf(input.date) }, select: { isLate: true, lateExcused: true, lateByMinutes: true } });
+      if (!day?.isLate || day.lateExcused || day.lateByMinutes <= 0) throw new AppError(422, 'NOT_LATE', 'There is no late mark to excuse on this date');
+    } else {
+      inAt = input.correctedIn ? istInstant(input.date, parseHm(input.correctedIn)) : null;
+      outAt = input.correctedOut ? istInstant(input.date, parseHm(input.correctedOut)) : null;
+      if (inAt && outAt && outAt <= inAt) outAt = new Date(outAt.getTime() + 86_400_000); // night shift out after midnight
+      // The corrected day must end up as one complete span: a missing side comes from what was recorded.
+      const span = await this.correctedSpan(employeeId, input.date, inAt, outAt);
+      if (span.openNow) throw new AppError(422, 'PUNCHED_IN', "You're punched in right now · punch out first, then correct the day");
+      if (!span.inAt || !span.outAt) throw new AppError(422, 'REGULARIZATION_INCOMPLETE', span.inAt ? 'Enter the punch-out time too' : 'Enter the punch-in time too', { fieldErrors: { [span.inAt ? 'correctedOut' : 'correctedIn']: ['Required for this correction'] } });
+      if (span.outAt <= span.inAt) throw new AppError(422, 'REGULARIZATION_SPAN', 'The punch-out must be after the punch-in');
+      if (span.outAt.getTime() - span.inAt.getTime() > 16 * 3600_000) throw new AppError(422, 'REGULARIZATION_SPAN', 'The corrected span can be at most 16 hours');
+    }
     const approver = emp.managerId && emp.managerId !== employeeId ? emp.managerId : null;
     const row = await this.prisma.attendanceRegularization.create({
       data: {
@@ -133,33 +145,43 @@ export class RegularizationService {
     return { ctx, r };
   }
 
+  /**
+   * The span a correction leaves the day with: requested in/out, else the first recorded punch-in /
+   * last real punch-out. openNow = today's session is still running (correct it after punching out).
+   */
+  private async correctedSpan(employeeId: string, date: string, requestedIn: Date | null, requestedOut: Date | null) {
+    const sessions = await this.prisma.workSession.findMany({ where: { employeeId, attendanceDate: dateOf(date) }, orderBy: { startedAt: 'asc' } });
+    const openNow = date === istKeyOf(new Date()) && sessions.some((s) => !s.endedAt);
+    return {
+      sessions,
+      openNow,
+      inAt: requestedIn ?? sessions[0]?.startedAt ?? null,
+      outAt: requestedOut ?? sessions.filter((s) => s.endedAt && !s.autoClosed).at(-1)?.endedAt ?? null,
+    };
+  }
+
   async approve(id: string, comment?: string | null) {
     const { ctx, r } = await this.loadForDecision(id);
     const date = keyOf(r.date);
     await this.locks.assertOpen(date);
     // Replace conflicting punches: accepted punches on that day in the corrected direction are superseded.
     if (r.requestedIn || r.requestedOut) {
-      const sessions = await this.prisma.workSession.findMany({ where: { employeeId: r.employeeId, attendanceDate: r.date }, orderBy: { startedAt: 'asc' } });
-      const inAt = r.requestedIn ?? sessions[0]?.startedAt ?? null;
-      const outAt = r.requestedOut ?? sessions.filter((s) => s.endedAt && !s.autoClosed).at(-1)?.endedAt ?? null;
+      const { sessions, inAt, outAt, openNow } = await this.correctedSpan(r.employeeId, date, r.requestedIn, r.requestedOut);
+      if (openNow) throw new AppError(409, 'PUNCHED_IN', `${(await this.policies.employee(r.employeeId))?.fullName ?? 'The employee'} is punched in right now · approve after they punch out`);
+      // Never leave an open session behind (it would block their next punch-in).
+      if (!inAt || !outAt || outAt <= inAt) throw new AppError(422, 'REGULARIZATION_INCOMPLETE', 'This correction has no complete in–out span · reject it and ask for both times');
       const punchIds = sessions.flatMap((s) => [s.inPunchId, s.outPunchId].filter((x): x is string => !!x));
       if (punchIds.length) await this.prisma.attendancePunch.updateMany({ where: { id: { in: punchIds } }, data: { status: 'SUPERSEDED' } });
       await this.prisma.workSession.deleteMany({ where: { employeeId: r.employeeId, attendanceDate: r.date } });
-      if (inAt) {
-        const pin = await this.prisma.attendancePunch.create({
-          data: { employeeId: r.employeeId, attendanceDate: r.date, punchedAt: inAt, direction: 'IN', source: 'REGULARIZATION', status: 'ACCEPTED', regularizationId: r.id, createdByName: ctx.userName ?? null } as any,
-        });
-        let outId: string | null = null;
-        if (outAt) {
-          const pout = await this.prisma.attendancePunch.create({
-            data: { employeeId: r.employeeId, attendanceDate: r.date, punchedAt: outAt, direction: 'OUT', source: 'REGULARIZATION', status: 'ACCEPTED', regularizationId: r.id, createdByName: ctx.userName ?? null } as any,
-          });
-          outId = pout.id;
-        }
-        await this.prisma.workSession.create({
-          data: { employeeId: r.employeeId, attendanceDate: r.date, inPunchId: pin.id, outPunchId: outId, startedAt: inAt, endedAt: outAt, source: 'REGULARIZATION' } as any,
-        });
-      }
+      const pin = await this.prisma.attendancePunch.create({
+        data: { employeeId: r.employeeId, attendanceDate: r.date, punchedAt: inAt, direction: 'IN', source: 'REGULARIZATION', status: 'ACCEPTED', regularizationId: r.id, createdByName: ctx.userName ?? null } as any,
+      });
+      const pout = await this.prisma.attendancePunch.create({
+        data: { employeeId: r.employeeId, attendanceDate: r.date, punchedAt: outAt, direction: 'OUT', source: 'REGULARIZATION', status: 'ACCEPTED', regularizationId: r.id, createdByName: ctx.userName ?? null } as any,
+      });
+      await this.prisma.workSession.create({
+        data: { employeeId: r.employeeId, attendanceDate: r.date, inPunchId: pin.id, outPunchId: pout.id, startedAt: inAt, endedAt: outAt, source: 'REGULARIZATION' } as any,
+      });
     }
     const saved = await this.prisma.attendanceRegularization.update({ where: { id }, data: { status: 'APPROVED', decidedAt: new Date(), decidedByName: ctx.userName ?? null, decisionComment: comment ?? null } });
     await this.attendance.recomputeDay(r.employeeId, date);
@@ -188,9 +210,13 @@ export class RegularizationService {
     const empIds = [...new Set(list.flatMap((r) => [r.employeeId, r.approverEmployeeId].filter((x): x is string => !!x)))];
     const emps = await this.prisma.employee.findMany({ where: { id: { in: empIds } }, select: { id: true, fullName: true } });
     const names = new Map(emps.map((e) => [e.id, e.fullName]));
+    // What was recorded before the correction: the day as computed (pending) / the superseded punches (decided).
+    const days = await this.prisma.attendanceDay.findMany({ where: { OR: list.map((r) => ({ employeeId: r.employeeId, date: r.date })) }, select: { employeeId: true, date: true, firstInAt: true, lastOutAt: true } });
+    const dayOf = (r: AttendanceRegularization) => days.find((d) => d.employeeId === r.employeeId && keyOf(d.date) === keyOf(r.date));
     const out: RegularizationRow[] = [];
     for (const r of list) {
       const date = keyOf(r.date);
+      const recorded = r.status === 'PENDING' ? dayOf(r) : null;
       const devicePunches =
         r.status === 'PENDING'
           ? (await this.prisma.attendancePunch.count({ where: { employeeId: r.employeeId, attendanceDate: r.date, source: { in: ['BIOMETRIC', 'DESKTOP'] }, status: 'ACCEPTED', createdAt: { gt: r.createdAt } } })) > 0
@@ -212,6 +238,9 @@ export class RegularizationService {
         decisionComment: r.decisionComment,
         createdAt: r.createdAt.toISOString(),
         devicePunchesNow: devicePunches,
+        attachmentFileId: r.attachmentFileId,
+        recordedIn: istHm(recorded?.firstInAt ?? null),
+        recordedOut: istHm(recorded?.lastOutAt ?? null),
       });
     }
     return out;
