@@ -445,6 +445,14 @@ export const screenshotsQuery = z.object({
 });
 export type ScreenshotsQuery = z.infer<typeof screenshotsQuery>;
 
+export const screenshotIntervalUpdateSchema = z.object({
+  // null clears the override and falls back to the tenant's AttendancePolicy default.
+  minutes: z.number().int().min(1).max(60).nullable(),
+});
+export type ScreenshotIntervalUpdateInput = z.infer<typeof screenshotIntervalUpdateSchema>;
+
+export type ScreenshotIntervalDto = { overrideMin: number | null; policyDefaultMin: number; effectiveMin: number };
+
 export type ScreenshotRow = {
   id: string;
   capturedAt: string;

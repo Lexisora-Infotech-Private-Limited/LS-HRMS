@@ -8,6 +8,7 @@ import { fileUrl, post } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { useAction } from '@/lib/query';
 import { onRealtime } from '@/lib/socket';
+import { ScreenshotIntervalEditor } from '@/modules/tracker/widgets';
 import { hmm, tk, useApproval, useApprovals, useRegs } from '../api';
 import '../time.css';
 import { CorrectionsPanel } from './CorrectionsPanel';
@@ -187,6 +188,7 @@ function Detail({ stepId, onDone }: { stepId: string; onDone: () => void }) {
         </div>
       )}
 
+      <ScreenshotIntervalEditor employeeId={t.employee.id} />
       <div className="row-between" style={{ flexWrap: 'wrap', gap: 8 }}>
         <div className="time-label">Screenshots mapped to tasks · every 10 min</div>
         <div className="row" style={{ gap: 6 }}>

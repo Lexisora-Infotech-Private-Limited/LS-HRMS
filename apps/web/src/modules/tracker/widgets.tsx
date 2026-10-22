@@ -9,9 +9,10 @@ import './tracker.css';
 
 /**
  * Reviewer widgets for other domains' screens (time → Timesheet approvals L1, attendance):
- *   <ScreenshotGrid employeeId week />     "Screenshots mapped to tasks · every 10 min"
- *   <IdleClaimsReview employeeId week />   "I was working" claims with Approve / Reject
- * Both call the tracker API, which applies relationship scope (self / RM / project lead / admin).
+ *   <ScreenshotGrid employeeId week />          "Screenshots mapped to tasks · every 10 min"
+ *   <IdleClaimsReview employeeId week />        "I was working" claims with Approve / Reject
+ *   <ScreenshotIntervalEditor employeeId />      Per-employee screenshot cadence override (RM / lead / HR)
+ * All call the tracker API, which applies relationship scope (self / RM / project lead / admin).
  */
 
 const DAY = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -92,6 +93,48 @@ export function ScreenshotGrid({ employeeId, week, limit = 200 }: { employeeId: 
         <div className="faint" style={{ fontSize: 12 }}>
           Showing {shown.length} of {q.data.total}. Pick a day to see all.
         </div>
+      )}
+    </div>
+  );
+}
+
+/** Lets an RM / project lead / HR set a different screenshot cadence for one employee (null = follow the tenant policy default). */
+export function ScreenshotIntervalEditor({ employeeId }: { employeeId: string }) {
+  const q = useQuery({ queryKey: [...trackerKeys.screenshotInterval, employeeId], queryFn: () => trackerApi.screenshotInterval(employeeId) });
+  const [minutes, setMinutes] = useState<string>('');
+  const save = useAction((m: number | null) => trackerApi.setScreenshotInterval(employeeId, m), {
+    invalidate: [trackerKeys.screenshotInterval, trackerKeys.screenshots],
+    success: (r) => (r.screenshotIntervalOverrideMin ? `Screenshot interval set to ${r.screenshotIntervalOverrideMin} min` : 'Screenshot interval reset to the policy default'),
+  });
+  if (q.isLoading || !q.data) return null;
+  const current = minutes === '' ? q.data.overrideMin : Number(minutes);
+  return (
+    <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <span className="faint" style={{ fontSize: 12.5 }}>
+        Screenshot interval: <b>{q.data.effectiveMin} min</b>{q.data.overrideMin == null ? ' · policy default' : ' · custom'}
+      </span>
+      <input
+        className="input"
+        type="number"
+        min={1}
+        max={60}
+        placeholder={String(q.data.policyDefaultMin)}
+        style={{ width: 72, padding: '4px 8px' }}
+        value={minutes === '' ? (q.data.overrideMin ?? '') : minutes}
+        onChange={(e) => setMinutes(e.target.value)}
+        aria-label="Screenshot interval override (minutes)"
+      />
+      <button
+        className="btn btn-secondary btn-sm"
+        disabled={save.isPending || !current || current === q.data.overrideMin}
+        onClick={() => save.mutate(Math.min(60, Math.max(1, Number(current))))}
+      >
+        Save
+      </button>
+      {q.data.overrideMin != null && (
+        <button className="btn btn-ghost btn-sm" disabled={save.isPending} onClick={() => { setMinutes(''); save.mutate(null); }}>
+          Reset to default
+        </button>
       )}
     </div>
   );

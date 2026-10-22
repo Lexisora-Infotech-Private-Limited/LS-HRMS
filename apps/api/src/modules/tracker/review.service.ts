@@ -6,6 +6,7 @@ import type {
   IdleClaimRow,
   IdleClaimsQuery,
   IntegrityEventRow,
+  ScreenshotIntervalDto,
   ScreenshotRow,
   ScreenshotsQuery,
   TrackerPerTask,
@@ -244,10 +245,12 @@ export class ReviewService {
     ]);
     const t = new Map(tasks.map((x) => [x.id, x]));
     const d = new Map(devices.map((x) => [x.id, x.hostname]));
-    const pol = await this.prisma.attendancePolicy.findFirst({ where: { audience: 'REMOTE' }, select: { screenshotIntervalMinutes: true } }).catch(() => null);
+    const emp = await this.prisma.employee.findUnique({ where: { id: employeeId }, select: { workMode: true, screenshotIntervalOverrideMin: true } }).catch(() => null);
+    const audience = emp?.workMode === 'OFFICE' ? 'OFFICE' : 'REMOTE';
+    const pol = await this.prisma.attendancePolicy.findFirst({ where: { audience }, select: { screenshotIntervalMinutes: true } }).catch(() => null);
     return {
       total,
-      intervalMin: pol?.screenshotIntervalMinutes ?? 10,
+      intervalMin: emp?.screenshotIntervalOverrideMin ?? pol?.screenshotIntervalMinutes ?? 10,
       items: shots.map((x) => ({
         id: x.id,
         capturedAt: x.capturedAt.toISOString(),
@@ -260,6 +263,41 @@ export class ReviewService {
         deviceName: x.deviceId ? (d.get(x.deviceId) ?? null) : null,
       })),
     };
+  }
+
+  /** Self / RM / project lead / HR+admin may view an employee's effective screenshot cadence (override or policy default). */
+  async getScreenshotInterval(employeeId: string): Promise<ScreenshotIntervalDto> {
+    const ctx = requireContext();
+    const s = await this.scope(ctx);
+    const hr = hasPerm(ctx, 'employees.manage');
+    let allowed = s.all || hr || s.self === employeeId || s.reports.has(employeeId);
+    if (!allowed && s.ledProjects.size) {
+      const member = await this.prisma.projectMember.findFirst({ where: { employeeId, projectId: { in: [...s.ledProjects] } }, select: { id: true } });
+      allowed = !!member;
+    }
+    if (!allowed) throw forbidden('Not authorized to view this screenshot interval');
+    const emp = await this.prisma.employee.findUnique({ where: { id: employeeId }, select: { workMode: true, screenshotIntervalOverrideMin: true } });
+    if (!emp) throw notFound('Employee');
+    const audience = emp.workMode === 'OFFICE' ? 'OFFICE' : 'REMOTE';
+    const pol = await this.prisma.attendancePolicy.findFirst({ where: { audience }, select: { screenshotIntervalMinutes: true } });
+    const policyDefaultMin = pol?.screenshotIntervalMinutes ?? 10;
+    return { overrideMin: emp.screenshotIntervalOverrideMin, policyDefaultMin, effectiveMin: emp.screenshotIntervalOverrideMin ?? policyDefaultMin };
+  }
+
+  /** RM / project lead / HR+admin may set a per-employee screenshot cadence override (null clears it back to the policy default). */
+  async setScreenshotInterval(employeeId: string, minutes: number | null): Promise<{ screenshotIntervalOverrideMin: number | null }> {
+    const ctx = requireContext();
+    const s = await this.scope(ctx);
+    const hr = hasPerm(ctx, 'employees.manage');
+    let allowed = s.all || hr || s.reports.has(employeeId);
+    if (!allowed && s.ledProjects.size) {
+      const member = await this.prisma.projectMember.findFirst({ where: { employeeId, projectId: { in: [...s.ledProjects] } }, select: { id: true } });
+      allowed = !!member;
+    }
+    if (!allowed) throw forbidden('Only the reporting manager, project lead or HR can change this screenshot interval');
+    await this.prisma.employee.update({ where: { id: employeeId }, data: { screenshotIntervalOverrideMin: minutes } });
+    await this.audit.record({ action: 'tracker.screenshotInterval.updated', entity: 'Employee', entityId: employeeId, meta: { minutes } });
+    return { screenshotIntervalOverrideMin: minutes };
   }
 
   // ── day summaries (attendance timeline, KPIs, approvals) ────────────────

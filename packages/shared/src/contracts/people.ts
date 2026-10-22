@@ -245,7 +245,7 @@ export const kitItemSchema = z.object({
 export type PeopleMasterRow = { id: string; name: string; code?: string | null; address?: string | null; lead?: string | null; leadEmployeeId?: string | null; employees: number; extra?: Record<string, unknown> };
 
 // ── Profile ────────────────────────────────────────────────────────────────
-export const PROFILE_TABS = ['overview', 'documents', 'assets', 'pay', 'attendance', 'devices'] as const;
+export const PROFILE_TABS = ['overview', 'documents', 'assets', 'pay', 'attendance', 'screenshots', 'devices'] as const;
 export type ProfileTab = (typeof PROFILE_TABS)[number];
 
 export type ProfileDto = {

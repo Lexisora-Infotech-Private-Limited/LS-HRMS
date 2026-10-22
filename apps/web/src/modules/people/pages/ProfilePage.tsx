@@ -24,11 +24,19 @@ import { opts, useLookups } from '@/components/lookups';
 import { DataTable, type Column } from '@/components/table';
 import { ConfirmDialog, ErrorBlock, Loading, Modal, Tag } from '@/components/ui';
 import { DevicesPanel } from '@/modules/tracker/DevicesPanel';
+import { ScreenshotGrid, ScreenshotIntervalEditor } from '@/modules/tracker/widgets';
 import { peopleApi, peopleKeys } from '../api';
 import { DocumentsTable, EmployeeFormModal, SelfEditModal, WORK_MODE_SHORT, statusTone, todayKey } from '../components';
 import '../people.css';
 
-const TAB_LABEL: Record<ProfileTab, string> = { overview: 'Overview', documents: 'Documents', assets: 'Assets', pay: 'Offer & pay', attendance: 'Attendance', devices: 'Devices' };
+const TAB_LABEL: Record<ProfileTab, string> = { overview: 'Overview', documents: 'Documents', assets: 'Assets', pay: 'Offer & pay', attendance: 'Attendance', screenshots: 'Screenshots', devices: 'Devices' };
+
+function mondayOf(dateKey: string) {
+  const d = new Date(`${dateKey}T00:00:00Z`);
+  const dow = (d.getUTCDay() + 6) % 7;
+  return new Date(d.getTime() - dow * 86400000).toISOString().slice(0, 10);
+}
+const shiftWeek = (wk: string, n: number) => new Date(new Date(`${wk}T00:00:00Z`).getTime() + n * 7 * 86400000).toISOString().slice(0, 10);
 
 /** Employee profile (/employees/:id) and own profile (/me). */
 export default function ProfilePage({ self }: { self?: boolean }) {
@@ -94,6 +102,7 @@ export default function ProfilePage({ self }: { self?: boolean }) {
       {tab === 'assets' && <AssetsTab id={p.id} />}
       {tab === 'pay' && <PayTab id={p.id} />}
       {tab === 'attendance' && <AttendanceTab id={p.id} />}
+      {tab === 'screenshots' && <ScreenshotsTab id={p.id} isSelf={p.isSelf} />}
       {tab === 'devices' && <DevicesPanel employeeId={p.id} />}
 
       {dialog === 'edit' && (p.canEdit ? <EmployeeFormModal profile={p} onClose={() => setDialog(null)} /> : <SelfEditModal profile={p} onClose={() => setDialog(null)} />)}
@@ -293,6 +302,24 @@ function PayTab({ id }: { id: string }) {
     <div className="stack" style={{ gap: 10 }}>
       {q.data?.effectiveFrom && <span className="faint" style={{ fontSize: 12.5 }}>Salary structure effective {formatDate(q.data.effectiveFrom)}. Visible only to the employee and Payroll/HR.</span>}
       <DataTable columns={cols} rows={q.data?.rows} loading={q.isLoading} rowKey={(r) => r.component} empty="No salary structure has been set up yet." />
+    </div>
+  );
+}
+
+function ScreenshotsTab({ id, isSelf }: { id: string; isSelf: boolean }) {
+  const [week, setWeek] = useState(mondayOf(todayKey()));
+  return (
+    <div className="stack" style={{ gap: 10 }}>
+      {!isSelf && <ScreenshotIntervalEditor employeeId={id} />}
+      <div className="row-between">
+        <span className="faint" style={{ fontSize: 12.5 }}>Week of {week}</span>
+        <div className="row" style={{ gap: 8 }}>
+          <button className="btn btn-secondary btn-sm" onClick={() => setWeek((w) => shiftWeek(w, -1))}>‹ Previous week</button>
+          <button className="btn btn-secondary btn-sm" onClick={() => setWeek(mondayOf(todayKey()))}>This week</button>
+          <button className="btn btn-secondary btn-sm" onClick={() => setWeek((w) => shiftWeek(w, 1))}>Next week ›</button>
+        </div>
+      </div>
+      <ScreenshotGrid employeeId={id} week={week} />
     </div>
   );
 }

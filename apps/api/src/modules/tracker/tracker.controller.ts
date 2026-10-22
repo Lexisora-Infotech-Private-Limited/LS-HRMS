@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Patch, Post, Query, Req, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Request } from 'express';
 import { memoryStorage } from 'multer';
@@ -8,6 +8,7 @@ import {
   idleClaimDecideSchema,
   idleClaimsQuery,
   pairStartSchema,
+  screenshotIntervalUpdateSchema,
   screenshotsQuery,
   trackerBatchSchema,
   trackerHeartbeatSchema,
@@ -17,6 +18,7 @@ import {
   type IdleClaimDecideInput,
   type IdleClaimsQuery,
   type PairStartInput,
+  type ScreenshotIntervalUpdateInput,
   type ScreenshotsQuery,
   type TrackerBatch,
   type TrackerHeartbeatInput,
@@ -170,6 +172,16 @@ export class TrackerReviewController {
   @Get('screenshots')
   screenshots(@Query(new ZodPipe(screenshotsQuery)) q: ScreenshotsQuery) {
     return this.review.listScreenshots(q);
+  }
+
+  @Get('employees/:id/screenshot-interval')
+  getScreenshotInterval(@Param('id') id: string) {
+    return this.review.getScreenshotInterval(id);
+  }
+
+  @Patch('employees/:id/screenshot-interval')
+  setScreenshotInterval(@Param('id') id: string, @Body(new ZodPipe(screenshotIntervalUpdateSchema)) dto: ScreenshotIntervalUpdateInput) {
+    return this.review.setScreenshotInterval(id, dto.minutes);
   }
 
   @Get('day-summaries')

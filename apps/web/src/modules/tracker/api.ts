@@ -11,10 +11,11 @@ import type {
   IntegrityEventRow,
   MyDevicesResponse,
   PairingLookup,
+  ScreenshotIntervalDto,
   ScreenshotRow,
   ScreenshotsQuery,
 } from '@lexisora/shared';
-import { get, post } from '@/lib/api';
+import { get, patch, post } from '@/lib/api';
 
 /** Tracker domain API client (web side). Query keys all start with 'tracker'. */
 export const trackerApi = {
@@ -33,6 +34,10 @@ export const trackerApi = {
   daySummaries: (q: { employeeId?: string; from: string; to: string }) => get<DaySummaryRow[]>('/tracker/day-summaries', q),
   integrity: (employeeId: string, week?: string) => get<IntegrityEventRow[]>('/tracker/integrity', { employeeId, week }),
   acknowledge: (id: string, comment?: string) => post<{ ok: true }>(`/tracker/integrity/${id}/ack`, { comment }),
+
+  screenshotInterval: (employeeId: string) => get<ScreenshotIntervalDto>(`/tracker/employees/${employeeId}/screenshot-interval`),
+  setScreenshotInterval: (employeeId: string, minutes: number | null) =>
+    patch<{ screenshotIntervalOverrideMin: number | null }>(`/tracker/employees/${employeeId}/screenshot-interval`, { minutes }),
 };
 
 export const trackerKeys = {
@@ -43,6 +48,7 @@ export const trackerKeys = {
   screenshots: ['tracker', 'screenshots'] as const,
   summaries: ['tracker', 'day-summaries'] as const,
   integrity: ['tracker', 'integrity'] as const,
+  screenshotInterval: ['tracker', 'screenshot-interval'] as const,
 };
 
 /** "just now", "4 min ago", "3 h ago", "2 days ago". */
