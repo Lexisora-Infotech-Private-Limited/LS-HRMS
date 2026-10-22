@@ -179,7 +179,7 @@ describe('task list, by-task summary and tray tooltip', () => {
     ]);
   });
 
-  it('by-task lists tracked tasks in list order, finished tasks from the known map, "No task" last', () => {
+  it('by-task lists every assigned task (even untracked, for view), finished tasks from the known map, "No task" last', () => {
     const per = new Map<string | null, number>([
       [null, 120],
       ['t10', 1800],
@@ -189,10 +189,12 @@ describe('task list, by-task summary and tray tooltip', () => {
     ]);
     const known = new Map([['gone', { key: 'AT-099', title: 'Old bug' }]]);
     expect(vm.byTaskRows(TASKS, per, known)).toEqual([
-      { key: 'AT-101', title: 'Invoice PDF export', time: '1h 00m' },
-      { key: 'AT-110', title: 'Code review', time: '0h 30m' },
-      { key: 'AT-099', title: 'Old bug', time: '0h 10m' },
-      { key: '', title: 'No task selected', time: '0h 02m' },
+      { key: 'AT-101', title: 'Invoice PDF export', time: '1h 00m', projectName: 'Atlas' },
+      { key: 'AT-103', title: 'Role-based menu', time: '0h 00m', projectName: 'Atlas' },
+      { key: 'AT-110', title: 'Code review', time: '0h 30m', projectName: 'Atlas' },
+      { key: 'INT-1', title: 'Stand-up & meetings', time: '0h 00m', projectName: 'Internal' },
+      { key: 'AT-099', title: 'Old bug', time: '0h 10m', projectName: undefined },
+      { key: '', title: 'No task selected', time: '0h 02m', projectName: undefined },
     ]);
   });
 

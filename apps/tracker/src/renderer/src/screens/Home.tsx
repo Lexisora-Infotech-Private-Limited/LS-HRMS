@@ -179,6 +179,23 @@ function PunchedIn({ s }: { s: ViewState }) {
   );
 }
 
+/** Groups "By task" rows under their project heading, keeping each project's first-seen order. */
+function groupByProject(rows: ViewState['summary']['byTask']): { projectName: string; rows: ViewState['summary']['byTask'] }[] {
+  const groups: { projectName: string; rows: ViewState['summary']['byTask'] }[] = [];
+  const byName = new Map<string, { projectName: string; rows: ViewState['summary']['byTask'] }>();
+  for (const t of rows) {
+    const name = t.projectName ?? 'No project';
+    let g = byName.get(name);
+    if (!g) {
+      g = { projectName: name, rows: [] };
+      byName.set(name, g);
+      groups.push(g);
+    }
+    g.rows.push(t);
+  }
+  return groups;
+}
+
 // ── Daily summary tab ────────────────────────────────────────────────────
 function SummaryTab({ s }: { s: ViewState }) {
   const sum = s.summary;
@@ -194,12 +211,17 @@ function SummaryTab({ s }: { s: ViewState }) {
       <div className="tw-kicker">By task</div>
       <div className="tw-bytask">
         {sum.byTask.length ? (
-          sum.byTask.map((t, i) => (
-            <div key={`${t.key}-${i}`} className="tw-bytask-row">
-              <span>
-                {t.key} {t.title}
-              </span>
-              <span className="tw-tnum">{t.time}</span>
+          groupByProject(sum.byTask).map((g) => (
+            <div key={g.projectName} className="tw-bytask-group">
+              <div className="tw-bytask-project">{g.projectName}</div>
+              {g.rows.map((t, i) => (
+                <div key={`${t.key}-${i}`} className="tw-bytask-row">
+                  <span>
+                    {t.key} {t.title}
+                  </span>
+                  <span className="tw-tnum">{t.time}</span>
+                </div>
+              ))}
             </div>
           ))
         ) : (

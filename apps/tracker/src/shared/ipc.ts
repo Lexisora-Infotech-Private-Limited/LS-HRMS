@@ -163,7 +163,7 @@ export type ViewState = {
 
   summary: {
     title: string;
-    byTask: { key: string; title: string; time: string }[];
+    byTask: { key: string; title: string; time: string; projectName?: string }[];
     screenshots: number;
     timeline: TimelineBar[];
     canConfirm: boolean;

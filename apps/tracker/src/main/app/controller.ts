@@ -660,7 +660,14 @@ export class TrackerController {
   private applyToday(t: TrackerToday, requestedAt: number) {
     this.cache.today = { ...t, requestedAt, fetchedAt: this.now() };
     for (const [id, [at]] of Object.entries(this.cache.acks)) if (at < requestedAt) delete this.cache.acks[id];
-    for (const b of t.byTask) if (b.taskId) this.cache.known[b.taskId] = { ...this.cache.known[b.taskId], key: b.key, title: b.title };
+    for (const b of t.byTask)
+      if (b.taskId)
+        this.cache.known[b.taskId] = {
+          ...this.cache.known[b.taskId],
+          key: b.key,
+          title: b.title,
+          projectName: this.cache.known[b.taskId]?.projectName ?? this.cache.tasks.find((x) => x.id === b.taskId)?.projectName,
+        };
     if (t.mode && t.mode !== this.mode) {
       this.mode = t.mode;
       void this.refreshPolicy(false);

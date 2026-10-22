@@ -548,6 +548,16 @@ img {
   display: flex;
   flex-direction: column;
 }
+.tw-bytask-group + .tw-bytask-group {
+  margin-top: 10px;
+}
+.tw-bytask-project {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-accent-700);
+  padding: 4px 0 2px;
+}
 .tw-bytask-row {
   display: flex;
   justify-content: space-between;
