@@ -208,7 +208,7 @@ export function PunchButton() {
       aria-disabled={!!why}
       title={why ?? (p.punchedIn ? `Worked ${p.elapsed}` : `Shift ${p.today.shift.start} · late after ${p.today.late.lateAfter}`)}
     >
-      {p.punchedIn ? `${p.label} · ${p.elapsed.slice(0, 5)}` : p.label}
+      {p.punchedIn ? `${p.label} · ${p.elapsed}` : p.label}
     </button>
   );
 }

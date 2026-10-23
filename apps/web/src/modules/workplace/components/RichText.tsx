@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { fileUrl, uploadFile } from '@/lib/api';
 import { useToast } from '@/lib/toast';
+import { Modal } from '@/components/ui';
 
 export type RteTool = 'B' | 'I' | 'H2' | 'Link' | 'Image' | 'List' | 'Numbered';
 
@@ -28,6 +29,9 @@ export function RichTextEditor({
   const fileRef = useRef<HTMLInputElement>(null);
   const saved = useRef<Range | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkUrl, setLinkUrl] = useState('');
+  const [linkError, setLinkError] = useState<string | null>(null);
   const { toastError } = useToast();
   // Initialise once (and when the value is replaced from outside, e.g. opening another record).
   useEffect(() => {
@@ -88,14 +92,23 @@ export function RichTextEditor({
     List: () => exec(document.queryCommandState('insertUnorderedList') ? 'insertOrderedList' : 'insertUnorderedList'),
     Numbered: () => exec('insertOrderedList'),
     Link: () => {
-      const url = window.prompt('Link address (https://…)');
-      if (url && /^(https?:\/\/|mailto:)/i.test(url.trim())) exec('createLink', url.trim());
+      saveSelection();
+      setLinkUrl('');
+      setLinkError(null);
+      setLinkOpen(true);
     },
     Image: () => {
       saveSelection();
       fileRef.current?.click();
     },
   };
+  function insertLink() {
+    const url = linkUrl.trim();
+    if (!/^(https?:\/\/|mailto:)/i.test(url)) return setLinkError('Enter a link starting with https:// or mailto:');
+    restoreSelection();
+    exec('createLink', url);
+    setLinkOpen(false);
+  }
   const label: Record<RteTool, JSX.Element | string> = { B: <b>B</b>, I: <i>I</i>, H2: 'H2', Link: 'Link', Image: uploading ? 'Uploading…' : 'Image', List: 'List', Numbered: '1.' };
   const title: Record<RteTool, string> = { B: 'Bold', I: 'Italic', H2: 'Heading', Link: 'Link', Image: 'Insert image (PNG, JPG or WebP, up to 5 MB)', List: 'List (press again for a numbered list)', Numbered: 'Numbered list' };
 
@@ -126,6 +139,32 @@ export function RichTextEditor({
         }}
         suppressContentEditableWarning
       />
+      {linkOpen && (
+        <Modal
+          title="Insert link"
+          onClose={() => setLinkOpen(false)}
+          actions={
+            <>
+              <button className="btn btn-secondary" onClick={() => setLinkOpen(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={insertLink}>Insert</button>
+            </>
+          }
+        >
+          <div className="field">
+            <label htmlFor="rte-link-url">Link address</label>
+            <input
+              id="rte-link-url"
+              className="input"
+              placeholder="https://…"
+              value={linkUrl}
+              autoFocus
+              onChange={(e) => { setLinkUrl(e.target.value); setLinkError(null); }}
+              onKeyDown={(e) => e.key === 'Enter' && insertLink()}
+            />
+            {linkError && <div className="field-error">{linkError}</div>}
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { CompOffRules, OutsideHoursDto, SubmitResult, TimesheetCellDto, TimesheetLineDto, TimesheetLineTask, TimesheetWeek } from '@lexisora/shared';
 import { FormModal, type FieldDef } from '@/components/form';
-import { ErrorBlock, Loading, Modal, PageHeader, Tag, toneFor, type Tone } from '@/components/ui';
+import { ConfirmDialog, ErrorBlock, Loading, Modal, PageHeader, Tag, toneFor, type Tone } from '@/components/ui';
 import { HttpError, del, post, put } from '@/lib/api';
 import { useAction } from '@/lib/query';
 import { onRealtime } from '@/lib/socket';
@@ -22,6 +22,7 @@ export default function TimesheetPage() {
   const { toast, toastError } = useToast();
   const [busy, setBusy] = useState(false);
   const [showQuiet, setShowQuiet] = useState(false);
+  const [emptyConfirm, setEmptyConfirm] = useState<string | null>(null);
   /** Rows added in this visit stay visible even before they have hours. */
   const [added, setAdded] = useState<string[]>([]);
   const rules = useCompOffRules();
@@ -39,7 +40,7 @@ export default function TimesheetPage() {
       await qc.invalidateQueries({ queryKey: tk.all });
     } catch (e) {
       if (e instanceof HttpError && e.code === 'EMPTY_TIMESHEET' && !confirmEmpty) {
-        if (window.confirm(`${e.message}\n\nSubmit an empty timesheet anyway?`)) return void submit(true);
+        setEmptyConfirm(e.message);
       } else toastError(e);
     } finally {
       setBusy(false);
@@ -257,6 +258,19 @@ export default function TimesheetPage() {
             const before = new Set(w.lines.map((l) => l.id));
             setAdded((a) => [...a, ...d.lines.filter((l) => !before.has(l.id)).map((l) => l.id)]);
             setWeek(d);
+          }}
+        />
+      )}
+      {emptyConfirm && (
+        <ConfirmDialog
+          title="Submit an empty timesheet?"
+          body={emptyConfirm}
+          confirmLabel="Submit anyway"
+          busy={busy}
+          onClose={() => setEmptyConfirm(null)}
+          onConfirm={() => {
+            setEmptyConfirm(null);
+            void submit(true);
           }}
         />
       )}
