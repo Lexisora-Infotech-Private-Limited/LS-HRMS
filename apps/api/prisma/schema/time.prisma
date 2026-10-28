@@ -113,6 +113,11 @@ model Shift {
   minHalfDayMinutes      Int               @default(240)
   earlyOutGraceMinutes   Int               @default(15)
   halfDayIfLateByMinutes Int?              @default(120)
+  /// Late arrivals allowed a month (0 = no limit). Lates 1..N are permitted (no leave cut); from late N+1
+  /// that day's first half is a half day, booked as half-day leave like a 2h+ late.
+  lateMarksAllowed       Int               @default(0)
+  /// The day the current limit took effect: earlier days are never turned into half days by it.
+  lateMarksAllowedFrom   DateTime?         @db.Date
   archivedAt             DateTime?
   assignments            ShiftAssignment[]
   createdAt              DateTime          @default(now())
@@ -156,10 +161,15 @@ model AttendancePolicy {
   screenshotRetentionDays     Int            @default(90)
   // ── "More rules" ──
   idleDeductionMode           String         @default("SHORTFALL_ONLY") /// SHORTFALL_ONLY | ALL_IDLE
-  lateMarksPerPenalty         Int            @default(3)
+  lateMarksPerPenalty         Int            @default(1)
   latePenaltyDays             Float          @default(0.5)
   latePenaltySource           String         @default("LEAVE_THEN_LOP") /// LEAVE_THEN_LOP | LOP | NONE
   earlyOutCountsAsLate        Boolean        @default(false)
+  /// Web punch-in after shift start + grace opens the "You're late" dialog and needs a reason.
+  lateReasonRequired          Boolean        @default(true)
+  /// Late by the shift's half-day threshold → automatic half-day leave (by latePenaltySource) for days on/after lateHalfDayLeaveFrom.
+  lateHalfDayAsLeave          Boolean        @default(true)
+  lateHalfDayLeaveFrom        DateTime       @default(now()) @db.Date
   missedPunchAutoCloseHours   Int            @default(6)
   maxRegularizationsPerMonth  Int            @default(3)
   regularizationWindowDays    Int            @default(7)
@@ -217,6 +227,11 @@ model AttendanceDay {
   presenceMinutes       Int             @default(0)
   sourcesMask           Int             @default(0)
   lateExcused           Boolean         @default(false)
+  /// Late by the shift's half-day threshold (not excused) → the first half is a half day (leave when the policy says so).
+  lateHalfDay           Boolean         @default(false)
+  /// Why the employee was late (asked at web punch-in, or added later from My attendance).
+  lateReason            String?
+  lateReasonAt          DateTime?
   isEarlyOut            Boolean         @default(false)
   leaveTypeCode         String?
   holidayName           String?
@@ -277,6 +292,26 @@ model WorkSession {
 
   @@index([tenantId, employeeId, attendanceDate])
   @@index([tenantId, endedAt])
+}
+
+/// Idle time seen by the web app inside a punched-in session (no input ≥ autoIdleMinutes),
+/// with the reason the employee picked on return. Shown on the day timeline.
+model AttendanceIdleSpan {
+  id             String   @id @default(cuid())
+  tenantId       String
+  employeeId     String
+  attendanceDate DateTime @db.Date
+  sessionId      String?
+  /// Client-generated uuid; a replayed save with the same id is ignored.
+  clientId       String   @unique
+  startedAt      DateTime
+  endedAt        DateTime
+  /// BREAK | MEETING | OTHER
+  reason         String
+  note           String?
+  createdAt      DateTime @default(now())
+
+  @@index([tenantId, employeeId, attendanceDate])
 }
 
 model AttendanceRegularization {
@@ -418,6 +453,8 @@ model Timesheet {
   adjustmentMinutes   Int                     @default(0)
   outsideHoursMinutes Int                     @default(0)
   idleAsWorkMinutes   Int                     @default(0)
+  /// Claimed time waiting for Project Lead review (manual increases + outside hours) — not in totalMinutes.
+  pendingMinutes      Int                     @default(0)
   returnedComment     String?
   returnedByName      String?
   hasLateData         Boolean                 @default(false)
@@ -469,6 +506,10 @@ model TimesheetCell {
   idleAsWorkMinutes   Int           @default(0)
   /// Pending (not yet reviewed) idle-as-work minutes — shown with a clock marker.
   pendingIdleMinutes  Int           @default(0)
+  /// Manual increase above the counted value, waiting for Project Lead review (not in finalMinutes).
+  pendingAdjustmentMinutes Int      @default(0)
+  /// Outside-hours entries waiting for Project Lead review (not in finalMinutes; outsideHoursMinutes = accepted).
+  pendingOutsideMinutes    Int      @default(0)
 
   @@unique([lineId, date])
   @@index([tenantId, date])
@@ -495,7 +536,7 @@ model TimesheetAdjustment {
   deltaMinutes   Int
   kind           String /// MANUAL_INCREASE | MANUAL_DECREASE | REALLOCATION
   reason         String
-  reviewStatus   String    @default("NOT_REQUIRED") /// NOT_REQUIRED | PENDING_PL | ACCEPTED | REJECTED
+  reviewStatus   String    @default("NOT_REQUIRED") /// NOT_REQUIRED | PENDING_PL | ACCEPTED | REJECTED | SUPERSEDED (replaced by a later edit or covered by tracked time)
   createdByName  String?
   reviewedByName String?
   reviewedAt     DateTime?

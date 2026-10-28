@@ -223,6 +223,8 @@ model Employee {
   workMode              WorkMode       @default(OFFICE)
   workLocationId        String?
   shiftId               String?
+  /// Per-employee override of the tracker's screenshot cadence (minutes); null = use the AttendancePolicy default. Set by RM/Project Lead/HR.
+  screenshotIntervalOverrideMin Int?
   status                EmployeeStatus @default(ONBOARDING)
   joiningDate           DateTime?      @db.Date
   confirmationDate      DateTime?      @db.Date

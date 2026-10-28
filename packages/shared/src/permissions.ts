@@ -39,7 +39,8 @@ export const PERMISSIONS = {
   'leave.approve': { label: 'Approve time off', group: 'Time', roles: ['manager', 'hr', 'admin'] },
   'leave.manage': { label: 'Leave setup & credits', group: 'Time', roles: HRA },
   'idcompliance.manage': { label: 'ID card compliance checks', group: 'Time', roles: HRA },
-  'holidays.manage': { label: 'Manage holiday calendar', group: 'Time', roles: HRA },
+  // On its own it opens Leave setup with just the Holidays tab.
+  'holidays.manage': { label: 'Add & edit holidays', group: 'Time', roles: HRA },
 
   // Work
   'projects.view': { label: 'View projects', group: 'Work', roles: ALL },
@@ -83,6 +84,7 @@ export const PERMISSIONS = {
   'vault.self': { label: 'Own digital vault', group: 'Workplace', roles: ALL },
   'idcard.manage': { label: 'ID card designer', group: 'Workplace', roles: HRA },
   'vcard.self': { label: 'Visiting card', group: 'Workplace', roles: ALL },
+  'settings.vcard': { label: 'Choose who gets a visiting card', group: 'Workplace', roles: HRA },
   'assets.manage': { label: 'Assets & inventory', group: 'Workplace', roles: HRA },
   'welcomekit.manage': { label: 'Welcome kits', group: 'Workplace', roles: HRA },
   'policies.view': { label: 'Read policies', group: 'Workplace', roles: ALL },
@@ -130,6 +132,7 @@ export function defaultPermissionsFor(role: RoleKey): PermissionKey[] {
 export const ROLE_MATRIX_ROWS: { label: string; keys: PermissionKey[] }[] = [
   { label: 'Mobile app access', keys: ['mobile.access'] },
   { label: 'Approve timesheets', keys: ['timesheet.approve.l1', 'timesheet.approve.l2'] },
+  { label: 'Add & edit holidays', keys: ['holidays.manage'] },
   { label: 'View all task boards', keys: ['tasks.viewAllBoards'] },
   { label: 'Payroll & ledger', keys: ['payroll.manage', 'ledger.manage'] },
   { label: 'Publish global notices', keys: ['notices.publish.global'] },

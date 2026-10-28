@@ -26,6 +26,7 @@ export type TrackerEmployee = {
   shiftId: string | null;
   workLocationId: string | null;
   status: string;
+  screenshotIntervalOverrideMin: number | null;
 };
 
 /**
@@ -40,7 +41,7 @@ export class TrackerContextService {
   async employee(employeeId: string): Promise<TrackerEmployee> {
     const e = await this.prisma.employee.findUnique({
       where: { id: employeeId },
-      select: { id: true, tenantId: true, userId: true, fullName: true, empCode: true, workMode: true, managerId: true, shiftId: true, workLocationId: true, status: true },
+      select: { id: true, tenantId: true, userId: true, fullName: true, empCode: true, workMode: true, managerId: true, shiftId: true, workLocationId: true, status: true, screenshotIntervalOverrideMin: true },
     });
     if (!e) throw notFound('Employee');
     return e as TrackerEmployee;
@@ -113,9 +114,10 @@ export class TrackerContextService {
     const p = await this.policyRow(audience);
     const shift = await this.shiftFor(e, trackerWorkDate(now));
     const { mode, message } = await this.modeFor(e, now);
+    const intervalMin = e.screenshotIntervalOverrideMin ?? p.screenshotIntervalMinutes;
     return {
       idleThresholdMin: Math.min(60, Math.max(1, p.autoIdleMinutes)),
-      screenshotIntervalMin: Math.min(60, Math.max(1, p.screenshotIntervalMinutes)),
+      screenshotIntervalMin: Math.min(60, Math.max(1, intervalMin)),
       screenshotsEnabled: p.screenshotsEnabled,
       blurScreenshots: p.blurScreenshots,
       offlineRetentionDays: Math.min(30, Math.max(1, p.offlineRetentionDays)),

@@ -1,25 +1,47 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type DragEvent, type SyntheticEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { BOARD_COLUMNS, TASK_STATUS_LABELS, type BoardView, type TaskCard, type TaskStatusKey } from '@lexisora/shared';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  BOARD_COLUMNS,
+  TASK_STATUS_LABELS,
+  adjacentColumns,
+  formatEstimate,
+  formatSpent,
+  liveSpentSeconds,
+  showsProgress,
+  sortBoardCards,
+  spentProgress,
+  timerStateLabel,
+  type BoardView,
+  type TaskCard,
+  type TaskMoveResult,
+  type TaskStatusKey,
+} from '@lexisora/shared';
 import { HttpError } from '@/lib/api';
-import { useCan } from '@/lib/auth';
 import { useAction } from '@/lib/query';
 import { onRealtime } from '@/lib/socket';
 import { useToast } from '@/lib/toast';
 import { useLookups, opts } from '@/components/lookups';
 import { Empty, ErrorBlock, Loading, Modal, Pills, Tag } from '@/components/ui';
-import { hours, workApi, workKeys } from '../api';
+import { workApi, workKeys } from '../api';
 import { AddTaskModal } from '../components';
 import { TaskDrawer } from './TaskDrawer';
 import '../work.css';
 
-const NEXT: Partial<Record<TaskStatusKey, TaskStatusKey>> = { OPEN: 'ALLOTTED', ALLOTTED: 'WIP', WIP: 'DEV_COMPLETED', DEV_COMPLETED: 'QA', QA: 'DONE' };
+/** The four rules above the board (static copy). */
+const RULES = [
+  { title: 'Allotted → In progress', body: 'Timer starts on your desktop tracker' },
+  { title: 'In progress → Dev completed', body: 'Timer stops and the time is saved' },
+  { title: 'Break or punch out', body: 'Timer pauses, resumes on the same task' },
+  { title: 'Every minute tracked', body: 'Lands in your timesheet automatically' },
+];
+
+/** Board views are refetched on realtime events; this is only a safety net (e.g. timesheet edits). */
+const REFRESH_MS = 60_000;
 
 export default function BoardPage() {
-  const can = useCan();
   const qc = useQueryClient();
-  const { toast } = useToast();
+  const { toast, toastError } = useToast();
   const [params, setParams] = useSearchParams();
   const lk = useLookups(['projects']);
   const projects = opts(lk.data, 'projects').filter((p) => !/· INT$/.test(p.label));
@@ -49,9 +71,10 @@ export default function BoardPage() {
     queryFn: () => workApi.board(projectId, boardId, showDone),
     enabled: !!projectId && !!boardId && !board?.locked,
     retry: (n, e) => !(e instanceof HttpError && e.status === 403) && n < 1,
+    refetchInterval: REFRESH_MS,
   });
 
-  // Realtime: refresh when anyone moves/edits a card on this board, or when my access changes.
+  // Realtime: any move / new task / assignee change / tracker start-stop on this project refreshes the view.
   useEffect(() => {
     const off1 = onRealtime<{ projectId: string; departmentId: string | null }>('work.board', (p) => {
       if (p.projectId === projectId) void qc.invalidateQueries({ queryKey: ['work', 'board', projectId] });
@@ -66,70 +89,74 @@ export default function BoardPage() {
     };
   }, [projectId, qc]);
 
-  const move = useAction(
-    (a: { card: TaskCard; to: TaskStatusKey; beforeTaskId?: string }) => workApi.moveTask(a.card.id, { toStatus: a.to, version: a.card.version, beforeTaskId: a.beforeTaskId }),
-    {
-      success: (r) => r.message,
-      invalidate: [['work', 'board', projectId], workKeys.projects],
+  // One backend action for drag and drop and the ← / → links; the card moves at once and goes back on failure.
+  const move = useMutation({
+    mutationFn: (a: { card: TaskCard; to: TaskStatusKey }) => workApi.moveTask(a.card.id, { toStatus: a.to, version: a.card.version }),
+    onMutate: async (a) => {
+      await qc.cancelQueries({ queryKey: boardKey });
+      const before = qc.getQueryData<BoardView>(boardKey);
+      qc.setQueryData<BoardView>(boardKey, (old) => (old ? placeCard(old, { ...a.card, status: a.to, allowedMoves: [] }) : old));
+      return { before };
     },
-  );
-
-  function doMove(card: TaskCard, to: TaskStatusKey, beforeTaskId?: string) {
-    if (!card.canMove) return toast('You can move only your own or unassigned cards on this board');
-    if (card.status === to && !beforeTaskId) return;
-    // Optimistic: move the card locally, then let the server response/refresh settle it.
-    qc.setQueryData<BoardView>(boardKey, (old) => {
-      if (!old) return old;
-      const cols = old.columns.map((c) => ({ ...c, cards: c.cards.filter((x) => x.id !== card.id) }));
-      const target = cols.find((c) => c.status === to);
-      if (target) {
-        const moved = { ...card, status: to };
-        const idx = beforeTaskId ? target.cards.findIndex((x) => x.id === beforeTaskId) : -1;
-        if (idx >= 0) target.cards.splice(idx, 0, moved);
-        else target.cards.push(moved);
-      }
-      return { ...old, columns: cols.map((c) => ({ ...c, count: c.cards.length })) };
-    });
-    move.mutate(
-      { card, to, beforeTaskId },
-      {
-        // Server rejected (stale version, no permission…): useAction toasts the reason; restore the real board.
-        onError: () => void qc.invalidateQueries({ queryKey: ['work', 'board', projectId] }),
-      },
-    );
-  }
+    onError: (e, _a, ctx) => {
+      if (ctx?.before) qc.setQueryData(boardKey, ctx.before);
+      toastError(e);
+    },
+    onSuccess: (r: TaskMoveResult) => {
+      qc.setQueryData<BoardView>(boardKey, (old) => (old ? placeCard(old, r.task) : old));
+      if (r.message) toast(r.message);
+    },
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: ['work', 'board', projectId] });
+      void qc.invalidateQueries({ queryKey: workKeys.projects });
+    },
+  });
+  const doMove = (card: TaskCard, to: TaskStatusKey) => {
+    if (card.status !== to) move.mutate({ card, to });
+  };
 
   const lockedError = viewQ.error instanceof HttpError && viewQ.error.status === 403;
   const isLocked = !!board?.locked || lockedError;
   const view = viewQ.data;
   const projectName = view?.project.name ?? projects.find((p) => p.value === projectId)?.label.replace(/ · [A-Z]+$/, '') ?? '';
+  // Server clock at render time, so running timers tick from the server's start time whatever the PC clock says.
+  const skewMs = view ? Date.parse(view.serverNow) - viewQ.dataUpdatedAt : 0;
 
   return (
-    <div data-screen-label="Task board" className="stack" style={{ gap: 16 }}>
-      <div className="page-head">
+    <div data-screen-label="Task board" className="stack tb-page" style={{ gap: 20 }}>
+      <div className="tb-head">
         <div>
           <h2>Task board · {projectName || '—'}</h2>
-          <p>Drag cards between columns. Moving to Dev Completed pushes the branch to GitLab.</p>
+          <p>Drag cards between columns, or use the move links. Your timer follows the card.</p>
         </div>
         <div className="row">
           {board?.canManage && !isLocked && <button className="btn btn-secondary" onClick={() => setManaging(true)}>Manage members</button>}
-          {can('tasks.manage') && <button className="btn btn-primary" onClick={() => setAdding(true)} disabled={!projectId}>Add task</button>}
+          {view?.canCreate && !isLocked && <button className="btn btn-primary tb-add" onClick={() => setAdding(true)}>Add task</button>}
         </div>
       </div>
 
-      <div className="wk-toolbar">
-        <select className="input" style={{ width: 'auto', minWidth: 200 }} value={projectId} onChange={(e) => setParam({ project: e.target.value, board: null, task: null })} aria-label="Project">
+      <div className="tb-rules">
+        {RULES.map((r) => (
+          <div key={r.title} className="tb-rule">
+            <div className="tb-rule-title">{r.title}</div>
+            <div className="tb-rule-body">{r.body}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="tb-toolbar">
+        <select className="input" value={projectId} onChange={(e) => setParam({ project: e.target.value, board: null, task: null })} aria-label="Project">
           {projects.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
         </select>
-        <span style={{ fontSize: 13, margin: '0 4px 0 8px' }}>Team board:</span>
+        <span className="tb-toolbar-label">Team board:</span>
         {boards.length ? (
           <Pills value={boardId} onChange={(v) => setParam({ board: v, task: null })} options={boards.map((b) => ({ value: b.departmentId, label: `${b.name}${b.locked ? ' 🔒' : ''}` }))} />
         ) : (
-          <span className="faint" style={{ fontSize: 13 }}>{boardsQ.isLoading ? 'Loading…' : 'No team boards on this project'}</span>
+          <span className="faint">{boardsQ.isLoading ? 'Loading…' : 'No team boards on this project'}</span>
         )}
         <span className="spacer" />
-        {!isLocked && view && (
-          <label className="radio" style={{ fontSize: 13 }}>
+        {!isLocked && (
+          <label className="radio tb-toolbar-label">
             <input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} />
             <span className="dot" style={{ borderRadius: 3 }} />
             Show done
@@ -137,7 +164,7 @@ export default function BoardPage() {
         )}
       </div>
 
-      {lk.isLoading || boardsQ.isLoading ? (
+      {lk.isLoading ? (
         <Loading />
       ) : !projectId ? (
         <Empty>No active projects yet.</Empty>
@@ -151,66 +178,109 @@ export default function BoardPage() {
       ) : viewQ.error ? (
         <ErrorBlock error={viewQ.error} retry={() => void viewQ.refetch()} />
       ) : !view ? (
-        <Loading />
+        <SkeletonColumns showDone={showDone} />
       ) : (
         <>
           {view.project.locked && <div className="note">This project is {view.project.status.toLowerCase()} — the board is read-only.</div>}
-          <Columns view={view} onMove={doMove} onOpen={(id) => setParam({ task: id })} />
-          <div className="faint" style={{ fontSize: 12.5 }}>
-            Board members: {view.members.map((m) => `${m.name}${m.isLead ? ' (lead)' : ''}`).join(', ') || '—'}
+          <Columns view={view} skewMs={skewMs} onMove={doMove} onOpen={(id) => setParam({ task: id })} />
+          <div className="tb-footer">
+            Board members: {view.members.map((m) => `${m.name}${m.isLead ? ' (lead)' : ''}`).join(', ') || '—'} · you are signed in as {view.viewer.name}
           </div>
         </>
       )}
 
-      {adding && <AddTaskModal projectId={projectId} departmentId={boardId} onClose={() => setAdding(false)} />}
+      {adding && view && (
+        <AddTaskModal
+          projectId={projectId}
+          departmentId={boardId}
+          members={view.members}
+          me={view.viewer.employeeId}
+          canAssignOthers={view.viewer.canManage}
+          onClose={() => setAdding(false)}
+        />
+      )}
       {managing && board && <MembersDialog projectId={projectId} departmentId={boardId} onClose={() => setManaging(false)} />}
       {taskId && <TaskDrawer taskId={taskId} onClose={() => setParam({ task: null })} />}
     </div>
   );
 }
 
-function Columns({ view, onMove, onOpen }: { view: BoardView; onMove: (c: TaskCard, to: TaskStatusKey, before?: string) => void; onOpen: (id: string) => void }) {
+/** The view with `card` in its (new) column, columns re-sorted and re-counted. */
+function placeCard(view: BoardView, card: TaskCard): BoardView {
+  const columns = view.columns.map((c) => {
+    const others = c.cards.filter((x) => x.id !== card.id);
+    const cards = c.status === card.status ? sortBoardCards([...others, card]) : others;
+    return { ...c, cards, count: cards.length };
+  });
+  return { ...view, columns };
+}
+
+/** Loading: the same columns, no cards yet. */
+function SkeletonColumns({ showDone }: { showDone: boolean }) {
+  const cols: TaskStatusKey[] = [...BOARD_COLUMNS, ...(showDone ? (['DONE'] as const) : [])];
+  return (
+    <div className="tb-board" aria-busy="true">
+      {cols.map((s) => (
+        <div key={s} className="tb-col">
+          <ColumnHead status={s} label={TASK_STATUS_LABELS[s]} count={null} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ColumnHead({ status, label, count }: { status: TaskStatusKey; label: string; count: number | null }) {
+  const timerCol = status === 'WIP';
+  return (
+    <div className={`tb-col-head${timerCol ? ' has-note' : ''}`}>
+      <span>{label}</span>
+      <span className="tb-count">{count ?? '–'}</span>
+      {timerCol && <span className="tb-note">timer runs here</span>}
+    </div>
+  );
+}
+
+function Columns({ view, skewMs, onMove, onOpen }: { view: BoardView; skewMs: number; onMove: (c: TaskCard, to: TaskStatusKey) => void; onOpen: (id: string) => void }) {
   const dragRef = useRef<TaskCard | null>(null);
   const [over, setOver] = useState<string | null>(null);
-  const [beforeId, setBeforeId] = useState<string | null>(null);
-  const [dragging, setDragging] = useState<string | null>(null);
+  const [dragging, setDragging] = useState<TaskCard | null>(null);
   const cardsById = useMemo(() => new Map(view.columns.flatMap((c) => c.cards).map((c) => [c.id, c])), [view]);
   return (
-    <div className={`wk-board${view.columns.length > BOARD_COLUMNS.length ? ' with-done' : ''}`}>
-      {view.columns.map((col) => (
-        <div
-          key={col.status}
-          className={`wk-col${over === col.status ? ' over' : ''}`}
-          onDragOver={(e) => {
-            e.preventDefault();
-            e.dataTransfer.dropEffect = 'move';
-            if (over !== col.status) setOver(col.status);
-          }}
-          onDragLeave={(e) => {
-            if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) setOver(null);
-          }}
-          onDrop={(e) => {
-            e.preventDefault();
-            const id = e.dataTransfer.getData('text/plain');
-            const card = dragRef.current ?? cardsById.get(id);
-            setOver(null);
-            setDragging(null);
-            if (card) onMove(card, col.status, beforeId && beforeId !== card.id ? beforeId : undefined);
-            dragRef.current = null;
-            setBeforeId(null);
-          }}
-        >
-          <div className="wk-col-head"><span>{col.label}</span><span>{col.count}</span></div>
-          {col.cards.map((k) => {
-            const nextStatus = NEXT[k.status];
-            return (
-              <div
+    <div className="tb-board">
+      {view.columns.map((col) => {
+        const canDrop = !!dragging && dragging.allowedMoves.includes(col.status);
+        return (
+          <div
+            key={col.status}
+            className={`tb-col${canDrop ? ' can-drop' : ''}${canDrop && over === col.status ? ' over' : ''}`}
+            onDragOver={(e) => {
+              if (!canDrop) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'move';
+              if (over !== col.status) setOver(col.status);
+            }}
+            onDragLeave={(e) => {
+              if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) setOver(null);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              const card = dragRef.current ?? cardsById.get(e.dataTransfer.getData('text/plain'));
+              setOver(null);
+              setDragging(null);
+              dragRef.current = null;
+              if (card && card.allowedMoves.includes(col.status)) onMove(card, col.status);
+            }}
+          >
+            <ColumnHead status={col.status} label={col.label} count={col.count} />
+            {col.cards.map((k) => (
+              <Card
                 key={k.id}
-                className={`wk-card${dragging === k.id ? ' dragging' : ''}${k.canMove ? '' : ' readonly'}`}
-                draggable={k.canMove}
+                card={k}
+                skewMs={skewMs}
+                dragging={dragging?.id === k.id}
                 onDragStart={(e) => {
                   dragRef.current = k;
-                  setDragging(k.id);
+                  setDragging(k);
                   try {
                     e.dataTransfer.setData('text/plain', k.id);
                     e.dataTransfer.effectAllowed = 'move';
@@ -222,47 +292,120 @@ function Columns({ view, onMove, onOpen }: { view: BoardView; onMove: (c: TaskCa
                   setDragging(null);
                   setOver(null);
                 }}
-                onDragOver={() => setBeforeId(k.id)}
-                onClick={() => onOpen(k.id)}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => e.key === 'Enter' && onOpen(k.id)}
-              >
-                <div className="wk-card-meta">
-                  <span>{k.key}{k.moduleName ? ` · ${k.moduleName}` : ''}</span>
-                  <span className="row" style={{ gap: 4 }}>
-                    {k.gitMrUrl && <span title={`MR ${k.gitMrState ?? ''}`}>MR</span>}
-                    {!k.gitMrUrl && k.gitBranch && <span title={k.gitBranch}>⎇</span>}
-                    {k.gitSyncStatus === 'FAILED' && <Tag tone="danger">Git</Tag>}
-                  </span>
-                </div>
-                <div className="wk-card-title">{k.title}</div>
-                <div className="wk-card-foot">
-                  <span>{k.assigneeShort}</span>
-                  <span className="row" style={{ gap: 4 }}>
-                    {k.overdue && <Tag tone="danger">Overdue</Tag>}
-                    <span className="tag tag-neutral">{hours(k.estimatedMinutes)}</span>
-                  </span>
-                </div>
-                {nextStatus && (
-                  <button
-                    className="wk-next"
-                    disabled={!k.canMove}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onMove(k, nextStatus);
-                    }}
-                  >
-                    {nextStatus === 'DONE' ? 'Mark done' : `Move to ${TASK_STATUS_LABELS[nextStatus]} →`}
-                  </button>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      ))}
+                onMove={onMove}
+                onOpen={onOpen}
+              />
+            ))}
+          </div>
+        );
+      })}
     </div>
   );
+}
+
+function Card({
+  card: k,
+  skewMs,
+  dragging,
+  onDragStart,
+  onDragEnd,
+  onMove,
+  onOpen,
+}: {
+  card: TaskCard;
+  skewMs: number;
+  dragging: boolean;
+  onDragStart: (e: DragEvent) => void;
+  onDragEnd: () => void;
+  onMove: (c: TaskCard, to: TaskStatusKey) => void;
+  onOpen: (id: string) => void;
+}) {
+  const { back, forward } = adjacentColumns(k.status);
+  const canBack = !!back && k.allowedMoves.includes(back);
+  const canForward = !!forward && k.allowedMoves.includes(forward);
+  const draggable = k.allowedMoves.length > 0;
+  const stop = (e: SyntheticEvent) => e.stopPropagation();
+  return (
+    <div
+      className={`tb-card${k.timer ? ' is-running' : ''}${dragging ? ' dragging' : ''}${draggable ? '' : ' readonly'}`}
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onClick={() => onOpen(k.id)}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => e.key === 'Enter' && onOpen(k.id)}
+    >
+      <div className="tb-card-meta">
+        <span>{k.key}{k.moduleName ? ` · ${k.moduleName}` : ''}</span>
+        {k.timer?.mine ? (
+          <span className="tb-rec" title="Your desktop tracker is timing this task">● REC</span>
+        ) : k.gitMrUrl ? (
+          <span className="tb-mr" title={`Merge request${k.gitMrState ? ` · ${k.gitMrState}` : ''}`}>MR</span>
+        ) : k.gitSyncStatus === 'FAILED' ? (
+          <Tag tone="danger">Git</Tag>
+        ) : null}
+      </div>
+      <div className="tb-card-title">{k.title}</div>
+      <div className="tb-card-row">
+        <span className="tb-assignee">{k.assigneeShort}</span>
+        {k.overdue ? <span className="tb-chip is-overdue">Overdue</span> : k.dueDate ? <span className="tb-chip">Due {dueLabel(k.dueDate)}</span> : null}
+        {k.estimatedMinutes ? <span className="tb-chip">{formatEstimate(k.estimatedMinutes)}</span> : null}
+      </div>
+      {showsProgress(k) && <CardProgress card={k} skewMs={skewMs} />}
+      {(canBack || canForward) && (
+        <div className="tb-moves" onClick={stop} onKeyDown={stop}>
+          {canBack && (
+            <button className="tb-link" aria-label={`Move back to ${TASK_STATUS_LABELS[back!]}`} title={`Back to ${TASK_STATUS_LABELS[back!]}`} onClick={() => onMove(k, back!)}>
+              ←
+            </button>
+          )}
+          {canForward && (
+            <button className="tb-link" onClick={() => onMove(k, forward!)}>
+              Move to {TASK_STATUS_LABELS[forward!]} →
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** "9:45 / 8h · Running" + bar; a running timer ticks every second from the server-sent start. */
+function CardProgress({ card, skewMs }: { card: TaskCard; skewMs: number }) {
+  const now = useNow(card.timer ? 1000 : null) + skewMs;
+  const spent = liveSpentSeconds(card, now);
+  const { pct, over } = spentProgress(spent, card.estimatedMinutes);
+  return (
+    <div className="tb-progress">
+      <div className="tb-progress-line">
+        <span className="tnum">
+          {formatSpent(spent)} / {card.estimatedMinutes ? formatEstimate(card.estimatedMinutes) : 'no estimate'}
+        </span>
+        <span className={card.timer ? 'tb-running' : undefined}>{timerStateLabel(card)}</span>
+      </div>
+      <div className={`tb-bar${over ? ' is-over' : ''}`} role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}>
+        <span style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+/** Date.now(), re-rendering every `ms` (null = no ticking). */
+function useNow(ms: number | null): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!ms) return;
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), ms);
+    return () => window.clearInterval(id);
+  }, [ms]);
+  return ms ? now : Date.now();
+}
+
+/** "2026-10-21" → "21 Oct". */
+function dueLabel(key: string): string {
+  return new Date(`${key}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
 }
 
 function MembersDialog({ projectId, departmentId, onClose }: { projectId: string; departmentId: string; onClose: () => void }) {

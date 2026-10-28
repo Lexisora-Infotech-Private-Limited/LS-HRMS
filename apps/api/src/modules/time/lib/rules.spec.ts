@@ -1,7 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import { effectiveAudience, evaluatePunch, geoCheck, modeNote, trackerMode, webPunchAllowed, type LocationRules, type PolicyRules } from './policy';
 import { planL1, planL2, statusAfterL1, submitMessage, type ProjectInfo } from './routing';
-import { cellFinal, chainTones, isEditableStatus, outsideHoursMinutes, planCellEdit, reasonRequired, submitLabel } from './timesheet-calc';
+import {
+  cellClaimed,
+  cellFinal,
+  chainTones,
+  decidePending,
+  expectedMinutes,
+  isActiveTask,
+  isEditableStatus,
+  isQuietLine,
+  leaveLabel,
+  outsideHoursMinutes,
+  planCellEdit,
+  reanchorPending,
+  reasonRequired,
+  submitLabel,
+} from './timesheet-calc';
 
 // ── Approval routing (spec-time K3 + audit G3) ────────────────────────────────
 const PROJECTS = new Map<string, ProjectInfo>([
@@ -123,15 +138,70 @@ describe('policy resolution', () => {
 
 // ── Timesheet cell rules ─────────────────────────────────────────────────────
 describe('timesheet cells', () => {
-  const tracked = { trackedMinutes: 240, idleAsWorkMinutes: 0, outsideHoursMinutes: 0, adjustmentMinutes: 0 };
+  const tracked = { trackedMinutes: 240, idleAsWorkMinutes: 0, outsideHoursMinutes: 0, adjustmentMinutes: 0, pendingAdjustmentMinutes: 0 };
   it('final = tracked + approved idle + outside hours + adjustment (never negative)', () => {
     expect(cellFinal({ trackedMinutes: 240, idleAsWorkMinutes: 15, outsideHoursMinutes: 90, adjustmentMinutes: -30 })).toBe(315);
     expect(cellFinal({ trackedMinutes: 10, idleAsWorkMinutes: 0, outsideHoursMinutes: 0, adjustmentMinutes: -60 })).toBe(0);
   });
-  it('an increase above tracked goes to PL review; a decrease does not', () => {
-    expect(planCellEdit(tracked, 270)).toEqual({ adjustmentMinutes: 30, deltaMinutes: 30, kind: 'MANUAL_INCREASE', reviewStatus: 'PENDING_PL' });
-    expect(planCellEdit(tracked, 200)).toEqual({ adjustmentMinutes: -40, deltaMinutes: -40, kind: 'MANUAL_DECREASE', reviewStatus: 'NOT_REQUIRED' });
+  it('an increase above tracked waits for PL review and is kept out of the counted value', () => {
+    const plan = planCellEdit(tracked, 270)!;
+    expect(plan).toEqual({ adjustmentMinutes: 0, pendingAdjustmentMinutes: 30, fromMinutes: 240, deltaMinutes: 30, kind: 'MANUAL_INCREASE', reviewStatus: 'PENDING_PL' });
+    const after = { ...tracked, adjustmentMinutes: plan.adjustmentMinutes, pendingAdjustmentMinutes: plan.pendingAdjustmentMinutes };
+    expect(cellFinal(after)).toBe(240);
+    expect(cellClaimed(after)).toBe(270);
+  });
+  it('a decrease counts straight away (no review)', () => {
+    expect(planCellEdit(tracked, 200)).toEqual({ adjustmentMinutes: -40, pendingAdjustmentMinutes: 0, fromMinutes: 240, deltaMinutes: -40, kind: 'MANUAL_DECREASE', reviewStatus: 'NOT_REQUIRED' });
     expect(planCellEdit(tracked, 240)).toBeNull();
+  });
+  it('AT-101 case: 12:20 typed on a day with no tracker time → 0 counted, 12:20 waiting for review', () => {
+    const empty = { trackedMinutes: 0, idleAsWorkMinutes: 0, outsideHoursMinutes: 0, adjustmentMinutes: 0, pendingAdjustmentMinutes: 0 };
+    const plan = planCellEdit(empty, 740)!;
+    expect(plan.reviewStatus).toBe('PENDING_PL');
+    expect(plan.pendingAdjustmentMinutes).toBe(740);
+    expect(cellFinal({ ...empty, adjustmentMinutes: plan.adjustmentMinutes })).toBe(0);
+  });
+  it('editing a claim that waits for review replaces it; lowering it below tracked needs no review', () => {
+    const waiting = { ...tracked, pendingAdjustmentMinutes: 60 }; // claims 5:00 on 4:00 tracked
+    expect(planCellEdit(waiting, 280)).toMatchObject({ adjustmentMinutes: 0, pendingAdjustmentMinutes: 40, deltaMinutes: 40, reviewStatus: 'PENDING_PL' });
+    expect(planCellEdit(waiting, 230)).toMatchObject({ adjustmentMinutes: -10, pendingAdjustmentMinutes: 0, deltaMinutes: -70, kind: 'MANUAL_DECREASE', reviewStatus: 'NOT_REQUIRED' });
+  });
+  it('time already accepted above tracked counts; only the new part above it waits', () => {
+    const accepted = { ...tracked, adjustmentMinutes: 60 }; // 5:00 counted (accepted +1:00)
+    expect(planCellEdit(accepted, 330)).toMatchObject({ adjustmentMinutes: 60, pendingAdjustmentMinutes: 30, reviewStatus: 'PENDING_PL' });
+    expect(planCellEdit(accepted, 270)).toMatchObject({ adjustmentMinutes: 30, pendingAdjustmentMinutes: 0, reviewStatus: 'NOT_REQUIRED' });
+  });
+  it('restoring tracked time after a decrease needs no review', () => {
+    const lowered = { ...tracked, adjustmentMinutes: -120 };
+    expect(planCellEdit(lowered, 200)).toMatchObject({ adjustmentMinutes: -40, pendingAdjustmentMinutes: 0, reviewStatus: 'NOT_REQUIRED' });
+    expect(planCellEdit(lowered, 300)).toMatchObject({ adjustmentMinutes: 0, pendingAdjustmentMinutes: 60, reviewStatus: 'PENDING_PL' });
+  });
+  it('tracker time arriving later covers a waiting claim instead of adding to it (no double count)', () => {
+    // claimed 2:00 with nothing tracked; the tracker then syncs 1:30 for the same task-day
+    expect(reanchorPending({ trackedMinutes: 90, idleAsWorkMinutes: 0, outsideHoursMinutes: 0, adjustmentMinutes: 0 }, 120)).toBe(30);
+    expect(reanchorPending({ trackedMinutes: 150, idleAsWorkMinutes: 0, outsideHoursMinutes: 0, adjustmentMinutes: 0 }, 120)).toBe(0);
+  });
+  it('accepting moves the waiting minutes into the count; rejecting drops them', () => {
+    expect(decidePending({ adjustmentMinutes: 0, pendingAdjustmentMinutes: 740 }, 740, true)).toEqual({ adjustmentMinutes: 740, pendingAdjustmentMinutes: 0 });
+    expect(decidePending({ adjustmentMinutes: 0, pendingAdjustmentMinutes: 740 }, 740, false)).toEqual({ adjustmentMinutes: 0, pendingAdjustmentMinutes: 0 });
+    expect(decidePending({ adjustmentMinutes: 30, pendingAdjustmentMinutes: 20 }, 999, true)).toEqual({ adjustmentMinutes: 50, pendingAdjustmentMinutes: 0 });
+  });
+  it('empty rows hide only when the task is no longer worked on', () => {
+    expect(isActiveTask('WIP')).toBe(true);
+    expect(isActiveTask('ALLOTTED')).toBe(true);
+    expect(isActiveTask('DEV_COMPLETED')).toBe(false);
+    expect(isQuietLine({ claimed: 0, pendingIdle: 0, taskId: 't', taskStatus: 'DEV_COMPLETED' })).toBe(true);
+    expect(isQuietLine({ claimed: 0, pendingIdle: 0, taskId: 't', taskStatus: 'WIP' })).toBe(false);
+    expect(isQuietLine({ claimed: 15, pendingIdle: 0, taskId: 't', taskStatus: 'DONE' })).toBe(false);
+    expect(isQuietLine({ claimed: 0, pendingIdle: 0, taskId: null, taskStatus: null })).toBe(false);
+  });
+  it('expected hours: full shift, none on off days and full leave, half on a half-day leave', () => {
+    expect(expectedMinutes({ offDay: false, leaveFraction: 0, requiredMinutes: 480 })).toBe(480);
+    expect(expectedMinutes({ offDay: true, leaveFraction: 0, requiredMinutes: 480 })).toBe(0);
+    expect(expectedMinutes({ offDay: false, leaveFraction: 1, requiredMinutes: 480 })).toBe(0);
+    expect(expectedMinutes({ offDay: false, leaveFraction: 0.5, requiredMinutes: 480 })).toBe(240);
+    expect(leaveLabel({ typeCode: 'CL', fraction: 1, session: null })).toBe('Leave · CL');
+    expect(leaveLabel({ typeCode: 'SL', fraction: 0.5, session: 'FIRST_HALF' })).toBe('½ leave · SL (1st half)');
   });
   it('edits to tracked time always need a reason; manual days only when above attendance', () => {
     expect(reasonRequired({ hasTrackerData: true, dayTotalAfter: 100, attendanceWorked: 480 })).toBe(true);

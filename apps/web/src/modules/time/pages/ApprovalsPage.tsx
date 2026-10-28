@@ -8,6 +8,7 @@ import { fileUrl, post } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { useAction } from '@/lib/query';
 import { onRealtime } from '@/lib/socket';
+import { ScreenshotIntervalEditor } from '@/modules/tracker/widgets';
 import { hmm, tk, useApproval, useApprovals, useRegs } from '../api';
 import '../time.css';
 import { CorrectionsPanel } from './CorrectionsPanel';
@@ -76,7 +77,7 @@ export default function ApprovalsPage() {
                 <span className="nm">{r.name}</span>
                 <Tag tone={toneFor(r.statusLabel)}>{r.statusLabel}</Tag>
                 <span style={{ fontSize: 12.5, color: 'var(--color-neutral-700)' }}>
-                  {r.week} · {r.hours} worked · {r.idle} idle{r.projectName && level === '1' ? ` · ${r.projectName}` : ''}
+                  {r.week} · {r.hours} worked{r.pendingMinutes ? ` + ${hmm(r.pendingMinutes)} to review` : ''} · {r.idle} idle{r.projectName && level === '1' ? ` · ${r.projectName}` : ''}
                 </span>
                 <span style={{ fontSize: 12, color: 'var(--color-neutral-600)' }}>
                   {r.shots} shots{r.flags ? ` · ${r.flags} to review` : ''}
@@ -122,6 +123,7 @@ function Detail({ stepId, onDone }: { stepId: string; onDone: () => void }) {
   const d = q.data;
   const t = d.timesheet;
   const pending = d.items.filter((i) => i.status === 'PENDING');
+  const offDayWork = t.days.map((day, i) => ({ day, minutes: (t.dayTotals[i] ?? 0) + (t.pendingRow[i] ?? 0) })).filter((x) => (x.day.holiday || x.day.weeklyOff) && x.minutes > 0);
 
   function doReturn() {
     if (comment.trim().length < 5) return setErr('Add a comment for the employee (at least 5 characters)');
@@ -145,18 +147,26 @@ function Detail({ stepId, onDone }: { stepId: string; onDone: () => void }) {
         )}
       </div>
       {d.lateDataBanner && <div className="note">{d.lateDataBanner}</div>}
+      {offDayWork.length > 0 && (
+        <div className="note">
+          Worked on {offDayWork.map((x) => `${x.day.holiday ?? 'weekly off'} (${x.day.dow} ${x.day.label}) ${hmm(x.minutes)}`).join(', ')}. Final approval credits comp-off for these days automatically — a full or half day depending on the hours.
+        </div>
+      )}
       <div className="time-kpi3">
-        <div><div className="n">{d.kpis.worked}</div>Worked</div>
+        <div><div className="n">{d.kpis.worked}</div>Worked{t.totals.pending > 0 ? ` · +${hmm(t.totals.pending)} to review` : ''}</div>
         <div><div className="n">{d.kpis.idle}</div>Auto-idle</div>
         <div><div className="n">{d.kpis.shots}</div>Screenshots</div>
       </div>
+      {t.totals.pending > 0 && (
+        <div className="field-hint">Worked shows tracked and already-accepted time. The {hmm(t.totals.pending)} below waits for your decision and is added when you accept it.</div>
+      )}
 
       <div className="stack" style={{ gap: 4 }}>
         <div className="time-label">Hours by task</div>
-        {t.lines.map((l) => (
+        {t.lines.filter((l) => !l.quiet).map((l) => (
           <div key={l.id} className="kv-row">
-            <span>{l.label}<span className="faint" style={{ fontSize: 11.5 }}>{l.subLabel ? ` · ${l.subLabel}` : ''}</span></span>
-            <span className="tnum">{hmm(l.total)}</span>
+            <span>{l.label}<span className="faint" style={{ fontSize: 11.5 }}>{l.subLabel ? ` · ${l.subLabel}` : ''}{l.task ? ` · ${l.task.statusLabel}` : ''}</span></span>
+            <span className="tnum">{hmm(l.total)}{l.pending > 0 && <span className="time-pending">+{hmm(l.pending)} to review</span>}</span>
           </div>
         ))}
         {d.otherProjectsMinutes > 0 && <div className="kv-row faint"><span>Other projects (reviewed by their leads)</span><span className="tnum">{hmm(d.otherProjectsMinutes)}</span></div>}
@@ -164,7 +174,7 @@ function Detail({ stepId, onDone }: { stepId: string; onDone: () => void }) {
 
       {d.items.length > 0 && (
         <div className="stack" style={{ gap: 0 }}>
-          <div className="time-label">Outside-hours and idle claims</div>
+          <div className="time-label">Waiting for review · outside hours, manual additions, idle claims</div>
           {d.items.map((i) => (
             <ItemRow
               key={`${i.type}:${i.id}`}
@@ -178,6 +188,7 @@ function Detail({ stepId, onDone }: { stepId: string; onDone: () => void }) {
         </div>
       )}
 
+      <ScreenshotIntervalEditor employeeId={t.employee.id} />
       <div className="row-between" style={{ flexWrap: 'wrap', gap: 8 }}>
         <div className="time-label">Screenshots mapped to tasks · every 10 min</div>
         <div className="row" style={{ gap: 6 }}>

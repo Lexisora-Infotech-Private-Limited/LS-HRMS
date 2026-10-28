@@ -34,7 +34,7 @@ jobs:
       - run: pnpm build:shared
       - run: cd apps/api && npx prisma generate && npx prisma db push --skip-generate
       - run: pnpm -r typecheck
-      - run: pnpm -r test
+      - run: pnpm -r --filter './apps/*' --filter './packages/*' test
       - run: cd apps/api && npx tsx prisma/seed/index.ts
       - run: pnpm --filter @lexisora/api build && pnpm --filter @lexisora/web build
 

@@ -4,6 +4,7 @@ import {
   EMPLOYMENT_TYPE_LABEL,
   type CompOffRequestInput,
   type CompOffRow,
+  type CompOffRules,
   type CreditBatchRow,
   type CreditRuleInput,
   type CreditRuleRow,
@@ -24,8 +25,8 @@ import { NotificationsService } from '../../../core/notifications/notifications.
 import { SettingsService } from '../../../core/settings/settings.service';
 import { OrgService } from '../../../core/org/org.service';
 import { addDays, dayMonth, dd, diffDays, dk, MONTHS_SHORT, monthBounds, nextPeriod, todayKey, yearOf, type DateKey } from '../common/dates';
-import { WorkCalendarService } from '../common/calendar.service';
-import { fmtDays, monthlyCreditMonths, prorateYearly, round2, yearEndSplit } from './leave-calc';
+import { DEFAULT_SHIFT_NET_MINUTES, WorkCalendarService } from '../common/calendar.service';
+import { compOffEarned, fmtDays, monthlyCreditMonths, planAutoCompOff, prorateYearly, round2, yearEndSplit, type CompOffRule } from './leave-calc';
 import { LeaveLedgerService, type LedgerPost } from './leave-ledger.service';
 import { DEFAULT_LEAVE_SETTINGS, LEAVE_SETTINGS_KEY } from './leave.common';
 import { LeaveRequestsService } from './leave-requests.service';
@@ -468,6 +469,100 @@ export class LeaveAdminService {
       if (g.remaining > 0) await this.ledger.post([{ employeeId: g.employeeId, leaveTypeId: type.id, leaveYear: yearOf(today), txType: 'EXPIRY', days: -g.remaining, effectiveDate: today, compOffGrantId: g.id, note: `Expired ${dayMonth(dk(g.expiresOn))}` }]);
     }
     return due.length;
+  }
+
+  /** Full day = the comp-off setting capped at the employee's shift (same rule as requestCompOff). */
+  private compOffRule(settings: LeaveSettings, shiftNetMinutes: number): CompOffRule {
+    return { fullDayMinutes: Math.min(settings.compOffFullDayMinMinutes, shiftNetMinutes), halfDayMinutes: settings.compOffHalfDayMinMinutes };
+  }
+
+  /** Comp-off thresholds for the signed-in employee (hints on the timesheet and Time off pages). */
+  async compOffRules(): Promise<CompOffRules> {
+    const me = requireContext().employeeId ?? null;
+    const today = todayKey();
+    const [type, settings, emp, cal] = await Promise.all([
+      this.prisma.leaveType.findFirst({ where: { isCompOff: true, active: true } }),
+      this.settings.get<LeaveSettings>(LEAVE_SETTINGS_KEY, DEFAULT_LEAVE_SETTINGS),
+      me ? this.prisma.employee.findUnique({ where: { id: me }, select: { employmentType: true } }) : null,
+      me ? this.calendar.forEmployee(me, today, today) : null,
+    ]);
+    const rule = this.compOffRule(settings, cal?.shiftNetMinutes ?? DEFAULT_SHIFT_NET_MINUTES);
+    return { enabled: !!type && (!emp || type.appliesTo.includes(emp.employmentType)), ...rule, expiryDays: type?.expiryDays ?? 60 };
+  }
+
+  /**
+   * timesheet.approved: hours logged on a weekly off or holiday earn comp-off. The approved
+   * timesheet is the evidence (the approver already checked the hours), so the grant is
+   * credited straight away. Re-approving the same week only tops up (planAutoCompOff).
+   */
+  async creditCompOffFromTimesheet(timesheetId: string): Promise<number> {
+    const ts = await this.prisma.timesheet.findUnique({ where: { id: timesheetId }, include: { lines: { include: { cells: true } } } });
+    if (!ts || ts.status !== 'APPROVED') return 0;
+    const type = await this.prisma.leaveType.findFirst({ where: { isCompOff: true, active: true } });
+    if (!type) return 0;
+    const emp = await this.prisma.employee.findUnique({ where: { id: ts.employeeId }, select: { id: true, employmentType: true } });
+    if (!emp || !type.appliesTo.includes(emp.employmentType)) return 0;
+    const settings = await this.settings.get<LeaveSettings>(LEAVE_SETTINGS_KEY, DEFAULT_LEAVE_SETTINGS);
+    const cal = await this.calendar.forEmployee(emp.id, dk(ts.weekStart), dk(ts.weekEnd));
+    const minutes = new Map<DateKey, number>();
+    for (const line of ts.lines) for (const c of line.cells) minutes.set(dk(c.date), (minutes.get(dk(c.date)) ?? 0) + c.finalMinutes);
+    const earned = compOffEarned(minutes, cal.calendar, this.compOffRule(settings, cal.shiftNetMinutes));
+    if (!earned.length) return 0;
+
+    const ctx = requireContext();
+    // A sheet with no approver is approved on submit, in the employee's own context.
+    const by = ctx.employeeId && ctx.employeeId !== emp.id ? (ctx.userName ?? 'Approver') : 'Timesheet approval';
+    const today = todayKey();
+    const credited: { date: DateKey; units: number; label: string }[] = [];
+    for (const e of earned) {
+      const expiresOn = addDays(e.date, type.expiryDays ?? 60);
+      const grants = await this.prisma.compOffGrant.findMany({ where: { employeeId: emp.id, workedDate: dd(e.date) }, select: { id: true, status: true, units: true, remaining: true, source: true } });
+      const plan = planAutoCompOff(grants, e.units, expiresOn, today);
+      if (plan.action === 'SKIP') {
+        this.log.debug(`Comp-off for ${emp.id} on ${e.date} skipped: ${plan.reason}`);
+        continue;
+      }
+      const worked = `${Math.floor(e.minutes / 60)}h${e.minutes % 60 ? ` ${e.minutes % 60}m` : ''}`;
+      const note = `Worked ${dayMonth(e.date)} (${e.holidayName ?? 'weekly off'}) · ${worked} in approved timesheet`;
+      let grantId: string;
+      let days: number;
+      if (plan.action === 'CREATE') {
+        const g = await this.prisma.compOffGrant.create({
+          data: { employeeId: emp.id, workedDate: dd(e.date), units: e.units, remaining: e.units, expiresOn: dd(expiresOn), status: 'APPROVED', source: 'TIMESHEET', reason: note, workedMinutes: e.minutes, decidedByName: by, decidedAt: new Date() } as any,
+        });
+        grantId = g.id;
+        days = e.units;
+      } else if (plan.action === 'APPROVE_PENDING') {
+        await this.prisma.compOffGrant.update({
+          where: { id: plan.grantId },
+          data: { status: 'APPROVED', units: e.units, remaining: e.units, expiresOn: dd(expiresOn), workedMinutes: e.minutes, decidedByName: by, decidedAt: new Date(), comment: `Approved with the timesheet · ${worked} logged` },
+        });
+        grantId = plan.grantId;
+        days = e.units;
+      } else {
+        const g = grants.find((x) => x.id === plan.grantId)!;
+        const units = round2(g.units + plan.delta);
+        const remaining = round2(g.remaining + plan.delta);
+        await this.prisma.compOffGrant.update({ where: { id: g.id }, data: { units, remaining, status: remaining >= units ? 'APPROVED' : 'PARTIALLY_USED', workedMinutes: e.minutes } });
+        grantId = g.id;
+        days = plan.delta;
+      }
+      await this.ledger.post([{ employeeId: emp.id, leaveTypeId: type.id, leaveYear: yearOf(today), txType: 'COMP_OFF_GRANT', days, effectiveDate: e.date, compOffGrantId: grantId, note }]);
+      credited.push({ date: e.date, units: days, label: e.holidayName ? `${e.holidayName} (${dayMonth(e.date)})` : `${dayMonth(e.date)} (weekly off)` });
+    }
+    if (!credited.length) return 0;
+
+    const total = round2(credited.reduce((s, c) => s + c.units, 0));
+    await this.audit.record({ action: 'leave.compoff.timesheet', entity: 'Timesheet', entityId: ts.id, meta: { employeeId: emp.id, credited } });
+    const users = await this.notifications.usersForEmployees([emp.id]);
+    await this.notifications.notify({
+      userIds: users,
+      type: 'leave.compoff',
+      title: `Comp-off credited · ${fmtDays(total)} day${total <= 1 ? '' : 's'}`,
+      body: `For working on ${credited.map((c) => `${c.label} · ${fmtDays(c.units)} day`).join(', ')}. Use it within ${type.expiryDays ?? 60} days of the worked date.`,
+      link: '/leave',
+    });
+    return total;
   }
 
   // ── year-end ──────────────────────────────────────────────────────────

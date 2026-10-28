@@ -301,15 +301,22 @@ export class TrackerEngine {
     return out;
   }
 
-  /** Called every second with powerMonitor.getSystemIdleTime(). */
-  tick(now: number, idleSec: number): EngineOutput {
+  /**
+   * Called every second with powerMonitor.getSystemIdleTime() and whether the screen is locked
+   * (powerMonitor.getSystemIdleState(); null when the OS can't tell).
+   */
+  tick(now: number, idleSec: number, screenLocked: boolean | null = null): EngineOutput {
     const out = emptyOutput();
     const prev = this.s.lastTickAt ?? now;
     this.s.lastTickAt = now;
     if (this.s.status !== 'WORKING') return out;
-    if (this.idle.away) return out;
+    if (this.idle.away) {
+      // Back at an unlocked PC although the unlock / resume signal never arrived.
+      if (this.idle.inputWhileAway(now, idleSec, screenLocked)) this.comeBack(now, 'UNLOCK', out);
+      return out;
+    }
     if (this.idle.prompting) {
-      this.idle.tick(now, idleSec, this.cfg.idleThresholdSec);
+      this.idle.tick(now, idleSec, this.cfg.idleThresholdSec, screenLocked);
       return out;
     }
     const r = this.idle.tick(now, idleSec, this.cfg.idleThresholdSec);
@@ -372,7 +379,11 @@ export class TrackerEngine {
     const out = emptyOutput();
     if (this.s.status === 'OUT') return out;
     out.events.push(this.ev({ type: kind, at: now, taskId: this.s.activeTaskId }));
-    const r = this.idle.comeBack(now, this.cfg.idleThresholdSec);
+    return this.comeBack(now, kind, out);
+  }
+
+  private comeBack(now: number, kind: 'UNLOCK' | 'RESUME', out: EngineOutput): EngineOutput {
+    const r = this.idle.comeBack(now, this.cfg.idleThresholdSec, kind);
     this.s.lastTickAt = now;
     if (r === 'PROMPT') {
       const st = this.idle.state as Extract<IdlePhase, { phase: 'PROMPT' }>;
@@ -392,7 +403,8 @@ export class TrackerEngine {
    *   WORKING → IDLE_WORK segment (claimed; pending Project Lead review)
    *   BREAK   → BREAK segment
    *   IDLE    → IDLE segment (deducted)
-   * Time after the first input (while the dialog was open) counts as WORK on the active task.
+   * Time after the first input (while the dialog was open) counts as WORK on the active task,
+   * and so do stretches back at the PC before going away again inside the same dialog.
    */
   resolveIdle(now: number, resolution: Resolution, note?: string): EngineOutput {
     if (!this.idle.prompting) throw new EngineError('NO_IDLE', 'There is no idle time to classify');
@@ -400,13 +412,22 @@ export class TrackerEngine {
     const span = this.idle.resolve(now)!;
     const kind = resolution === 'WORKING' ? 'IDLE_WORK' : resolution === 'BREAK' ? 'BREAK' : 'IDLE';
     const taskId = kind === 'IDLE_WORK' ? this.s.activeTaskId : null;
-    const idleSeg = this.seg.span(kind, taskId, span.since, span.end);
-    if (idleSeg) {
-      idleSeg.resolution = resolution;
-      idleSeg.cause = span.cause;
-      if (note && resolution === 'WORKING') idleSeg.note = note.slice(0, 140);
+    const pushIdle = (from: number, to: number) => {
+      const idleSeg = this.seg.span(kind, taskId, from, to);
+      if (idleSeg) {
+        idleSeg.resolution = resolution;
+        idleSeg.cause = span.cause;
+        if (note && resolution === 'WORKING') idleSeg.note = note.slice(0, 140);
+      }
+      this.push(out, idleSeg);
+    };
+    let from = span.since;
+    for (const b of span.back) {
+      pushIdle(from, b.from);
+      this.push(out, this.seg.span('WORK', this.s.activeTaskId, b.from, b.to));
+      from = b.to;
     }
-    this.push(out, idleSeg);
+    pushIdle(from, span.end);
     if (span.end < now) this.push(out, this.seg.span('WORK', this.s.activeTaskId, span.end, now));
     this.s.open = this.seg.open('WORK', this.s.activeTaskId, now);
     this.s.status = 'WORKING';

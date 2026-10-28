@@ -39,6 +39,7 @@ function baseState(over: Partial<ViewState> = {}): ViewState {
     worked: '0h 00m',
     breakTime: '0h 00m',
     idleTime: '0h 00m',
+    idleClaimed: null,
     tasks: [
       { id: 't1', key: 'AT-101', title: 'Invoice PDF export', projectName: 'Atlas', time: '2h 05m', seconds: 7500, active: true },
       { id: 't3', key: 'AT-103', title: 'Role-based menu', projectName: 'Atlas', time: '0h 40m', seconds: 2400, active: false },

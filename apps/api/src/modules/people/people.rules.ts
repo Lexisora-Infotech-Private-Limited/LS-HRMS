@@ -135,17 +135,44 @@ export function daysBetween(a: string, b: string): number {
 
 // ── CSV import rows ────────────────────────────────────────────────────────
 
+/** An Indian mobile number is 10 digits starting 6-9, written with an optional +91 / 91 / 0 in front. Another country code (+1 ...) needs 8-15 digits. Returns the cleaned number. */
+export function parseMobile(raw: string): { ok: true; value: string } | { ok: false; message: string } {
+  const t = raw.trim();
+  if (!t) return { ok: false, message: 'Mobile number is required' };
+  if (/[^0-9+()\s.-]/.test(t)) return { ok: false, message: 'Mobile number can only have digits, spaces, + ( ) and -' };
+  const compact = t.replace(/[\s().-]/g, '');
+  const digits = compact.replace(/\D/g, '');
+  if (compact.startsWith('+') && !compact.startsWith('+91')) {
+    if (digits.length < 8 || digits.length > 15) return { ok: false, message: 'A mobile number with another country code needs 8 to 15 digits' };
+    return { ok: true, value: `+${digits}` };
+  }
+  let d = digits;
+  if (compact.startsWith('+91') || (d.length === 12 && d.startsWith('91'))) d = d.slice(2);
+  else if (d.length === 11 && d.startsWith('0')) d = d.slice(1);
+  if (d.length !== 10) return { ok: false, message: `Mobile number must be exactly 10 digits (this has ${d.length})` };
+  if (!/^[6-9]/.test(d)) return { ok: false, message: 'An Indian mobile number starts with 6, 7, 8 or 9' };
+  return { ok: true, value: d };
+}
+/** Last 10 digits: the key used to spot the same phone number written in different ways. */
+export const phoneKey = (v: string | null | undefined) => (v ?? '').replace(/\D/g, '').slice(-10);
+
 export type CsvLookupCtx = {
   departments: Map<string, string>; // lower(name) → id
   designations: Map<string, string>;
   branches: Map<string, string>;
   managersByEmail: Map<string, string>; // lower(email) → employeeId
   existingEmails: Set<string>; // lower(official email) already in tenant
+  /** lower(email) -> "Name (EMP-ID)" for every official and personal email in the company. */
+  existingEmailOwners?: Map<string, string>;
+  /** last 10 digits of a phone -> "Name (EMP-ID)". */
+  existingPhones?: Map<string, string>;
   createMissingMasters?: boolean;
   today: string;
 };
 export type NormalisedImportRow = {
   row: number;
+  /** The S.No the person gave the row (or its position), shown beside problems. */
+  sNo: string;
   fullName: string;
   officialEmail: string;
   personalEmail: string | null;
@@ -179,6 +206,7 @@ export function validateCsvRow(
 ): { ok: boolean; errors: { row: number; field?: string; message: string }[]; value?: NormalisedImportRow } {
   const errors: { row: number; field?: string; message: string }[] = [];
   const g = (k: string) => (raw[k] ?? '').trim();
+  const sNo = g('s_no') || String(row);
   const fullName = g('full_name');
   const officialEmail = g('official_email').toLowerCase();
   const personalEmail = g('personal_email').toLowerCase() || null;
@@ -193,8 +221,12 @@ export function validateCsvRow(
   if (fullName.length < 2) errors.push({ row, field: 'full_name', message: 'Full name is required' });
   if (!/^\S+@\S+\.\S+$/.test(officialEmail)) errors.push({ row, field: 'official_email', message: 'Official email is invalid' });
   else if (ctx.existingEmails.has(officialEmail)) errors.push({ row, field: 'official_email', message: `${officialEmail} already exists` });
+  else if (ctx.existingEmailOwners?.has(officialEmail)) errors.push({ row, field: 'official_email', message: `${officialEmail} already belongs to employee ${ctx.existingEmailOwners.get(officialEmail)}` });
   if (personalEmail && !/^\S+@\S+\.\S+$/.test(personalEmail)) errors.push({ row, field: 'personal_email', message: 'Personal email is invalid' });
-  if (!/^\+?[0-9 ()-]{10,18}$/.test(phone)) errors.push({ row, field: 'phone', message: 'Phone must have at least 10 digits' });
+  else if (personalEmail && ctx.existingEmailOwners?.has(personalEmail)) errors.push({ row, field: 'personal_email', message: `${personalEmail} already belongs to employee ${ctx.existingEmailOwners.get(personalEmail)}` });
+  const mobile = parseMobile(phone);
+  if (!mobile.ok) errors.push({ row, field: 'phone', message: mobile.message });
+  else if (ctx.existingPhones?.has(phoneKey(mobile.value))) errors.push({ row, field: 'phone', message: `This phone number already belongs to employee ${ctx.existingPhones.get(phoneKey(mobile.value))}` });
 
   const departmentId = ctx.departments.get(department.toLowerCase()) ?? null;
   if (!department) errors.push({ row, field: 'department', message: 'Department is required' });
@@ -223,16 +255,19 @@ export function validateCsvRow(
   return {
     ok: true,
     errors,
-    value: { row, fullName, officialEmail, personalEmail, phone, department, departmentId, designation, designationId, managerEmail, managerId, employmentType: employmentType!, workMode: workMode!, joiningDate: joiningDate!, branch, branchId },
+    value: { row, sNo, fullName, officialEmail, personalEmail, phone: mobile.ok ? mobile.value : phone, department, departmentId, designation, designationId, managerEmail, managerId, employmentType: employmentType!, workMode: workMode!, joiningDate: joiningDate!, branch, branchId },
   };
 }
 
-/** Validate all rows; duplicate emails inside the file are rejected after the first. */
+/** Validate all rows. Duplicates inside the file (official email, personal email, phone) are rejected after the first row that has them. */
 export function validateCsvRows(rows: Record<string, string | undefined>[], ctx: CsvLookupCtx) {
   const fileEmails = new Set(rows.map((r) => (r.official_email ?? '').trim().toLowerCase()).filter(Boolean));
+  const sNoOf = (row: number) => (rows[row - 1]?.s_no ?? '').trim() || String(row);
   const seen = new Set<string>();
+  const seenPhone = new Map<string, string>(); // last 10 digits -> S.No of the first row that has it
+  const seenEmail = new Map<string, string>(); // any email -> S.No of the first row that has it
   const valid: NormalisedImportRow[] = [];
-  const errors: { row: number; field?: string; message: string }[] = [];
+  const errors: { row: number; sNo?: string; field?: string; message: string }[] = [];
   rows.forEach((raw, i) => {
     const row = i + 1;
     const email = (raw.official_email ?? '').trim().toLowerCase();
@@ -242,8 +277,25 @@ export function validateCsvRows(rows: Record<string, string | undefined>[], ctx:
     }
     seen.add(email);
     const r = validateCsvRow(raw, row, ctx, fileEmails);
-    if (r.ok && r.value) valid.push(r.value);
-    else errors.push(...r.errors);
+    if (!(r.ok && r.value)) {
+      errors.push(...r.errors);
+      return;
+    }
+    const v = r.value;
+    const dups: { row: number; field: string; message: string }[] = [];
+    const pk = phoneKey(v.phone);
+    if (pk.length === 10 && seenPhone.has(pk)) dups.push({ row, field: 'phone', message: `Same phone number for S.No ${seenPhone.get(pk)} and S.No ${v.sNo}` });
+    if (seenEmail.has(v.officialEmail)) dups.push({ row, field: 'official_email', message: `${v.officialEmail} is used by both S.No ${seenEmail.get(v.officialEmail)} and S.No ${v.sNo}` });
+    if (v.personalEmail && seenEmail.has(v.personalEmail)) dups.push({ row, field: 'personal_email', message: `${v.personalEmail} is used by both S.No ${seenEmail.get(v.personalEmail)} and S.No ${v.sNo}` });
+    if (v.personalEmail && v.personalEmail === v.officialEmail) dups.push({ row, field: 'personal_email', message: 'Personal email is the same as the official email' });
+    if (dups.length) {
+      errors.push(...dups);
+      return;
+    }
+    if (pk.length === 10) seenPhone.set(pk, v.sNo);
+    seenEmail.set(v.officialEmail, v.sNo);
+    if (v.personalEmail) seenEmail.set(v.personalEmail, v.sNo);
+    valid.push(v);
   });
   // Rows whose manager is another row that failed validation cannot be resolved.
   const validEmails = new Set(valid.map((v) => v.officialEmail));
@@ -254,7 +306,7 @@ export function validateCsvRows(rows: Record<string, string | undefined>[], ctx:
     } else final.push(v);
   }
   errors.sort((a, b) => a.row - b.row);
-  return { valid: final, errors };
+  return { valid: final, errors: errors.map((e) => ({ ...e, sNo: sNoOf(e.row) })) };
 }
 
 /** Order rows so managers defined in the same file are created before their reports. */

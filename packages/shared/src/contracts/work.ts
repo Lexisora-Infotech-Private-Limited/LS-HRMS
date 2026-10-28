@@ -11,11 +11,14 @@ export const TASK_STATUSES = ['OPEN', 'ALLOTTED', 'WIP', 'DEV_COMPLETED', 'QA', 
 export type TaskStatusKey = (typeof TASK_STATUSES)[number];
 /** Kanban columns in order (DONE is shown only with "Show done"). */
 export const BOARD_COLUMNS = ['OPEN', 'ALLOTTED', 'WIP', 'DEV_COMPLETED', 'QA'] as const;
+/** Every column a card moves through, in order (← / → move one step along this). */
+export const BOARD_FLOW = ['OPEN', 'ALLOTTED', 'WIP', 'DEV_COMPLETED', 'QA', 'DONE'] as const satisfies readonly TaskStatusKey[];
+/** The WIP status is shown as "In progress" (the stored value stays WIP). */
 export const TASK_STATUS_LABELS: Record<TaskStatusKey, string> = {
   OPEN: 'Open',
-  ALLOTTED: 'Alloted',
-  WIP: 'WIP',
-  DEV_COMPLETED: 'Dev Completed',
+  ALLOTTED: 'Allotted',
+  WIP: 'In progress',
+  DEV_COMPLETED: 'Dev completed',
   QA: 'QA',
   DONE: 'Done',
   CANCELLED: 'Cancelled',
@@ -288,7 +291,10 @@ export const taskCreateInput = z.object({
   projectId: z.string().min(1, 'Project is required'),
   moduleName: optText(60),
   assigneeEmployeeId: z.union([z.string().min(1), z.literal(''), z.null()]).optional().transform((v) => (v ? v : null)),
-  estimatedHours: z.number().min(0.25, 'Minimum 0.25h').max(200, 'Estimate over 200h — split the task').nullable().optional(),
+  estimatedHours: z
+    .number({ required_error: 'Estimate is required', invalid_type_error: 'Estimate is required' })
+    .positive('Estimate must be more than 0 hours')
+    .max(200, 'Estimate over 200h — split the task'),
   dueDate: optDate,
   departmentId: z.string().min(1, 'Team board is required'),
   description: optText(8000),
@@ -309,7 +315,7 @@ export const taskMoveInput = z.object({
   toStatus: z.enum(['OPEN', 'ALLOTTED', 'WIP', 'DEV_COMPLETED', 'QA', 'DONE']),
   version: z.number().int().optional(),
   reason: z.string().trim().max(500).optional(),
-  /** Place before this task in the target column (drag position). */
+  /** Accepted for older clients; columns are ordered by overdue → due date → key, not by drop position. */
   beforeTaskId: z.string().optional(),
 });
 export type TaskMoveInput = z.infer<typeof taskMoveInput>;
@@ -336,12 +342,27 @@ export type TaskCard = {
   gitSyncStatus: string;
   version: number;
   canMove: boolean;
+  /**
+   * Time spent on the task, seconds, idle excluded: tracker work + approved idle / outside hours /
+   * manual time from the timesheet + hours logged before tracking. When `timer` is set this is the
+   * total up to `timer.since`; add the live part with `liveSpentSeconds`.
+   */
+  spentSeconds: number;
+  /** A desktop tracker is timing this task right now. */
+  timer: { employeeId: string; name: string; short: string; since: string; mine: boolean } | null;
+  /** Columns this viewer may move the card to with the ← / → links (one step along BOARD_FLOW). */
+  allowedMoves: TaskStatusKey[];
 };
 export type BoardView = {
   project: { id: string; key: string; name: string; status: ProjectStatusKey; locked: boolean };
   board: BoardInfo;
   columns: { status: TaskStatusKey; label: string; count: number; cards: TaskCard[] }[];
   members: { employeeId: string; name: string; isLead: boolean }[];
+  /** Server clock when the view was built (the client ticks running timers from it). */
+  serverNow: string;
+  viewer: { employeeId: string | null; name: string; canManage: boolean };
+  /** "Add task" is shown (tasks.manage + board access + project not locked). */
+  canCreate: boolean;
 };
 export type BoardLocked = { locked: true; department: string; departmentId: string };
 export type TaskDetail = TaskCard & {
@@ -370,6 +391,79 @@ export type TaskDetail = TaskCard & {
 };
 export type TaskMoveResult = { task: TaskCard; message: string; git?: { action: 'branch' | 'mr' | 'none'; branch?: string | null; mrUrl?: string | null; status: string; error?: string | null } };
 export type MyTask = { id: string; key: string; title: string; projectId: string; projectName: string; moduleName: string | null; status: TaskStatusKey; estimatedMinutes: number | null; loggedMinutes: number; dueDate: string | null; isStanding: boolean };
+
+// ── Board helpers (the API and the web board use the same rules) ──────────────
+
+/** The columns one step back / forward along BOARD_FLOW. */
+export function adjacentColumns(status: TaskStatusKey): { back: TaskStatusKey | null; forward: TaskStatusKey | null } {
+  const flow: readonly TaskStatusKey[] = BOARD_FLOW;
+  const i = flow.indexOf(status);
+  if (i < 0) return { back: null, forward: null };
+  return { back: flow[i - 1] ?? null, forward: flow[i + 1] ?? null };
+}
+
+/** Estimate chip: "8h", "1h 30m", "45m"; "—" without one. */
+export function formatEstimate(minutes: number | null | undefined): string {
+  if (minutes == null || minutes <= 0) return '—';
+  const total = Math.round(minutes);
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  if (!h) return `${m}m`;
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+
+/** Spent time "9:45" (hours:minutes, whole minutes rounded down). */
+export function formatSpent(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds / 60));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+}
+
+/** Due date before today (company timezone, IST) and the task not finished. */
+export function isOverdue(dueDate: string | null | undefined, status: TaskStatusKey, todayKey: string): boolean {
+  return !!dueDate && dueDate < todayKey && status !== 'DONE' && status !== 'CANCELLED';
+}
+
+/** "AT-9" before "AT-10". */
+export function compareTaskKeys(a: string, b: string): number {
+  return a.localeCompare(b, 'en', { numeric: true, sensitivity: 'base' });
+}
+
+/** Order inside a column: overdue first, then by due date (no due date last), then by task key. */
+export function sortBoardCards<T extends { overdue: boolean; dueDate: string | null; key: string }>(cards: readonly T[]): T[] {
+  return [...cards].sort((a, b) => {
+    if (a.overdue !== b.overdue) return a.overdue ? -1 : 1;
+    if (a.dueDate !== b.dueDate) {
+      if (!a.dueDate) return 1;
+      if (!b.dueDate) return -1;
+      return a.dueDate < b.dueDate ? -1 : 1;
+    }
+    return compareTaskKeys(a.key, b.key);
+  });
+}
+
+/** Spent seconds at `nowMs` (server clock): `spentSeconds` plus the running part of a live timer. */
+export function liveSpentSeconds(card: { spentSeconds: number; timer: { since: string } | null }, nowMs: number): number {
+  if (!card.timer) return card.spentSeconds;
+  return card.spentSeconds + Math.max(0, (nowMs - Date.parse(card.timer.since)) / 1000);
+}
+
+/** Progress bar: width = spent ÷ estimate capped at 100 %; `over` (red) once spent passes the estimate. */
+export function spentProgress(spentSeconds: number, estimatedMinutes: number | null | undefined): { pct: number; over: boolean } {
+  if (!estimatedMinutes || estimatedMinutes <= 0) return { pct: 0, over: false };
+  const ratio = spentSeconds / (estimatedMinutes * 60);
+  return { pct: Math.min(100, Math.max(0, ratio * 100)), over: ratio > 1 };
+}
+
+/** The progress line shows once a task has tracked time or is In progress. */
+export function showsProgress(card: { status: TaskStatusKey; spentSeconds: number; timer: unknown }): boolean {
+  return card.status === 'WIP' || card.spentSeconds > 0 || !!card.timer;
+}
+
+/** Right side of the progress line: "Running" (my timer), "On Rahul D.’s tracker" (someone else's), else "Paused". */
+export function timerStateLabel(card: { timer: { mine: boolean; short: string } | null }): string {
+  if (!card.timer) return 'Paused';
+  return card.timer.mine ? 'Running' : `On ${card.timer.short}’s tracker`;
+}
 
 // ── GitLab ─────────────────────────────────────────────────────────────────
 export const gitIntegrationInput = z.object({

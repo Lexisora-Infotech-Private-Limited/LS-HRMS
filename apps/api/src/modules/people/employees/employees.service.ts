@@ -37,6 +37,7 @@ import {
   validateCsvRows,
   type EmpType,
   type NormalisedImportRow,
+  phoneKey,
 } from '../people.rules';
 import { dbDateKey, fmt, splitName, toDbDate, todayKey, token } from '../people.util';
 import { OnboardingService } from '../onboarding/onboarding.service';
@@ -45,6 +46,8 @@ import { KitsService } from '../kits/kits.service';
 import { VcardService } from '../vcard/vcard.service';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+import { buildEmployeeTemplate, readEmployeesXlsx } from './employee-xlsx';
+
 const { parse: parseCsv } = require('csv-parse/sync') as { parse: (input: Buffer | string, opts: Record<string, unknown>) => Record<string, string>[] };
 
 const ACTIVE_STATUSES = ['ONBOARDING', 'ACTIVE', 'NOTICE_PERIOD'] as const;
@@ -182,9 +185,29 @@ export class EmployeesService {
     }
   }
 
+  /**
+   * Finds an existing employee who already has this phone number (last 10 digits) or any of these
+   * emails (as official or personal email). Used to stop the same person being added twice.
+   */
+  async findDuplicate(input: { phone?: string | null; emails?: (string | null | undefined)[] }): Promise<{ message: string } | null> {
+    const emails = (input.emails ?? []).map((e) => e?.trim().toLowerCase()).filter((e): e is string => !!e);
+    const phone = (input.phone ?? '').replace(/\D/g, '').slice(-10);
+    if (!emails.length && phone.length < 10) return null;
+    const rows = await this.prisma.employee.findMany({ select: { fullName: true, empCode: true, status: true, phone: true, officialEmail: true, personalEmail: true } });
+    for (const r of rows) {
+      const who = `${r.fullName} (${r.empCode}${r.status === 'EXITED' ? ', former employee' : ''})`;
+      const hit = emails.find((e) => e === r.officialEmail?.toLowerCase() || e === r.personalEmail?.toLowerCase());
+      if (hit) return { message: `${hit} already belongs to employee ${who}` };
+      if (phone.length === 10 && (r.phone ?? '').replace(/\D/g, '').slice(-10) === phone) return { message: `This phone number already belongs to employee ${who}` };
+    }
+    return null;
+  }
+
   async create(input: CreateEmployeeInput, opts: CreateOpts = {}) {
     const ctx = requireContext();
     const email = input.officialEmail.toLowerCase();
+    const dup = await this.findDuplicate({ phone: input.phone, emails: [input.officialEmail, input.personalEmail] });
+    if (dup) throw conflict(dup.message, 'DUPLICATE_EMPLOYEE');
     if (await this.prisma.employee.findFirst({ where: { officialEmail: email }, select: { id: true } })) {
       throw conflict(`${email} already belongs to an employee`, 'EMAIL_TAKEN');
     }
@@ -537,6 +560,16 @@ export class EmployeesService {
 
   // ── CSV import ───────────────────────────────────────────────────────────
 
+  /** The Excel template: required columns have a red heading, optional ones black; department, designation and branch come from this company's lists. */
+  async templateXlsx(): Promise<Buffer> {
+    const [depts, desigs, branches] = await Promise.all([
+      this.prisma.department.findMany({ orderBy: { name: 'asc' }, select: { name: true } }),
+      this.prisma.designation.findMany({ orderBy: { name: 'asc' }, select: { name: true } }),
+      this.prisma.branch.findMany({ orderBy: { name: 'asc' }, select: { name: true } }),
+    ]);
+    return buildEmployeeTemplate({ departments: depts.map((d) => d.name), designations: desigs.map((d) => d.name), branches: branches.map((d) => d.name) });
+  }
+
   templateCsv(): string {
     return [
       EMPLOYEE_CSV_HEADERS.join(','),
@@ -546,11 +579,13 @@ export class EmployeesService {
   }
 
   async validateImport(file: { buffer: Buffer; originalname: string } | undefined, createMissingMasters: boolean): Promise<ImportPreview> {
-    if (!file) throw badRequest('Attach a CSV file');
-    if (file.buffer.length > 5 * 1024 * 1024) throw badRequest('CSV files are limited to 5 MB', 'FILE_TOO_LARGE');
+    if (!file) throw badRequest('Attach an Excel (.xlsx) or CSV file');
+    if (file.buffer.length > 5 * 1024 * 1024) throw badRequest('Files are limited to 5 MB', 'FILE_TOO_LARGE');
+    if (/\.xls$/i.test(file.originalname)) throw badRequest('Save the file as an Excel Workbook (.xlsx) and upload that', 'XLS_UNSUPPORTED');
+    const isXlsx = /\.xlsx$/i.test(file.originalname) || (file.buffer[0] === 0x50 && file.buffer[1] === 0x4b);
     let raw: Record<string, string>[];
     try {
-      raw = parseCsv(file.buffer, {
+      raw = isXlsx ? await readEmployeesXlsx(file.buffer) : parseCsv(file.buffer, {
         columns: (h: string[]) => h.map((x) => x.trim().toLowerCase().replace(/[\s-]+/g, '_')),
         skip_empty_lines: true,
         trim: true,
@@ -558,17 +593,33 @@ export class EmployeesService {
         relax_column_count: true,
       });
     } catch (e) {
-      throw badRequest(`Could not read the CSV: ${(e as Error).message}`, 'CSV_INVALID');
+      throw badRequest(isXlsx ? `Could not read the Excel file: ${(e as Error).message}` : `Could not read the CSV: ${(e as Error).message}`, 'CSV_INVALID');
     }
-    if (!raw.length) throw badRequest('The CSV has no data rows', 'CSV_EMPTY');
+    if (!raw.length) throw badRequest(isXlsx ? 'The Excel file has no employee rows' : 'The CSV has no data rows', 'CSV_EMPTY');
     if (raw.length > 5000) throw badRequest('Import at most 5,000 rows at a time', 'CSV_TOO_LARGE');
+    const { valid, errors } = await this.validateRaw(raw, createMissingMasters);
+    return this.saveImport(file.originalname, raw, createMissingMasters, valid, errors);
+  }
+
+  private async validateRaw(raw: Record<string, string>[], createMissingMasters: boolean) {
     const [depts, desigs, branches, emps] = await Promise.all([
       this.prisma.department.findMany(),
       this.prisma.designation.findMany(),
       this.prisma.branch.findMany(),
-      this.prisma.employee.findMany({ select: { id: true, officialEmail: true, status: true } }),
+      this.prisma.employee.findMany({ select: { id: true, officialEmail: true, personalEmail: true, phone: true, fullName: true, empCode: true, status: true } }),
     ]);
-    const { valid, errors } = validateCsvRows(raw, {
+    const owners = new Map<string, string>();
+    const phones = new Map<string, string>();
+    for (const e of emps) {
+      const who = `${e.fullName} (${e.empCode}${e.status === 'EXITED' ? ', former employee' : ''})`;
+      owners.set(e.officialEmail.toLowerCase(), who);
+      if (e.personalEmail) owners.set(e.personalEmail.toLowerCase(), who);
+      const k = phoneKey(e.phone);
+      if (k.length === 10) phones.set(k, who);
+    }
+    return validateCsvRows(raw, {
+      existingEmailOwners: owners,
+      existingPhones: phones,
       departments: new Map(depts.map((d) => [d.name.toLowerCase(), d.id])),
       designations: new Map(desigs.map((d) => [d.name.toLowerCase(), d.id])),
       branches: new Map(branches.map((d) => [d.name.toLowerCase(), d.id])),
@@ -577,10 +628,13 @@ export class EmployeesService {
       createMissingMasters,
       today: todayKey(),
     });
+  }
+
+  private async saveImport(filename: string, raw: Record<string, string>[], createMissingMasters: boolean, valid: NormalisedImportRow[], errors: ImportPreview['errors']): Promise<ImportPreview> {
     const imp = await this.prisma.employeeImport.create({
       data: {
-        filename: file.originalname,
-        options: { createMissingMasters, raw: raw.slice(0, 200).map((r, i) => ({ row: i + 1, fullName: r.full_name ?? '', officialEmail: r.official_email ?? '', department: r.department ?? '', employmentType: r.employment_type ?? '' })) },
+        filename,
+        options: { createMissingMasters, raw: raw.slice(0, 200).map((r, i) => ({ row: i + 1, sNo: (r.s_no ?? '').trim() || String(i + 1), fullName: r.full_name ?? '', officialEmail: r.official_email ?? '', department: r.department ?? '', employmentType: r.employment_type ?? '' })) },
         totalRows: raw.length,
         validRows: valid.length,
         rows: valid as unknown as Prisma.InputJsonValue,
@@ -599,10 +653,10 @@ export class EmployeesService {
     const errors = imp.rowErrors as unknown as ImportPreview['errors'];
     const errRows = new Set(errors.map((e) => e.row));
     const preview = [
-      ...valid.map((v) => ({ row: v.row, fullName: v.fullName, officialEmail: v.officialEmail, department: v.department, employmentType: v.employmentType, ok: true })),
+      ...valid.map((v) => ({ row: v.row, sNo: v.sNo, fullName: v.fullName, officialEmail: v.officialEmail, department: v.department, employmentType: v.employmentType, ok: true })),
       ...[...errRows].map((row) => {
-        const r = ((imp.options as { raw?: { row: number; fullName: string; officialEmail: string; department: string; employmentType: string }[] } | null)?.raw ?? []).find((x) => x.row === row);
-        return { row, fullName: r?.fullName ?? '', officialEmail: r?.officialEmail ?? '', department: r?.department ?? '', employmentType: r?.employmentType ?? '', ok: false };
+        const r = ((imp.options as { raw?: { row: number; sNo?: string; fullName: string; officialEmail: string; department: string; employmentType: string }[] } | null)?.raw ?? []).find((x) => x.row === row);
+        return { row, sNo: r?.sNo ?? String(row), fullName: r?.fullName ?? '', officialEmail: r?.officialEmail ?? '', department: r?.department ?? '', employmentType: r?.employmentType ?? '', ok: false };
       }),
     ].sort((a, b) => a.row - b.row);
     return { id: imp.id, filename: imp.filename, totalRows: imp.totalRows, validRows: imp.validRows, errors, preview: preview.slice(0, 200), status: imp.status, importedRows: imp.importedRows };
@@ -661,7 +715,7 @@ export class EmployeesService {
     const imp = await this.prisma.employeeImport.findUnique({ where: { id } });
     if (!imp) throw notFound('Import');
     const errors = imp.rowErrors as unknown as ImportPreview['errors'];
-    return ['row,field,message', ...errors.map((e) => [e.row, e.field ?? '', e.message].map(csvEscape).join(','))].join('\n');
+    return ['s_no,field,message', ...errors.map((e) => [e.sNo ?? e.row, e.field ?? '', e.message].map(csvEscape).join(','))].join('\n');
   }
 
   private async ensureMaster(kind: 'department' | 'designation' | 'branch', name: string): Promise<string> {

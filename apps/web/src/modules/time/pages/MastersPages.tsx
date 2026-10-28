@@ -15,11 +15,14 @@ const WEEKLY_OFF_OPTIONS = [
   { value: '0', label: 'Sun' },
   { value: '5,6', label: 'Fri, Sat' },
   { value: '6', label: 'Sat' },
-  { value: '', label: 'None (rotational)' },
+  { value: 'none', label: 'None (rotational)' },
 ];
-const offKey = (days: number[]) => {
-  const k = [...days].sort((a, b) => (a === 0 ? 7 : a) - (b === 0 ? 7 : b)).join(',');
-  return WEEKLY_OFF_OPTIONS.some((o) => o.value === k) ? k : '6,0';
+/** Mon-first key of a weekly-off set ("6,0"); "none" for no fixed weekly off. */
+const offKey = (days: number[]) => (days.length ? [...days].sort((a, b) => (a === 0 ? 7 : a) - (b === 0 ? 7 : b)).join(',') : 'none');
+/** Presets, plus the shift's own combination when it isn't one of them (editing never changes it silently). */
+const offOptions = (edit: ShiftRow | null) => {
+  const k = edit ? offKey(edit.weeklyOffDays) : null;
+  return k && !WEEKLY_OFF_OPTIONS.some((o) => o.value === k) ? [{ value: k, label: `${edit!.weeklyOff} (current)` }, ...WEEKLY_OFF_OPTIONS] : WEEKLY_OFF_OPTIONS;
 };
 
 export function ShiftsPage() {
@@ -56,7 +59,7 @@ export function ShiftsPage() {
         (shifts.isError ? (
           <ErrorBlock error={shifts.error} retry={() => void shifts.refetch()} />
         ) : (
-          <DataTable<ShiftRow>
+          <DataTable<ShiftRow> mobileCards
             loading={shifts.isLoading}
             rows={shifts.data}
             rowKey={(r) => r.id}
@@ -64,7 +67,7 @@ export function ShiftsPage() {
             columns={[
               { key: 'n', header: 'Shift', render: (r) => <span>{r.name} {r.isDefault && <Tag tone="outline">Default</Tag>}</span> },
               { key: 't', header: 'Timing', render: (r) => r.timing },
-              { key: 'g', header: 'Grace', render: (r) => `${r.graceMinutes} min` },
+              { key: 'g', header: 'Late rules', render: (r) => <span>{r.graceMinutes} min grace<span className="faint" style={{ display: 'block', fontSize: 11.5 }}>{r.halfDayIfLateByMinutes ? `half day if ${r.halfDayIfLateByMinutes} min+ late` : 'no half-day rule'}{r.lateMarksAllowed > 0 && ` · ${r.lateMarksAllowed} late${r.lateMarksAllowed === 1 ? '' : 's'} allowed a month, then half day${r.lateMarksAllowedFrom ? ` (from ${r.lateMarksAllowedFrom.slice(8, 10)}/${r.lateMarksAllowedFrom.slice(5, 7)})` : ''}`}</span></span> },
               { key: 'b', header: 'Break', render: (r) => `${r.breakMinutes} min` },
               { key: 'w', header: 'Weekly off', render: (r) => r.weeklyOff },
               { key: 'e', header: 'Employees', render: (r) => r.employees, num: true },
@@ -83,7 +86,7 @@ export function ShiftsPage() {
         (allocs.isError ? (
           <ErrorBlock error={allocs.error} />
         ) : (
-          <DataTable<ShiftAllocationRow>
+          <DataTable<ShiftAllocationRow> mobileCards
             loading={allocs.isLoading}
             rows={allocs.data}
             rowKey={(r) => r.id}
@@ -127,8 +130,10 @@ function ShiftForm({ edit, onClose }: { edit: ShiftRow | null; onClose: () => vo
     { name: 'start', label: 'Start', type: 'time', required: true },
     { name: 'end', label: 'End', type: 'time', required: true },
     { name: 'graceMinutes', label: 'Grace (min)', type: 'number', required: true },
+    { name: 'halfDayIfLateByMinutes', label: 'Half day if late by (min)', type: 'number' },
+    { name: 'lateMarksAllowed', label: 'Late arrivals allowed (per month)', type: 'number' },
     { name: 'breakMinutes', label: 'Break (min)', type: 'number', required: true },
-    { name: 'weeklyOff', label: 'Weekly off', type: 'select', span: 2, options: WEEKLY_OFF_OPTIONS },
+    { name: 'weeklyOff', label: 'Weekly off', type: 'select', required: true, options: offOptions(edit) },
     { name: 'minFullDayMinutes', label: 'Full day after (min worked)', type: 'number' },
     { name: 'minHalfDayMinutes', label: 'Half day after (min worked)', type: 'number' },
     { name: 'isDefault', label: 'Default shift for new employees', type: 'checkbox', span: 2 },
@@ -137,19 +142,23 @@ function ShiftForm({ edit, onClose }: { edit: ShiftRow | null; onClose: () => vo
     <FormModal
       title={edit ? `Edit shift · ${edit.name}` : 'Add shift'}
       fields={fields}
+      intro={edit && edit.employees > 0 ? <div className="note">Changes recompute this month's attendance of the {edit.employees} people on this shift.</div> : undefined}
       initial={
         edit
-          ? { ...edit, weeklyOff: offKey(edit.weeklyOffDays) }
-          : { start: '09:30', end: '18:30', graceMinutes: 15, breakMinutes: 60, weeklyOff: '6,0', minFullDayMinutes: 480, minHalfDayMinutes: 240 }
+          ? { ...edit, weeklyOff: offKey(edit.weeklyOffDays), halfDayIfLateByMinutes: edit.halfDayIfLateByMinutes ?? '' }
+          : { start: '09:30', end: '18:30', graceMinutes: 15, halfDayIfLateByMinutes: 120, lateMarksAllowed: 0, breakMinutes: 60, earlyOutGraceMinutes: 15, weeklyOff: '6,0', minFullDayMinutes: 450, minHalfDayMinutes: 240 }
       }
       onSubmit={(v) => {
         const { weeklyOff, ...rest } = v;
         return save.mutateAsync({
           ...rest,
           isDefault: !!v.isDefault,
+          halfDayIfLateByMinutes: v.halfDayIfLateByMinutes ? Number(v.halfDayIfLateByMinutes) : null,
+          lateMarksAllowed: v.lateMarksAllowed ?? 0,
+          earlyOutGraceMinutes: v.earlyOutGraceMinutes ?? undefined,
           minFullDayMinutes: v.minFullDayMinutes ?? undefined,
           minHalfDayMinutes: v.minHalfDayMinutes ?? undefined,
-          weeklyOffDays: String(weeklyOff ?? '').split(',').filter((x) => x !== '').map(Number),
+          weeklyOffDays: weeklyOff === 'none' ? [] : String(weeklyOff ?? '').split(',').filter((x) => x !== '').map(Number),
         });
       }}
       onClose={onClose}
@@ -185,7 +194,7 @@ export function LocationsPage() {
       {q.isError ? (
         <ErrorBlock error={q.error} retry={() => void q.refetch()} />
       ) : (
-        <DataTable<LocationRow>
+        <DataTable<LocationRow> mobileCards
           loading={q.isLoading}
           rows={q.data}
           rowKey={(r) => r.id}
@@ -295,7 +304,7 @@ function LocationDetailModal({ id, onClose, onEdit }: { id: string; onClose: () 
           <div className="kv-row"><span>Geo radius</span><span>{d.geoRadius}{d.geoFenceWebPunch ? ' · checked on web punch' : ''}</span></div>
           <div className="kv-row"><span>Biometric devices</span><span>{d.devices.length ? d.devices.map((x) => `${x.name} (${x.status})`).join(', ') : 'None'}</span></div>
           <div className="time-label">Employees · {d.employeeList.length}</div>
-          <div style={{ maxHeight: 220, overflow: 'auto' }}>
+          <div style={{ maxHeight: 220, overflowY: 'auto', overflowX: 'hidden', scrollbarGutter: 'stable', paddingRight: 8 }}>
             {d.employeeList.map((e) => (
               <div key={e.id} className="kv-row" style={{ fontSize: 13 }}>
                 <span>{e.name} <span className="faint">{e.empCode}</span></span>
@@ -322,7 +331,44 @@ function LocationDetailModal({ id, onClose, onEdit }: { id: string; onClose: () 
 
 // ── Attendance policy ─────────────────────────────────────────────────────────
 type BoolKey = { [K in keyof AttendancePolicyDto]: AttendancePolicyDto[K] extends boolean ? K : never }[keyof AttendancePolicyDto];
-type NumKey = 'autoIdleMinutes' | 'screenshotIntervalMinutes' | 'monthlyIdleAllowanceMinutes' | 'breakReminderMinutes' | 'offlineRetentionDays' | 'screenshotRetentionDays' | 'lateMarksPerPenalty' | 'missedPunchAutoCloseHours' | 'maxRegularizationsPerMonth' | 'regularizationWindowDays';
+type NumKey =
+  | 'autoIdleMinutes'
+  | 'screenshotIntervalMinutes'
+  | 'monthlyIdleAllowanceMinutes'
+  | 'breakReminderMinutes'
+  | 'offlineRetentionDays'
+  | 'screenshotRetentionDays'
+  | 'lateMarksPerPenalty'
+  | 'latePenaltyDays'
+  | 'missedPunchAutoCloseHours'
+  | 'maxRegularizationsPerMonth'
+  | 'regularizationWindowDays';
+/** Allowed ranges (policyPatchSchema). */
+const NUM_RANGE: Record<NumKey, [number, number, number?]> = {
+  autoIdleMinutes: [1, 60],
+  screenshotIntervalMinutes: [5, 60],
+  monthlyIdleAllowanceMinutes: [0, 600],
+  breakReminderMinutes: [0, 480],
+  offlineRetentionDays: [1, 30],
+  screenshotRetentionDays: [7, 365],
+  lateMarksPerPenalty: [1, 31],
+  latePenaltyDays: [0, 5, 0.5],
+  missedPunchAutoCloseHours: [1, 24],
+  maxRegularizationsPerMonth: [0, 31],
+  regularizationWindowDays: [1, 60],
+};
+type SelectKey = 'latePenaltySource' | 'idleDeductionMode';
+const SELECT_OPTIONS: Record<SelectKey, { value: string; label: string }[]> = {
+  latePenaltySource: [
+    { value: 'LEAVE_THEN_LOP', label: 'Leave first, then LOP' },
+    { value: 'LOP', label: 'Loss of pay' },
+    { value: 'NONE', label: 'No penalty' },
+  ],
+  idleDeductionMode: [
+    { value: 'SHORTFALL_ONLY', label: 'Only the shortfall' },
+    { value: 'ALL_IDLE', label: 'All idle time' },
+  ],
+};
 
 export function PolicyPage() {
   const q = usePolicy();
@@ -331,44 +377,76 @@ export function PolicyPage() {
     {
       success: (r) =>
         `Policy saved · pushed to ${r.pushedTo} tracker${r.pushedTo === 1 ? '' : 's'}${r.autoCleared.length ? ` · also turned off: ${r.autoCleared.join(', ')}` : ''}`,
-      invalidate: [tk.policy, tk.today],
+      invalidate: [tk.policy, tk.today, ['time', 'month']],
     },
   );
   if (q.isLoading) return <Loading />;
   if (q.isError || !q.data) return <ErrorBlock error={q.error} retry={() => void q.refetch()} />;
   const { office, remote } = q.data;
+  /** Saves one field; resolves false when the server refused it (the input then shows the saved value again). */
   const set = (aud: 'office' | 'remote', key: string, value: unknown) => {
     const p = aud === 'office' ? office : remote;
-    save.mutate({ audience: aud, patch: { [key]: value, expectedVersion: p.version } });
+    return save.mutateAsync({ audience: aud, patch: { [key]: value, expectedVersion: p.version } }).then(
+      () => true,
+      () => false,
+    );
   };
 
   const bool = (label: string, key: BoolKey) => (
     <div className="rw" key={key}>
       <span>{label}</span>
-      <span><Check checked={office[key] as boolean} disabled={save.isPending} onChange={(v) => set('office', key, v)} /></span>
-      <span><Check checked={remote[key] as boolean} disabled={save.isPending} onChange={(v) => set('remote', key, v)} /></span>
+      <span><Check checked={office[key] as boolean} disabled={save.isPending} onChange={(v) => void set('office', key, v)} /></span>
+      <span><Check checked={remote[key] as boolean} disabled={save.isPending} onChange={(v) => void set('remote', key, v)} /></span>
     </div>
   );
   const num = (label: string, key: NumKey, unit: string) => (
     <div className="rw" key={key}>
       <span>{label}</span>
-      <span><NumInput value={office[key]} unit={unit} onSave={(v) => set('office', key, v)} /></span>
-      <span><NumInput value={remote[key]} unit={unit} onSave={(v) => set('remote', key, v)} /></span>
+      <span><NumInput value={office[key]} unit={unit} range={NUM_RANGE[key]} disabled={save.isPending} onSave={(v) => set('office', key, v)} /></span>
+      <span><NumInput value={remote[key]} unit={unit} range={NUM_RANGE[key]} disabled={save.isPending} onSave={(v) => set('remote', key, v)} /></span>
+    </div>
+  );
+  const select = (label: string, key: SelectKey) => (
+    <div className="rw" key={key}>
+      <span>{label}</span>
+      {(['office', 'remote'] as const).map((aud) => (
+        <span key={aud}>
+          <select className="input" style={{ width: 'auto' }} value={(aud === 'office' ? office : remote)[key]} disabled={save.isPending} onChange={(e) => void set(aud, key, e.target.value)}>
+            {SELECT_OPTIONS[key].map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+        </span>
+      ))}
     </div>
   );
 
   return (
     <div data-screen-label="Attendance policy" className="stack" style={{ gap: 18 }}>
-      <PageHeader title="Attendance policy" sub="Controls how and where employees can punch in, plus desktop tracker rules." />
+      <PageHeader title="Attendance policy" sub="Controls how and where employees can punch in, late arrival rules, plus desktop tracker rules." />
       <div className="time-matrix">
         <div className="hd"><span>Rule</span><span>Office employees</span><span>Remote / WFH employees</span></div>
         {bool('Biometric punch mandatory', 'biometricMandatory')}
         {bool('Allow web punch-in', 'allowWebPunch')}
         {bool('Allow desktop app punch-in', 'allowDesktopPunch')}
-        {bool(`Auto-idle after ${remote.autoIdleMinutes} min without input`, 'autoIdleEnabled')}
-        {bool(`Screenshot every ${remote.screenshotIntervalMinutes} min`, 'screenshotsEnabled')}
+        {bool('Auto-idle when there is no input', 'autoIdleEnabled')}
+        {bool('Take screenshots', 'screenshotsEnabled')}
         {bool('Blur screenshots', 'blurScreenshots')}
         {bool('Deduct idle time from payroll', 'deductIdleFromPayroll')}
+      </div>
+      <h4 style={{ margin: '8px 0 0' }}>Late arrival</h4>
+      <div className="faint" style={{ fontSize: 12.5, marginTop: -10 }}>
+        Grace minutes, “half day if late by” and late arrivals allowed per month are set per shift on the Shifts page. With an allowed number (e.g. 3), lates 1–3 cost nothing and from the 4th the first half of that day is a half day (booked as half-day leave when the switch below is on). The penalty rows below apply only to shifts without an allowed number. A late half day is never also charged as a late-mark penalty.
+      </div>
+      <div className="time-matrix">
+        <div className="hd"><span>Rule</span><span>Office employees</span><span>Remote / WFH employees</span></div>
+        {bool('Ask why on a late web punch-in (popup with reason)', 'lateReasonRequired')}
+        {num('Late marks per penalty', 'lateMarksPerPenalty', 'marks')}
+        {num('Penalty for those late marks', 'latePenaltyDays', 'day')}
+        {select('Penalty taken from', 'latePenaltySource')}
+        {bool('Book a half-day leave for a late half day (half-day limit or over the allowed lates)', 'lateHalfDayAsLeave')}
+        {bool('Early punch-out counts as late mark', 'earlyOutCountsAsLate')}
+        {bool('Punch-in reminder after shift start + grace', 'punchInReminder')}
       </div>
       <h4 style={{ margin: '8px 0 0' }}>Limits &amp; tracker settings</h4>
       <div className="time-matrix">
@@ -376,17 +454,15 @@ export function PolicyPage() {
         {num('Auto-idle threshold', 'autoIdleMinutes', 'min')}
         {num('Screenshot interval', 'screenshotIntervalMinutes', 'min')}
         {num('Monthly idle allowance before deduction', 'monthlyIdleAllowanceMinutes', 'min')}
+        {select('Idle deducted from payroll', 'idleDeductionMode')}
         {num('Break reminder after continuous work', 'breakReminderMinutes', 'min')}
         {num('Screenshot retention', 'screenshotRetentionDays', 'days')}
         {num('Offline data retention on device', 'offlineRetentionDays', 'days')}
-        {num('Late marks per penalty', 'lateMarksPerPenalty', 'marks')}
         {num('Auto-close open session after shift end', 'missedPunchAutoCloseHours', 'h')}
         {num('Correction requests per month', 'maxRegularizationsPerMonth', '')}
         {num('Correction window', 'regularizationWindowDays', 'days')}
-        {bool('Early punch-out counts as late mark', 'earlyOutCountsAsLate')}
         {bool('Weekly timesheet required', 'timesheetRequired')}
         {bool('Desktop tracker required while punched in', 'trackerRequired')}
-        {bool('Punch-in reminder at shift start', 'punchInReminder')}
       </div>
       <div className="faint" style={{ fontSize: 12 }}>
         Last changed {new Date(remote.updatedAt > office.updatedAt ? remote.updatedAt : office.updatedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
@@ -396,21 +472,33 @@ export function PolicyPage() {
   );
 }
 
-function NumInput({ value, unit, onSave }: { value: number; unit: string; onSave: (v: number) => void }) {
+/** `range`: [min, max, step?] — out-of-range or refused values go back to the saved value. */
+function NumInput({ value, unit, range, disabled, onSave }: { value: number; unit: string; range: [number, number, number?]; disabled?: boolean; onSave: (v: number) => Promise<boolean> }) {
   const [v, setV] = useState(String(value));
   const [prev, setPrev] = useState(value);
   if (prev !== value) {
     setPrev(value);
     setV(String(value));
   }
+  const [min, max, step = 1] = range;
   const commit = () => {
     const n = Number(v);
-    if (!Number.isFinite(n) || v.trim() === '') return setV(String(value));
-    if (n !== value) onSave(n);
+    const ok = Number.isFinite(n) && v.trim() !== '' && n >= min && n <= max && Math.abs(n / step - Math.round(n / step)) < 1e-9;
+    if (!ok) return setV(String(value));
+    if (n !== value) void onSave(n).then((saved) => !saved && setV(String(value)));
   };
   return (
     <span className="row" style={{ gap: 6 }}>
-      <input className="input time-num-input" inputMode="numeric" value={v} onChange={(e) => setV(e.target.value)} onBlur={commit} onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()} />
+      <input
+        className="input time-num-input"
+        inputMode={step < 1 ? 'decimal' : 'numeric'}
+        value={v}
+        disabled={disabled}
+        title={`${min}–${max}${step < 1 ? ` in steps of ${step}` : ''}`}
+        onChange={(e) => setV(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+      />
       <span className="faint" style={{ fontSize: 12 }}>{unit}</span>
     </span>
   );

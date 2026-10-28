@@ -1,6 +1,8 @@
 /* Time domain (attendance, timesheets, approvals, masters) */
 .time-elapsed { font-family: var(--font-heading); font-size: 40px; font-feature-settings: 'tnum'; line-height: 1.1; }
 .time-blocked { font-size: 13px; border: 1px dashed var(--color-accent); padding: 10px; border-radius: 4px; color: var(--color-accent-800); }
+.time-late-note { font-size: 13px; color: var(--color-danger, #9b2c2c); }
+.time-late-warn { font-size: 13px; padding: 10px 12px; border-radius: 4px; border: 1px solid var(--color-danger, #9b2c2c); color: var(--color-danger, #9b2c2c); background: color-mix(in srgb, var(--color-danger, #9b2c2c) 6%, transparent); }
 .time-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
 .time-stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 13px; }
 .time-stat-grid .n { font-family: var(--font-heading); font-size: 28px; font-feature-settings: 'tnum'; line-height: 1.15; }
@@ -10,8 +12,24 @@
 .time-legend i { width: 12px; height: 12px; display: inline-block; }
 .time-legend i.a { background: var(--color-accent-300); }
 .time-legend i.b { background: var(--color-neutral-400); }
-.time-legend i.i { background: var(--color-neutral-200); }
+.time-legend i.i { background: color-mix(in srgb, var(--color-danger) 45%, var(--color-bg)); }
 .time-gap { background: transparent; }
+/* Not punched in yet although the shift (plus grace) has started. */
+.time-gap.late { background: repeating-linear-gradient(135deg, transparent 0 5px, color-mix(in srgb, var(--color-danger) 22%, transparent) 5px 7px); }
+/* A session that was never punched out (auto-closed at shift end). */
+.seg-missing, .time-legend i.m { background: repeating-linear-gradient(135deg, var(--color-neutral-300, #ccc) 0 4px, transparent 4px 8px); border: 1px dashed var(--color-neutral-500); }
+.time-legend i.l { background: repeating-linear-gradient(135deg, transparent 0 3px, color-mix(in srgb, var(--color-danger) 35%, transparent) 3px 5px); border: 1px solid color-mix(in srgb, var(--color-danger) 40%, transparent); }
+.time-row-note { display: block; font-size: 11.5px; color: var(--color-neutral-600); white-space: normal; }
+.time-strip { position: relative; }
+/* A few idle minutes on a 9-hour axis would be a hairline; keep every bar visible and hoverable. */
+.time-strip .timeline > div:not(.time-gap) { min-width: 4px; }
+.time-strip .is-hover { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-text) 35%, transparent); }
+.time-tip {
+  position: absolute; bottom: calc(100% + 6px); z-index: 5; width: max-content; max-width: min(420px, 100%);
+  padding: 5px 9px; border-radius: var(--radius-md); font-size: 12.5px; line-height: 1.35;
+  background: var(--color-neutral-900); color: var(--color-neutral-100); box-shadow: var(--shadow-md); pointer-events: none;
+}
+.time-idle-choices { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-2); }
 .time-mode { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 13px; }
 
 /* Wireframe-style grids (7 columns table + timesheet grid) */
@@ -23,6 +41,16 @@
 .time-grid.sheet .hd, .time-grid.sheet .rw { grid-template-columns: 2.4fr repeat(7, minmax(54px, 1fr)) 1fr; min-width: 760px; }
 .time-grid.sheet .rw.idle { color: var(--color-neutral-700); font-size: 13px; border-bottom: 0; }
 .time-grid.sheet .rw.tot { font-weight: 600; border-bottom: 0; }
+.time-grid.sheet .rw.pend { color: var(--color-accent-700); font-size: 13px; border-bottom: 0; }
+.time-grid.sheet .rw.exp { color: var(--color-neutral-600); font-size: 12.5px; border-bottom: 0; }
+.time-grid.sheet .rw.quiet > span { grid-column: 1 / -1; }
+.time-pending { display: block; font-size: 11px; font-weight: 400; color: var(--color-accent-700); white-space: nowrap; }
+.time-day-tag.leave { color: var(--color-neutral-700); }
+.time-est { display: flex; align-items: center; gap: 6px; margin-top: 3px; font-size: 11px; color: var(--color-neutral-600); }
+.time-est .bar { flex: 0 0 56px; height: 4px; border-radius: 2px; background: var(--color-divider); overflow: hidden; }
+.time-est .bar i { display: block; height: 100%; background: var(--color-accent); }
+.time-est.over { color: var(--color-danger); }
+.time-est.over .bar i { background: var(--color-danger); }
 .time-grid .sub { display: block; font-size: 11.5px; color: var(--color-neutral-600); }
 .time-cell { font: inherit; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 3px; padding: 2px 4px; margin: -3px -5px; cursor: pointer; color: inherit; font-feature-settings: 'tnum'; }
 .time-cell:hover:not(:disabled) { border-color: var(--color-divider); background: var(--color-accent-100); }
@@ -30,6 +58,7 @@
 .time-cell.adj { text-decoration: underline dotted var(--color-accent); }
 .time-cell.oh::after { content: '•'; color: var(--color-accent-700); margin-left: 2px; }
 .time-day-off { color: var(--color-neutral-500); }
+.time-day-tag { display: block; font-size: 10.5px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--color-accent-700); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .time-chain { display: flex; gap: 8px; align-items: center; font-size: 13px; flex-wrap: wrap; }
 .time-chain .arrow { color: var(--color-neutral-500); }

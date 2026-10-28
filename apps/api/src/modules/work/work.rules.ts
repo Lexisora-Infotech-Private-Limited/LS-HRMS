@@ -8,11 +8,12 @@ export type ProjectStatus = 'PLANNING' | 'ACTIVE' | 'ON_HOLD' | 'COMPLETED' | 'A
 export type ProjectHealth = 'NA' | 'ON_TRACK' | 'AT_RISK' | 'OFF_TRACK';
 
 export const COLUMN_ORDER: TaskStatus[] = ['OPEN', 'ALLOTTED', 'WIP', 'DEV_COMPLETED', 'QA', 'DONE'];
+/** WIP is shown as "In progress" (the stored value stays WIP). Same as TASK_STATUS_LABELS in shared. */
 export const STATUS_LABEL: Record<TaskStatus, string> = {
   OPEN: 'Open',
-  ALLOTTED: 'Alloted',
-  WIP: 'WIP',
-  DEV_COMPLETED: 'Dev Completed',
+  ALLOTTED: 'Allotted',
+  WIP: 'In progress',
+  DEV_COMPLETED: 'Dev completed',
   QA: 'QA',
   DONE: 'Done',
   CANCELLED: 'Cancelled',
@@ -113,6 +114,11 @@ export function projectStatusLabel(status: ProjectStatus, health: ProjectHealth)
   return { PLANNING: 'Planning', ON_HOLD: 'On hold', COMPLETED: 'Completed', ARCHIVED: 'Archived', CANCELLED: 'Cancelled', ACTIVE: 'Active' }[status];
 }
 
+/** Logged time just reached the task's estimate (100%) — notify once, on the crossing only. */
+export function crossedEstimate(before: number, after: number, estimatedMinutes: number | null | undefined): boolean {
+  return !!estimatedMinutes && estimatedMinutes > 0 && before < estimatedMinutes && after >= estimatedMinutes;
+}
+
 // ── Git naming ─────────────────────────────────────────────────────────────
 
 /** "feature/{key}" + "AT-101" → "feature/at-101" (lowercased, slug-safe, ≤ 100 chars). */
@@ -145,18 +151,21 @@ export type TransitionPlan = {
   /** Field changes besides status. */
   set: {
     startedAt?: Date;
-    devCompletedAt?: Date;
+    devCompletedAt?: Date | null;
     qaAt?: Date;
     doneAt?: Date | null;
     assigneeEmployeeId?: string | null;
   };
   backward: boolean;
+  /** Dev completed / QA / Done → In progress. */
+  rework: boolean;
 };
 
 /**
  * What happens when a card moves `from` → `to`:
- *  - to WIP: create the feature branch from the target branch (GitLab adapter)
+ *  - to WIP: create the feature branch from the target branch (GitLab adapter); startedAt only the first time
  *  - to DEV_COMPLETED: ensure the branch and open (or reuse) a merge request
+ *  - back to WIP from Dev completed / QA / Done (rework): devCompletedAt is cleared
  *  - to OPEN: the card is unassigned; leaving OPEN without an assignee assigns the mover
  *  - status timestamps are stamped; leaving DONE clears doneAt
  */
@@ -171,7 +180,9 @@ export function planTransition(input: {
 }): TransitionPlan {
   const { from, to, now } = input;
   const set: TransitionPlan['set'] = {};
+  const rework = to === 'WIP' && (from === 'DEV_COMPLETED' || from === 'QA' || from === 'DONE');
   if (to === 'WIP' && !input.startedAt) set.startedAt = now;
+  if (rework) set.devCompletedAt = null;
   if (to === 'DEV_COMPLETED') set.devCompletedAt = now;
   if (to === 'QA') set.qaAt = now;
   if (to === 'DONE') set.doneAt = now;
@@ -185,18 +196,96 @@ export function planTransition(input: {
     else if (to === 'DEV_COMPLETED') git = 'mr';
   }
   const backward = COLUMN_ORDER.indexOf(to) < COLUMN_ORDER.indexOf(from);
-  return { git, set, backward };
+  return { git, set, backward, rework };
 }
 
-/** Toast copy for a move (wireframe: "AT-102 → Dev Completed · pushed to GitLab (feature/at-102)", "AT-106 closed"). */
+// ── Timer (desktop tracker) ────────────────────────────────────────────────
+
+/**
+ * The timer runs only on In progress cards:
+ *  - into In progress (Allotted → In progress, or rework from Dev completed / QA): start the assignee's timer
+ *  - out of In progress, or any move of a card a tracker is timing: stop it
+ */
+export function timerAction(from: TaskStatus, to: TaskStatus, running: boolean): 'start' | 'stop' | 'none' {
+  if (from === to) return 'none';
+  if (to === 'WIP') return 'start';
+  if (from === 'WIP' || running) return 'stop';
+  return 'none';
+}
+
+export type AssigneeTimerState = { hasDevice: boolean; punchedIn: boolean; onBreak: boolean };
+
+/** Toast for a start: "Timer started on AT-101", or why it starts later. */
+export function timerStartMessage(key: string, state: AssigneeTimerState, assignee: { isMover: boolean; short: string }): string {
+  const who = assignee.isMover ? 'you' : assignee.short;
+  if (!state.hasDevice) return `${key} is In progress · no desktop tracker is paired for ${who}, so no time is tracked`;
+  if (!state.punchedIn) return `${key} is In progress · the timer starts when ${who} punch${assignee.isMover ? '' : 'es'} in`;
+  if (state.onBreak) return `${key} is In progress · the timer starts when ${assignee.isMover ? 'your' : `${assignee.short}’s`} break ends`;
+  return assignee.isMover ? `Timer started on ${key}` : `Timer started on ${key} for ${assignee.short}`;
+}
+
+/** Toast for a stop: "AT-101 timer stopped · 9:45 used of 8h estimate". */
+export function timerStopMessage(key: string, spent: string, estimate: string | null): string {
+  return `${key} timer stopped · ${spent} used${estimate ? ` of ${estimate} estimate` : ''}`;
+}
+
+// ── Move links ─────────────────────────────────────────────────────────────
+
+/**
+ * Columns one step back / forward this viewer may move a card to (the ← / → links):
+ *  - nothing on a read-only board or for cards the viewer can't move
+ *  - back to Open only for the board lead or the assignee
+ *  - out of Open without an assignee only when the viewer is on the board (they become the assignee)
+ */
+export function allowedMoves(input: {
+  status: TaskStatus;
+  canManage: boolean;
+  canView: boolean;
+  locked: boolean;
+  assigneeEmployeeId: string | null;
+  me: string | null;
+  /** Board members (department lead + allocated); undefined = not checked. */
+  boardPeople?: ReadonlySet<string>;
+}): TaskStatus[] {
+  const { status, assigneeEmployeeId, me } = input;
+  if (input.locked || !canMoveTask(input)) return [];
+  const i = COLUMN_ORDER.indexOf(status);
+  if (i < 0) return [];
+  const out: TaskStatus[] = [];
+  const back = COLUMN_ORDER[i - 1];
+  const forward = COLUMN_ORDER[i + 1];
+  if (back && !(back === 'OPEN' && assigneeEmployeeId && !input.canManage && assigneeEmployeeId !== me)) out.push(back);
+  if (forward) {
+    const pickUp = !assigneeEmployeeId;
+    const canPickUp = !!me && (!input.boardPeople || input.boardPeople.has(me));
+    if (!pickUp || canPickUp) out.push(forward);
+  }
+  return out;
+}
+
+/** Toast copy for a move (wireframe: "AT-102 → Dev completed · pushed to GitLab (feature/at-102)", "AT-106 closed"). */
 export function moveMessage(key: string, to: TaskStatus, git: { action: 'branch' | 'mr' | 'none'; status: string; branch?: string | null; targetBranch?: string }): string {
   if (to === 'DONE') return `${key} closed`;
+  const label = STATUS_LABEL[to];
   if (git.action === 'mr') {
-    if (git.status === 'SYNCED') return `${key} → Dev Completed · pushed to GitLab (${git.branch})`;
-    if (git.status === 'FAILED') return `${key} → Dev Completed · GitLab sync failed, retry from the card`;
+    if (git.status === 'SYNCED') return `${key} → ${label} · pushed to GitLab (${git.branch})`;
+    if (git.status === 'FAILED') return `${key} → ${label} · GitLab sync failed, retry from the card`;
   }
-  if (git.action === 'branch' && git.status === 'SYNCED') return `${key} → WIP · branch ${git.branch} created from ${git.targetBranch ?? 'develop'}`;
-  return `${key} → ${STATUS_LABEL[to]}`;
+  if (git.action === 'branch' && git.status === 'SYNCED') return `${key} → ${label} · branch ${git.branch} created from ${git.targetBranch ?? 'develop'}`;
+  return `${key} → ${label}`;
+}
+
+/** The GitLab part of a move toast, to follow a timer message ("pushed to GitLab (feature/at-101)"). */
+export function gitNote(git: { action: 'branch' | 'mr' | 'none'; status: string; branch?: string | null; targetBranch?: string }): string | null {
+  if (git.action === 'mr') {
+    if (git.status === 'SYNCED') return `pushed to GitLab (${git.branch})`;
+    if (git.status === 'FAILED') return 'GitLab sync failed, retry from the card';
+  }
+  if (git.action === 'branch') {
+    if (git.status === 'SYNCED') return `branch ${git.branch} created from ${git.targetBranch ?? 'develop'}`;
+    if (git.status === 'FAILED') return 'GitLab branch failed, retry from the card';
+  }
+  return null;
 }
 
 // ── Board access ───────────────────────────────────────────────────────────
@@ -208,15 +297,15 @@ export type BoardAccessInput = {
   isDeptLead: boolean;
   /** Allocated by the department lead (BoardMember row). */
   isAllocated: boolean;
-  /** Project lead (manages tasks on boards they can see; no implicit access to other departments). */
+  /** Project lead: sees and manages every board of their own project (allocating people stays with the department lead). */
   isProjectLead: boolean;
 };
 
 export function boardAccess(a: BoardAccessInput): { canView: boolean; canManage: boolean; canAllocate: boolean } {
-  const canView = a.viewAll || a.isDeptLead || a.isAllocated;
+  const canView = a.viewAll || a.isDeptLead || a.isAllocated || a.isProjectLead;
   return {
     canView,
-    canManage: a.viewAll || a.isDeptLead || (a.isProjectLead && canView),
+    canManage: a.viewAll || a.isDeptLead || a.isProjectLead,
     canAllocate: a.viewAll || a.isDeptLead,
   };
 }

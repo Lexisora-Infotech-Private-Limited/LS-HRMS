@@ -240,6 +240,8 @@ model LeaveRequest {
   cancelRequestedAt  DateTime?
   cancelledAt        DateTime?
   touchesLockedPeriod Boolean           @default(false)
+  /// Set when the system created the request: LATE_ARRIVAL = late by the shift's half-day threshold.
+  autoReason         String?
   version            Int                @default(0)
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
@@ -366,9 +368,19 @@ model SalaryTemplate {
   payType         PayrollPayType @default(SALARY)
   employmentTypes String[]
   isDefault       Boolean        @default(false)
-  /// [{componentCode, calc: PERCENT_OF_GROSS|PERCENT_OF_COMPONENT|BALANCING|FIXED|STATUTORY, value?, base?}]
+  /// Applies when the annual CTC is in [minCtcPaise, maxCtcPaise) — null = open-ended on that side.
+  minCtcPaise     Int?
+  maxCtcPaise     Int?
+  active          Boolean        @default(true)
+  /// [{componentCode, label?, kind?: EARNING|DEDUCTION, calc: PERCENT_OF_GROSS|PERCENT_OF_COMPONENT|BALANCING|FIXED|STATUTORY, value?, base?}]
   lines           Json
+  /// {employeePct, employerPct, wageCeiling} — the PF rates this structure uses (null = statutory 12% / 12% / ₹15,000).
+  pf              Json?
+  /// {enabled, employeePct, employerPct, grossLimit} — ESI settings for this structure (null = statutory 0.75% / 3.25% up to ₹21,000).
+  esi             Json?
+  updatedByName   String?
   createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @default(now()) @updatedAt
 
   @@unique([tenantId, name])
 }
@@ -388,6 +400,10 @@ model EmployeeSalary {
   status            String         @default("ACTIVE")
   payType           PayrollPayType @default(SALARY)
   templateId        String?
+  /// PF rates snapshotted from the structure at revision time (null = statutory defaults).
+  pfConfig          Json?
+  /// ESI settings snapshotted from the structure at revision time (null = statutory defaults).
+  esiConfig         Json?
   /// JOINING | APPRAISAL | PROMOTION | CORRECTION | OTHER
   reason            String         @default("JOINING")
   note              String?
@@ -490,6 +506,10 @@ model PayrollItem {
   paidLeaveDays          Float             @default(0)
   unpaidLeaveDays        Float             @default(0)
   absentDays             Float             @default(0)
+  /// Late marks in the period and their penalty: the CL part is debited at finalize, the rest is in lopDays.
+  lateMarks              Int               @default(0)
+  latePenaltyLeaveDays   Float             @default(0)
+  latePenaltyLopDays     Float             @default(0)
   lopDays                Float             @default(0)
   paidDays               Float             @default(0)
   projectedDays          Float             @default(0)

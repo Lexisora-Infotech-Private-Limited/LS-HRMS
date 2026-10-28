@@ -12,6 +12,7 @@ import type {
   ShiftInput,
   ShiftRow,
 } from '@lexisora/shared';
+import { holidayLocationsOverlap } from '@lexisora/shared';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { AuditService } from '../../../core/audit/audit.service';
 import { NotificationsService } from '../../../core/notifications/notifications.service';
@@ -90,7 +91,10 @@ export class MastersService {
       name: input.name,
       ...v,
       graceMinutes: input.graceMinutes,
-      halfDayIfLateByMinutes: input.halfDayIfLateByMinutes === undefined ? 120 : input.halfDayIfLateByMinutes,
+      halfDayIfLateByMinutes: input.halfDayIfLateByMinutes === undefined ? 120 : input.halfDayIfLateByMinutes || null,
+      earlyOutGraceMinutes: input.earlyOutGraceMinutes ?? 15,
+      lateMarksAllowed: input.lateMarksAllowed ?? 0,
+      lateMarksAllowedFrom: input.lateMarksAllowed ? dateOf(istKeyOf(new Date())) : null,
       isDefault: makeDefault,
       archivedAt: null,
     };
@@ -110,17 +114,29 @@ export class MastersService {
         ...(input.name ? { name: input.name } : {}),
         ...v,
         ...(input.graceMinutes !== undefined ? { graceMinutes: input.graceMinutes } : {}),
-        ...(input.halfDayIfLateByMinutes !== undefined ? { halfDayIfLateByMinutes: input.halfDayIfLateByMinutes } : {}),
+        ...(input.halfDayIfLateByMinutes !== undefined ? { halfDayIfLateByMinutes: input.halfDayIfLateByMinutes || null } : {}),
+        ...(input.earlyOutGraceMinutes !== undefined ? { earlyOutGraceMinutes: input.earlyOutGraceMinutes } : {}),
+        // A new monthly late limit takes effect today: earlier days keep what they were.
+        ...(input.lateMarksAllowed !== undefined && input.lateMarksAllowed !== s.lateMarksAllowed
+          ? { lateMarksAllowed: input.lateMarksAllowed, lateMarksAllowedFrom: input.lateMarksAllowed ? dateOf(istKeyOf(new Date())) : null }
+          : {}),
         ...(input.isDefault !== undefined ? { isDefault: input.isDefault || s.isDefault } : {}),
       },
     });
     const diff: Record<string, unknown> = {};
-    for (const k of ['name', 'startMinute', 'endMinute', 'graceMinutes', 'breakMinutes', 'weeklyOffDays', 'minFullDayMinutes', 'minHalfDayMinutes', 'halfDayIfLateByMinutes'] as const) {
+    for (const k of ['name', 'startMinute', 'endMinute', 'graceMinutes', 'breakMinutes', 'weeklyOffDays', 'minFullDayMinutes', 'minHalfDayMinutes', 'halfDayIfLateByMinutes', 'earlyOutGraceMinutes', 'lateMarksAllowed'] as const) {
       if (JSON.stringify(s[k]) !== JSON.stringify(saved[k])) diff[k] = { from: s[k], to: saved[k] };
     }
     await this.audit.record({ action: 'shift.updated', entity: 'Shift', entityId: id, meta: diff as any });
     const counts = await this.currentShiftMap();
-    return toShiftRow(saved, [...counts.values()].filter((x) => x === id).length);
+    const holders = [...counts.entries()].filter(([, sid]) => sid === id).map(([emp]) => emp);
+    // Timing / grace / thresholds / the monthly late limit changed: recompute this month's days of
+    // everyone on the shift (a late beyond the new limit becomes a half day from today on).
+    if (holders.length && Object.keys(diff).some((k) => k !== 'name')) {
+      const today = istKeyOf(new Date());
+      await this.jobs.enqueue('time.recomputeRange', { tenantId: requireContext().tenantId, employeeIds: holders, from: `${today.slice(0, 7)}-01`, to: today });
+    }
+    return toShiftRow(saved, holders.length);
   }
 
   async archiveShift(id: string) {
@@ -128,9 +144,16 @@ export class MastersService {
     if (!s) throw notFound('Shift');
     if (s.isDefault) throw new AppError(409, 'SHIFT_IN_USE', 'Make another shift the default before archiving this one');
     const today = dateOf(istKeyOf(new Date()));
-    const inUse = await this.prisma.shiftAssignment.count({ where: { shiftId: id, OR: [{ effectiveTo: null }, { effectiveTo: { gte: today } }] } });
-    const direct = await this.prisma.employee.count({ where: { shiftId: id, status: { in: [...ACTIVE] } } });
-    if (inUse || direct) throw new AppError(409, 'SHIFT_IN_USE', 'This shift still has current or future allocations');
+    const held = await this.prisma.shiftAssignment.findMany({ where: { shiftId: id, OR: [{ effectiveTo: null }, { effectiveTo: { gte: today } }] }, select: { employeeId: true } });
+    const direct = await this.prisma.employee.findMany({ where: { shiftId: id, status: { in: [...ACTIVE] } }, select: { id: true } });
+    if (held.length || direct.length) {
+      const holders = await this.prisma.employee.findMany({ where: { id: { in: [...new Set([...held.map((h) => h.employeeId), ...direct.map((d) => d.id)])] } }, select: { fullName: true, empCode: true, status: true }, orderBy: { empCode: 'asc' } });
+      // Active holders already show in the Employees count, so the plain message is enough. Only when exited
+      // employees alone are blocking (count 0) do we explain who — capped so a long list never floods the toast.
+      if (holders.some((e) => e.status !== 'EXITED')) throw new AppError(409, 'SHIFT_IN_USE', 'This shift still has current or future allocations');
+      const names = holders.slice(0, 3).map((e) => `${e.fullName} (${e.empCode})`).join(', ');
+      throw new AppError(409, 'SHIFT_IN_USE', `Can't archive: allocations of exited employees still hold this shift — ${names}${holders.length > 3 ? ` and ${holders.length - 3} more` : ''}`);
+    }
     await this.prisma.shift.update({ where: { id }, data: { archivedAt: new Date() } });
     await this.audit.record({ action: 'shift.archived', entity: 'Shift', entityId: id, meta: { name: s.name } });
     return { ok: true };
@@ -141,7 +164,7 @@ export class MastersService {
     const rows = await this.prisma.shiftAssignment.findMany({
       where: { ...(q.shiftId ? { shiftId: q.shiftId } : {}) },
       include: { shift: true },
-      orderBy: [{ effectiveFrom: 'desc' }],
+      orderBy: [{ createdAt: 'desc' }, { effectiveFrom: 'desc' }],
       take: 500,
     });
     const emps = await this.prisma.employee.findMany({
@@ -184,37 +207,53 @@ export class MastersService {
     if (!emps.length) throw badRequest('Select employees');
     const from = dateOf(input.effectiveFrom);
     const to = input.effectiveTo ? dateOf(input.effectiveTo) : null;
+    const shiftChanged: string[] = [];
+    let recomputeFrom = input.effectiveFrom;
     for (const e of emps) {
       const start = e.joiningDate && keyOf(e.joiningDate) > input.effectiveFrom ? e.joiningDate : from;
+      // Re-allocating the same shift as HR's last allocation for this employee only moves its dates (no new row);
+      // a different shift adds a row.
+      const latest = await this.prisma.shiftAssignment.findFirst({ where: { employeeId: e.id }, orderBy: [{ createdAt: 'desc' }] });
+      const same = latest && latest.shiftId === shift.id ? latest : null;
+      const others = same ? { id: { not: same.id } } : {};
+      if (same && keyOf(same.effectiveFrom) <= today && keyOf(same.effectiveFrom) < input.effectiveFrom && (await this.locks.isLocked(keyOf(same.effectiveFrom)))) {
+        throw new AppError(409, 'PERIOD_LOCKED', 'The existing allocation starts in a locked attendance period');
+      }
       // overlap check against closed ranges that are not the open-ended current one
       const overlapping = await this.prisma.shiftAssignment.findFirst({
-        where: { employeeId: e.id, effectiveTo: { not: null, gte: start }, effectiveFrom: to ? { lte: to } : undefined },
+        where: { employeeId: e.id, ...others, effectiveTo: { not: null, gte: start }, effectiveFrom: to ? { lte: to } : undefined },
       });
       if (overlapping && keyOf(overlapping.effectiveFrom) >= keyOf(start)) {
         throw new AppError(409, 'ALLOCATION_OVERLAP', `${e.fullName} already has a shift allocation in this range`);
       }
       await this.prisma.$transaction(async (tx) => {
-        const open = await tx.shiftAssignment.findMany({ where: { tenantId: ctx.tenantId, employeeId: e.id, OR: [{ effectiveTo: null }, { effectiveTo: { gte: start } }] } });
+        const open = await tx.shiftAssignment.findMany({ where: { tenantId: ctx.tenantId, employeeId: e.id, ...others, OR: [{ effectiveTo: null }, { effectiveTo: { gte: start } }] } });
         for (const o of open) {
           if (o.effectiveFrom >= start) await tx.shiftAssignment.delete({ where: { id: o.id } });
           else await tx.shiftAssignment.update({ where: { id: o.id }, data: { effectiveTo: dateOf(addDays(keyOf(start), -1)) } });
         }
-        await tx.shiftAssignment.create({ data: { tenantId: ctx.tenantId, employeeId: e.id, shiftId: shift.id, effectiveFrom: start, effectiveTo: to, assignedByName: ctx.userName ?? null } });
+        if (same) await tx.shiftAssignment.update({ where: { id: same.id }, data: { effectiveFrom: start, effectiveTo: to, assignedByName: ctx.userName ?? null, createdAt: new Date() } });
+        else await tx.shiftAssignment.create({ data: { tenantId: ctx.tenantId, employeeId: e.id, shiftId: shift.id, effectiveFrom: start, effectiveTo: to, assignedByName: ctx.userName ?? null } });
         if (keyOf(start) <= today && (!to || keyOf(to) >= today)) await tx.employee.update({ where: { id: e.id }, data: { shiftId: shift.id } });
       });
+      if (!same) shiftChanged.push(e.id);
+      if (same && keyOf(same.effectiveFrom) < recomputeFrom) recomputeFrom = keyOf(same.effectiveFrom);
     }
     await this.audit.record({ action: 'shift.allocated', entity: 'Shift', entityId: shift.id, meta: { employeeIds: emps.map((e) => e.id), from: input.effectiveFrom, to: input.effectiveTo ?? null } });
     const timing = `${fmtMinute(shift.startMinute)}–${fmtMinute(shift.endMinute)}`;
-    await this.notifications.notify({
-      userIds: emps.map((e) => e.userId).filter((x): x is string => !!x),
-      type: 'shift.changed',
-      title: `Your shift changes to ${shift.name} ${timing} from ${dm(input.effectiveFrom)}`,
-      link: '/attendance',
-      from: ctx.userName ?? 'HR',
-      email: true,
-    });
-    if (input.effectiveFrom <= today) {
-      await this.jobs.enqueue('time.recomputeRange', { tenantId: ctx.tenantId, employeeIds: emps.map((e) => e.id), from: input.effectiveFrom, to: today });
+    const notifyUsers = emps.filter((e) => shiftChanged.includes(e.id)).map((e) => e.userId).filter((x): x is string => !!x);
+    if (notifyUsers.length) {
+      await this.notifications.notify({
+        userIds: notifyUsers,
+        type: 'shift.changed',
+        title: `Your shift changes to ${shift.name} ${timing} from ${dm(input.effectiveFrom)}`,
+        link: '/attendance',
+        from: ctx.userName ?? 'HR',
+        email: true,
+      });
+    }
+    if (recomputeFrom <= today) {
+      await this.jobs.enqueue('time.recomputeRange', { tenantId: ctx.tenantId, employeeIds: emps.map((e) => e.id), from: recomputeFrom, to: today });
     }
     return { ok: true, count: emps.length };
   }
@@ -372,20 +411,31 @@ export class MastersService {
     return groupHolidays(rows).slice(0, limit);
   }
 
+  /** The holiday already on `date` for any of these locations (one holiday per date and location). */
+  private async clashOn(date: string, locationIds: string[], exceptId?: string): Promise<Holiday | null> {
+    const same = await this.prisma.holiday.findMany({ where: { date: dateOf(date), ...(exceptId ? { id: { not: exceptId } } : {}) } });
+    return same.find((h) => holidayLocationsOverlap(h.locationIds, locationIds)) ?? null;
+  }
+
   async createHoliday(input: HolidayInput) {
     const from = input.date;
     const to = input.endDate && input.endDate > from ? input.endDate : from;
+    const locs = input.locationIds ?? [];
+    // Refuse the whole request when any of its dates already has a holiday for these locations.
+    const clashes: string[] = [];
+    for (let d = from; d <= to; d = addDays(d, 1)) {
+      const c = await this.clashOn(d, locs);
+      if (c) clashes.push(`${dm(d)} is already ${c.name}`);
+    }
+    if (clashes.length) throw new AppError(409, 'HOLIDAY_CLASH', `${clashes.join('; ')} · one holiday per date — edit or delete that one instead`, { fieldErrors: { date: [clashes[0]!] } });
     const created: Holiday[] = [];
     for (let d = from; d <= to; d = addDays(d, 1)) {
-      const exists = await this.prisma.holiday.findFirst({ where: { date: dateOf(d), name: input.name } });
-      if (exists) continue;
       created.push(
         await this.prisma.holiday.create({
           data: { date: dateOf(d), name: input.name, type: input.type ?? 'MANDATORY', calendar: input.calendar || `National ${from.slice(0, 4)}`, locationIds: input.locationIds ?? [] } as any,
         }),
       );
     }
-    if (!created.length) throw new AppError(409, 'DUPLICATE', 'This holiday is already on the calendar');
     await this.audit.record({ action: 'holiday.created', entity: 'Holiday', entityId: created[0]!.id, meta: { name: input.name, from, to } });
     await this.recomputeIfPast(from, to);
     return { ok: true, count: created.length };
@@ -394,6 +444,8 @@ export class MastersService {
   async updateHoliday(id: string, input: Partial<HolidayInput>) {
     const h = await this.prisma.holiday.findFirst({ where: { id } });
     if (!h) throw notFound('Holiday');
+    const clash = await this.clashOn(input.date ?? keyOf(h.date), input.locationIds ?? h.locationIds, id);
+    if (clash) throw new AppError(409, 'HOLIDAY_CLASH', `${dm(input.date ?? keyOf(h.date))} is already ${clash.name} · one holiday per date`, { fieldErrors: { date: [`Already ${clash.name}`] } });
     const saved = await this.prisma.holiday.update({
       where: { id },
       data: {
@@ -423,31 +475,38 @@ export class MastersService {
     const list = (BUILTIN_HOLIDAYS[year] ?? []).filter((h) => h.calendars.includes(calendar));
     if (!list.length) throw new AppError(404, 'NO_LIST', `No built-in ${calendar} list for ${year}`);
     let n = 0;
+    let skipped = 0;
     for (const h of list) {
-      const exists = await this.prisma.holiday.findFirst({ where: { date: dateOf(h.date), name: h.name } });
-      if (exists) continue;
+      // Dates that already have a holiday are kept as they are.
+      if (await this.clashOn(h.date, [])) {
+        skipped++;
+        continue;
+      }
       await this.prisma.holiday.create({ data: { date: dateOf(h.date), name: h.name, type: h.type, calendar: `${calendar} ${year}`, locationIds: [] } as any });
       n++;
     }
-    await this.audit.record({ action: 'holiday.imported', entity: 'Holiday', meta: { year, calendar, added: n } });
-    return { ok: true, count: n };
+    await this.audit.record({ action: 'holiday.imported', entity: 'Holiday', meta: { year, calendar, added: n, skipped } });
+    return { ok: true, count: n, skipped };
   }
 
   async copyHolidays(fromYear: number, toYear: number) {
     if (fromYear === toYear) throw badRequest('Pick a different year');
     const rows = await this.prisma.holiday.findMany({ where: { date: { gte: dateOf(`${fromYear}-01-01`), lte: dateOf(`${fromYear}-12-31`) } } });
     let n = 0;
+    let skipped = 0;
     for (const h of rows) {
       const k = keyOf(h.date);
       const target = `${toYear}${k.slice(4)}`;
       if (target.endsWith('02-29')) continue;
-      const exists = await this.prisma.holiday.findFirst({ where: { date: dateOf(target), name: h.name } });
-      if (exists) continue;
+      if (await this.clashOn(target, h.locationIds)) {
+        skipped++;
+        continue;
+      }
       await this.prisma.holiday.create({ data: { date: dateOf(target), name: h.name, type: h.type, calendar: h.calendar.replace(String(fromYear), String(toYear)), locationIds: h.locationIds } as any });
       n++;
     }
-    await this.audit.record({ action: 'holiday.copied', entity: 'Holiday', meta: { fromYear, toYear, added: n } });
-    return { ok: true, count: n };
+    await this.audit.record({ action: 'holiday.copied', entity: 'Holiday', meta: { fromYear, toYear, added: n, skipped } });
+    return { ok: true, count: n, skipped };
   }
 
   private async recomputeIfPast(from: string, to: string) {
@@ -488,6 +547,9 @@ export function toShiftRow(s: Shift, employees: number): ShiftRow {
     minFullDayMinutes: s.minFullDayMinutes,
     minHalfDayMinutes: s.minHalfDayMinutes,
     halfDayIfLateByMinutes: s.halfDayIfLateByMinutes,
+    earlyOutGraceMinutes: s.earlyOutGraceMinutes,
+    lateMarksAllowed: s.lateMarksAllowed,
+    lateMarksAllowedFrom: s.lateMarksAllowedFrom ? keyOf(s.lateMarksAllowedFrom) : null,
   };
 }
 

@@ -56,7 +56,7 @@ export default function EmployeesPage() {
           <>
             {can('masters.manage') && <button className="btn btn-ghost" onClick={() => nav('/masters')}>Masters</button>}
             <button className="btn btn-ghost" onClick={() => void download(`/employees/export?tab=${tab}${q ? `&q=${encodeURIComponent(q)}` : ''}`, 'employees.csv')}>Export</button>
-            {manage && <button className="btn btn-secondary" onClick={() => setImporting(true)}>Import CSV</button>}
+            {manage && <button className="btn btn-secondary" onClick={() => setImporting(true)}>Bulk import (Excel)</button>}
             {manage && <button className="btn btn-primary" onClick={() => setAdding(true)}>Add employee</button>}
           </>
         }
@@ -92,7 +92,7 @@ export default function EmployeesPage() {
   );
 }
 
-/** Import CSV: upload → validate (row errors) → commit valid rows. */
+/** Bulk import: upload the filled Excel template → check every row (S.No shown beside any problem) → import the valid rows. */
 function ImportModal({ onClose }: { onClose: () => void }) {
   const { toastError } = useToast();
   const [file, setFile] = useState<File | null>(null);
@@ -121,12 +121,12 @@ function ImportModal({ onClose }: { onClose: () => void }) {
   const done = preview?.status === 'DONE';
   return (
     <Modal
-      title="Import employees"
+      title="Import employees in bulk"
       wide
       onClose={onClose}
       actions={
         <>
-          <button className="btn btn-ghost" onClick={() => void download('/employees/import/template', 'employee-import-template.csv')}>Download template</button>
+          <button className="btn btn-ghost" onClick={() => void download('/employees/import/template.xlsx', 'employee-import-template.xlsx')}>Download Excel template</button>
           {preview && preview.errors.length > 0 && <button className="btn btn-ghost" onClick={() => void download(`/employees/import/${preview.id}/errors.csv`, 'import-errors.csv')}>Error report</button>}
           <button className="btn btn-secondary" onClick={onClose}>{done ? 'Close' : 'Cancel'}</button>
           {!preview ? (
@@ -142,9 +142,9 @@ function ImportModal({ onClose }: { onClose: () => void }) {
       {!preview ? (
         <div className="stack" style={{ gap: 12 }}>
           <div className="field">
-            <label>CSV file</label>
-            <FileDrop file={file} onFile={setFile} accept=".csv,text/csv" />
-            <div className="field-hint">Columns: full_name, official_email, phone, department, designation, manager_email, employment_type, work_mode, joining_date, personal_email, branch.</div>
+            <label>Excel file</label>
+            <FileDrop file={file} onFile={setFile} accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+            <div className="field-hint">Download the <b>Excel template</b> and fill it in. In it, <b style={{ color: '#d00000' }}>red column headings are required</b> and black ones are optional. Department, designation and branch have drop-down lists. Upload the saved .xlsx here.</div>
           </div>
           <label className="radio"><input type="checkbox" checked={createMissing} onChange={(e) => setCreateMissing(e.target.checked)} /><span className="dot" style={{ borderRadius: 3 }} />Create departments, designations and branches that don't exist yet</label>
         </div>
@@ -159,11 +159,11 @@ function ImportModal({ onClose }: { onClose: () => void }) {
           {!done && <label className="radio"><input type="checkbox" checked={sendInvites} onChange={(e) => setSendInvites(e.target.checked)} /><span className="dot" style={{ borderRadius: 3 }} />Send onboarding invites to imported employees</label>}
           <div style={{ maxHeight: 260, overflow: 'auto' }}>
             <table className="table">
-              <thead><tr><th>Row</th><th>Name</th><th>Official email</th><th>Department</th><th>Type</th><th></th></tr></thead>
+              <thead><tr><th>S.No</th><th>Name</th><th>Official email</th><th>Department</th><th>Type</th><th></th></tr></thead>
               <tbody>
                 {preview.preview.map((r) => (
                   <tr key={r.row}>
-                    <td className="tnum">{r.row}</td><td>{r.fullName}</td><td>{r.officialEmail}</td><td>{r.department}</td><td>{r.employmentType}</td>
+                    <td className="tnum">{r.sNo ?? r.row}</td><td>{r.fullName}</td><td>{r.officialEmail}</td><td>{r.department}</td><td>{r.employmentType}</td>
                     <td>{r.ok ? <Tag tone="accent">OK</Tag> : <Tag tone="danger">Error</Tag>}</td>
                   </tr>
                 ))}
@@ -173,7 +173,7 @@ function ImportModal({ onClose }: { onClose: () => void }) {
           {preview.errors.length > 0 && (
             <div className="note" style={{ maxHeight: 160, overflow: 'auto', fontSize: 12.5 }}>
               {preview.errors.map((e, i) => (
-                <div key={i}>Row {e.row}{e.field ? ` · ${e.field}` : ''}: {e.message}</div>
+                <div key={i}><b>S.No {e.sNo ?? e.row}</b>{e.field ? ` · ${e.field.replace(/_/g, ' ')}` : ''}: {e.message}</div>
               ))}
             </div>
           )}

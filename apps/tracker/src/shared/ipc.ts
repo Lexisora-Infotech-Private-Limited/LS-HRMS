@@ -140,7 +140,10 @@ export type ViewState = {
   workedSec: number;
   worked: string;
   breakTime: string;
+  /** Deducted idle + an open idle dialog + "I was working" claims waiting for review. */
   idleTime: string;
+  /** The claimed part of idleTime, null when none. */
+  idleClaimed: string | null;
   tasks: TaskRow[];
   showTaskSearch: boolean;
   activeTask: { id: string; key: string; title: string } | null;
@@ -160,7 +163,7 @@ export type ViewState = {
 
   summary: {
     title: string;
-    byTask: { key: string; title: string; time: string }[];
+    byTask: { key: string; title: string; time: string; projectName?: string }[];
     screenshots: number;
     timeline: TimelineBar[];
     canConfirm: boolean;

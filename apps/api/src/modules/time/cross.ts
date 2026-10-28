@@ -12,11 +12,12 @@ import { dateOf, keyOf } from './lib/time-utils';
 
 export type SegmentRow = { id: string; clientId?: string; employeeId: string; workDate: Date; kind: 'WORK' | 'BREAK' | 'IDLE' | 'IDLE_WORK' | string; taskId: string | null; projectId: string | null; startAt: Date; endAt: Date; durationSec: number; idleResolution: string | null };
 export type DaySummaryRow = { employeeId: string; workDate: Date; workedSec: number; breakSec: number; idleSec: number; idleDeductedSec: number; screenshotCount: number };
-export type IdleClaimRow = { id: string; employeeId: string; workDate: Date; startAt: Date; endAt: Date; minutes: number; taskId: string | null; note: string | null; status: string };
+export type IdleClaimRow = { id: string; employeeId: string; segmentId?: string | null; workDate: Date; startAt: Date; endAt: Date; minutes: number; taskId: string | null; projectId?: string | null; note: string | null; status: string };
 export type ScreenshotRow = { id: string; employeeId: string; capturedAt: Date; workDate: Date; taskId: string | null; fileId: string | null; thumbFileId: string | null; blurred: boolean };
 export type ProjectRow = { id: string; key: string; name: string; isInternal: boolean; leadEmployeeId: string | null; billable: boolean; status?: string };
-export type TaskRow = { id: string; key: string; title: string; projectId: string; moduleName: string | null; assigneeEmployeeId: string | null; isStanding: boolean; status?: string };
-export type LeaveDayRow = { employeeId: string; date: string; units: number; isPaid: boolean; typeCode: string | null };
+export type TaskRow = { id: string; key: string; title: string; projectId: string; moduleName: string | null; assigneeEmployeeId: string | null; isStanding: boolean; status?: string; estimatedMinutes?: number | null; loggedMinutes?: number };
+/** session: FULL | FIRST_HALF | SECOND_HALF; auto: the request was created by attendance (late arrival). */
+export type LeaveDayRow = { employeeId: string; date: string; units: number; isPaid: boolean; typeCode: string | null; session: string; auto: boolean };
 
 @Injectable()
 export class CrossReader {
@@ -42,6 +43,11 @@ export class CrossReader {
   segments(employeeIds: string | string[], from: string, to: string): Promise<SegmentRow[]> {
     const ids = Array.isArray(employeeIds) ? employeeIds : [employeeIds];
     return this.safe('activitySegment', (m) => m.findMany({ where: { employeeId: { in: ids }, workDate: { gte: dateOf(from), lte: dateOf(to) } }, orderBy: { startAt: 'asc' } }), []);
+  }
+
+  /** The desktop tracker sent activity for this day (it then owns idle detection). */
+  async hasSegments(employeeId: string, date: string): Promise<boolean> {
+    return (await this.safe('activitySegment', (m) => m.count({ where: { employeeId, workDate: dateOf(date) } }), 0)) > 0;
   }
 
   daySummaries(employeeIds: string[], from: string, to: string): Promise<DaySummaryRow[]> {
@@ -134,7 +140,7 @@ export class CrossReader {
       [],
     );
     if (!rows.length) return [];
-    const reqs = await this.safe<any[]>('leaveRequest', (m) => m.findMany({ where: { id: { in: [...new Set(rows.map((r) => r.requestId))] } }, select: { id: true, leaveTypeId: true, status: true } }), []);
+    const reqs = await this.safe<any[]>('leaveRequest', (m) => m.findMany({ where: { id: { in: [...new Set(rows.map((r) => r.requestId))] } }, select: { id: true, leaveTypeId: true, status: true, autoReason: true } }), []);
     const types = await this.safe<any[]>('leaveType', (m) => m.findMany({ where: { id: { in: [...new Set(reqs.map((r) => r.leaveTypeId))] } }, select: { id: true, code: true } }), []);
     const reqMap = new Map(reqs.map((r) => [r.id, r]));
     const typeMap = new Map(types.map((t) => [t.id, t.code as string]));
@@ -143,7 +149,24 @@ export class CrossReader {
         const req = reqMap.get(r.requestId);
         return !req || req.status === 'APPROVED' || req.status === 'CANCELLATION_PENDING';
       })
-      .map((r) => ({ employeeId: r.employeeId, date: keyOf(r.date), units: Number(r.units), isPaid: !!r.isPaid, typeCode: typeMap.get(reqMap.get(r.requestId)?.leaveTypeId) ?? null }));
+      .map((r) => {
+        const req = reqMap.get(r.requestId);
+        return { employeeId: r.employeeId, date: keyOf(r.date), units: Number(r.units), isPaid: !!r.isPaid, typeCode: typeMap.get(req?.leaveTypeId) ?? null, session: String(r.session ?? 'FULL'), auto: !!req?.autoReason };
+      });
+  }
+
+  /** Leave on one date folded for the day calculation (planned halves move the expected start / end). */
+  static leaveOnDay(rows: LeaveDayRow[]): { fraction: number; typeCode: string | null; paid: boolean; plannedFirstHalf: boolean; plannedSecondHalf: boolean } | null {
+    const units = rows.reduce((s, l) => s + l.units, 0);
+    if (units <= 0) return null;
+    const planned = rows.filter((l) => !l.auto);
+    return {
+      fraction: Math.min(1, units),
+      typeCode: rows[0]?.typeCode ?? null,
+      paid: rows.every((l) => l.isPaid),
+      plannedFirstHalf: planned.some((l) => l.session === 'FIRST_HALF'),
+      plannedSecondHalf: planned.some((l) => l.session === 'SECOND_HALF'),
+    };
   }
 
   leaveRequest(id: string): Promise<{ id: string; employeeId: string; fromDate: Date; toDate: Date; status: string } | null> {

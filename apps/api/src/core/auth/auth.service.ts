@@ -8,6 +8,7 @@ import { AppError, badRequest } from '../http/errors';
 import { MailService } from '../mail/mail.service';
 import { AuditService } from '../audit/audit.service';
 import { randomToken, sha256, TokenService } from './token.service';
+import { applyVcardAccess } from './vcard-access';
 
 export type ClientMeta = { ip?: string; userAgent?: string };
 
@@ -76,10 +77,23 @@ export class AuthService {
     return token;
   }
 
-  /** Rotating refresh: old token is revoked; reuse of a revoked token revokes the whole family. */
+  /**
+   * Rotating refresh: old token is revoked; reuse of a revoked token revokes the whole family.
+   * A short grace window tolerates a benign race (e.g. several tabs, or the web app and the
+   * desktop tracker, all waking from sleep together and refreshing within the same instant) by
+   * following the rotation chain to the still-valid token instead of flagging it as reuse.
+   */
   async refresh(token: string, meta: ClientMeta) {
-    const row = await this.prisma.raw.refreshToken.findUnique({ where: { tokenHash: sha256(token) } });
-    if (!row || row.expiresAt < new Date()) throw new AppError(401, 'SESSION_EXPIRED', 'Please sign in again');
+    const REUSE_GRACE_MS = 15_000;
+    const first = await this.prisma.raw.refreshToken.findUnique({ where: { tokenHash: sha256(token) } });
+    if (!first) throw new AppError(401, 'SESSION_EXPIRED', 'Please sign in again');
+    let row = first;
+    while (row.revokedAt && row.replacedBy && Date.now() - row.revokedAt.getTime() < REUSE_GRACE_MS) {
+      const next = await this.prisma.raw.refreshToken.findUnique({ where: { tokenHash: row.replacedBy } });
+      if (!next) break;
+      row = next;
+    }
+    if (row.expiresAt < new Date()) throw new AppError(401, 'SESSION_EXPIRED', 'Please sign in again');
     if (row.revokedAt) {
       await this.prisma.raw.refreshToken.updateMany({ where: { userId: row.userId, revokedAt: null }, data: { revokedAt: new Date() } });
       this.log.warn(`Refresh token reuse detected for user ${row.userId}`);
@@ -124,7 +138,7 @@ export class AuthService {
       title,
       roleKey: u.role.key,
       roleName: u.role.name,
-      permissions: u.role.permissions,
+      permissions: await applyVcardAccess(this.prisma, u.tenantId, { roleKey: u.role.key, employeeId: e?.id ?? null }, u.role.permissions),
       isPlatformAdmin: u.isPlatformAdmin,
       workMode: e?.workMode ?? null,
       branding: {

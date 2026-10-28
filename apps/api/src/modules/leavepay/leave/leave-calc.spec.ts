@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   availableOf,
+  compOffEarned,
+  compOffUnitsFor,
   consumeCompOff,
   expandLeaveDays,
+  planAutoCompOff,
   leaveSummaryLabel,
   monthlyCreditMonths,
   prorateYearly,
@@ -135,6 +138,54 @@ describe('accrual and pro-ration', () => {
     ];
     expect(consumeCompOff(grants, 1.5, '2026-11-05')).toEqual({ consumed: [{ grantId: 'early', units: 1 }, { grantId: 'late', units: 0.5 }], shortfall: 0 });
     expect(consumeCompOff(grants, 1, '2026-11-20')).toEqual({ consumed: [{ grantId: 'late', units: 1 }], shortfall: 0 });
+  });
+});
+
+describe('comp-off from approved timesheets', () => {
+  const rule = { fullDayMinutes: 420, halfDayMinutes: 240 };
+
+  it('7h or more = 1 day, 4h or more = ½ day, less = nothing', () => {
+    expect(compOffUnitsFor(480, rule)).toBe(1);
+    expect(compOffUnitsFor(420, rule)).toBe(1);
+    expect(compOffUnitsFor(419, rule)).toBe(0.5);
+    expect(compOffUnitsFor(240, rule)).toBe(0.5);
+    expect(compOffUnitsFor(239, rule)).toBe(0);
+  });
+
+  it('only holidays and weekly offs earn comp-off; working days never do', () => {
+    // Week of Mon 2 Nov 2026: Diwali on Sun 8 Nov, Sat 7 Nov is a weekly off.
+    const minutes = new Map([
+      ['2026-11-02', 540], // Monday — normal working day
+      ['2026-11-07', 300], // Saturday — half day
+      ['2026-11-08', 450], // Diwali — full day
+    ]);
+    expect(compOffEarned(minutes, cal, rule)).toEqual([
+      { date: '2026-11-07', minutes: 300, units: 0.5, kind: 'WEEKLY_OFF' },
+      { date: '2026-11-08', minutes: 450, units: 1, kind: 'HOLIDAY', holidayName: 'Diwali' },
+    ]);
+  });
+
+  it('a short holiday shift below the half-day mark earns nothing', () => {
+    expect(compOffEarned(new Map([['2026-10-20', 120]]), cal, rule)).toEqual([]);
+  });
+
+  it('first approval creates the grant; re-approval only tops up', () => {
+    const today = '2026-11-12';
+    expect(planAutoCompOff([], 1, '2027-01-07', today)).toEqual({ action: 'CREATE' });
+    expect(planAutoCompOff([{ id: 'g', status: 'APPROVED', units: 1, source: 'TIMESHEET' }], 1, '2027-01-07', today)).toEqual({ action: 'SKIP', reason: 'already credited' });
+    expect(planAutoCompOff([{ id: 'g', status: 'PARTIALLY_USED', units: 0.5, source: 'TIMESHEET' }], 1, '2027-01-07', today)).toEqual({ action: 'TOP_UP', grantId: 'g', delta: 0.5 });
+  });
+
+  it("the employee's own pending request for the date is approved by the timesheet", () => {
+    expect(planAutoCompOff([{ id: 'r', status: 'PENDING', units: 1, source: 'REQUEST' }], 0.5, '2027-01-07', '2026-11-12')).toEqual({ action: 'APPROVE_PENDING', grantId: 'r' });
+  });
+
+  it('rejected requests do not block, HR-cancelled timesheet grants and expired dates do', () => {
+    const today = '2026-11-12';
+    expect(planAutoCompOff([{ id: 'r', status: 'REJECTED', units: 1, source: 'REQUEST' }], 1, '2027-01-07', today)).toEqual({ action: 'CREATE' });
+    expect(planAutoCompOff([{ id: 'g', status: 'CANCELLED', units: 1, source: 'TIMESHEET' }], 1, '2027-01-07', today)).toEqual({ action: 'SKIP', reason: 'cancelled by HR' });
+    expect(planAutoCompOff([], 1, '2026-11-01', today)).toEqual({ action: 'SKIP', reason: 'would already be expired' });
+    expect(planAutoCompOff([], 0, '2027-01-07', today)).toEqual({ action: 'SKIP', reason: 'not enough hours' });
   });
 });
 

@@ -101,11 +101,11 @@ export default function LedgerPage() {
 
 function RangeInputs({ range, setRange }: { range: { from: string; to: string }; setRange: (r: { from: string; to: string }) => void }) {
   return (
-    <>
+    <div className="fin-range">
       <input type="date" className="input" aria-label="From" value={range.from} max={range.to || undefined} onChange={(e) => setRange({ ...range, from: e.target.value })} />
       <span className="fin-muted">to</span>
       <input type="date" className="input" aria-label="To" value={range.to} min={range.from || undefined} onChange={(e) => setRange({ ...range, to: e.target.value })} />
-    </>
+    </div>
   );
 }
 

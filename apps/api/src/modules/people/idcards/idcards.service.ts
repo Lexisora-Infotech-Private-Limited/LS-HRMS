@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { IdCard, IdCardTemplate, Prisma } from '@prisma/client';
 import { randomBytes } from 'node:crypto';
-import type { IdCardElement, IdCardPreviewData, IdCardRow, IdCardSettings, IdCardTemplateDto, IdCardTemplateInput } from '@lexisora/shared';
+import { COMPANY_PROFILE_KEY, DEFAULT_COMPANY_PROFILE, DEFAULT_ID_CARD_BG_FIT, DEFAULT_ID_CARD_PHOTO_FRAME, companyProfileSchema, idCardPhotoPlacement, type IdCardBgFit, type IdCardElement, type IdCardPreviewData, IdCardRow, IdCardSettings, IdCardTemplateDto, IdCardTemplateInput } from '@lexisora/shared';
 import { env } from '../../../config/env';
 import { AuditService } from '../../../core/audit/audit.service';
 import { getContext, requireContext } from '../../../core/context/request-context';
@@ -13,11 +13,17 @@ import { PrismaService } from '../../../core/prisma/prisma.service';
 import { SequenceService } from '../../../core/registry/sequence.service';
 import { SettingsService } from '../../../core/settings/settings.service';
 import { StorageService } from '../../../core/storage/storage.service';
-import { idCardMissing, MISSING_LABELS } from '../people.rules';
+import { buildVcf, idCardMissing, MISSING_LABELS } from '../people.rules';
+import { pickTemplateId } from './template-choice';
 import { dbDateKey, fmt, fmtStamp } from '../people.util';
-import { classicPortrait, landscapeMinimal, PT_PER_MM, qrDataUrl, renderCardSvg, svgToPng, toDataUrl } from './card-render';
+import { renderScanPage } from './scan-page';
+import { brandedQrDataUrl, cardDate, cardMobile, classicPortrait, darkenHex, dataUrlSize, landscapeMinimal, PT_PER_MM, qrDataUrl, renderCardSvg, svgToPng, toDataUrl } from './card-render';
 
 const SETTINGS_KEY = 'people.idcard.settings';
+/** employee id → the ID card template chosen for that person (everyone else uses the default). */
+const EMPLOYEE_TEMPLATES_KEY = 'people.idcard.employeeTemplates';
+/** role key → the ID card template for everyone in that role (unless they have their own). */
+const ROLE_TEMPLATES_KEY = 'people.idcard.roleTemplates';
 const ACTIVE: IdCard['status'][] = ['QUEUED', 'READY', 'SENT_TO_PRINT', 'PRINTED', 'ISSUED'];
 const STATUS_LABEL: Record<string, string> = {
   QUEUED: 'Queued',
@@ -91,6 +97,8 @@ export class IdCardsService {
       back: t.back as unknown as IdCardElement[],
       frontBgFileId: t.frontBgFileId,
       backBgFileId: t.backBgFileId,
+      frontBgFit: (t.frontBgFit as IdCardBgFit | null) ?? DEFAULT_ID_CARD_BG_FIT,
+      backBgFit: (t.backBgFit as IdCardBgFit | null) ?? DEFAULT_ID_CARD_BG_FIT,
       isDefault: t.isDefault,
       widthMm: t.widthMm,
       heightMm: t.heightMm,
@@ -107,7 +115,7 @@ export class IdCardsService {
   async createTemplate(i: IdCardTemplateInput) {
     const dims = i.orientation === 'LANDSCAPE' ? { widthMm: 85.6, heightMm: 53.98 } : { widthMm: 53.98, heightMm: 85.6 };
     const row = await this.prisma.idCardTemplate.create({
-      data: { name: i.name, orientation: i.orientation, ...dims, front: i.front, back: i.back, frontBgFileId: i.frontBgFileId ?? null, backBgFileId: i.backBgFileId ?? null, isDefault: false } as unknown as Prisma.IdCardTemplateUncheckedCreateInput,
+      data: { name: i.name, orientation: i.orientation, ...dims, front: i.front, back: i.back, frontBgFileId: i.frontBgFileId ?? null, backBgFileId: i.backBgFileId ?? null, frontBgFit: i.frontBgFit ?? DEFAULT_ID_CARD_BG_FIT, backBgFit: i.backBgFit ?? DEFAULT_ID_CARD_BG_FIT, isDefault: false } as unknown as Prisma.IdCardTemplateUncheckedCreateInput,
     });
     if (i.isDefault) await this.setDefault(row.id);
     await this.audit.record({ action: 'idcard.template.created', entity: 'IdCardTemplate', entityId: row.id, meta: { name: i.name } });
@@ -120,18 +128,142 @@ export class IdCardsService {
     const dims = i.orientation === 'LANDSCAPE' ? { widthMm: 85.6, heightMm: 53.98 } : { widthMm: 53.98, heightMm: 85.6 };
     await this.prisma.idCardTemplate.update({
       where: { id },
-      data: { name: i.name, orientation: i.orientation, ...dims, front: i.front, back: i.back, frontBgFileId: i.frontBgFileId ?? null, backBgFileId: i.backBgFileId ?? null, version: t.version + 1 },
+      data: { name: i.name, orientation: i.orientation, ...dims, front: i.front, back: i.back, frontBgFileId: i.frontBgFileId ?? null, backBgFileId: i.backBgFileId ?? null, frontBgFit: i.frontBgFit ?? DEFAULT_ID_CARD_BG_FIT, backBgFit: i.backBgFit ?? DEFAULT_ID_CARD_BG_FIT, version: t.version + 1 },
     });
     if (i.isDefault) await this.setDefault(id);
     await this.audit.record({ action: 'idcard.template.published', entity: 'IdCardTemplate', entityId: id, meta: { version: t.version + 1 } });
     return this.tplDto((await this.prisma.idCardTemplate.findUnique({ where: { id } }))!);
   }
 
+  /**
+   * Delete a template (it is archived, so cards already printed or issued with it still preview). The default cannot be deleted. Anyone assigned
+   * to it, by person or by role, goes back to the default, and cards still waiting to print are redrawn with what they should now use.
+   */
+  async deleteTemplate(id: string) {
+    const t = await this.prisma.idCardTemplate.findUnique({ where: { id } });
+    if (!t || t.status === 'ARCHIVED') throw notFound('Template');
+    if (t.isDefault) throw badRequest('Make another template the default before deleting this one', 'TEMPLATE_IS_DEFAULT');
+    const [own, byRole] = await Promise.all([this.employeeTemplateChoices(), this.roleTemplateChoices()]);
+    const people = Object.values(own).filter((v) => v === id).length;
+    const roles = Object.values(byRole).filter((v) => v === id).length;
+    await this.prisma.idCardTemplate.update({ where: { id }, data: { status: 'ARCHIVED' } });
+    if (people) await this.settingsSvc.set(EMPLOYEE_TEMPLATES_KEY, Object.fromEntries(Object.entries(own).filter(([, v]) => v !== id)));
+    if (roles) await this.settingsSvc.set(ROLE_TEMPLATES_KEY, Object.fromEntries(Object.entries(byRole).filter(([, v]) => v !== id)));
+    const r = await this.reapplyWaiting();
+    await this.audit.record({ action: 'idcard.template.deleted', entity: 'IdCardTemplate', entityId: id, meta: { name: t.name, people, roles, ...r } });
+    return { ok: true, people, roles, ...r };
+  }
+
   async setDefault(id: string) {
     if (!(await this.prisma.idCardTemplate.findUnique({ where: { id } }))) throw notFound('Template');
     await this.prisma.idCardTemplate.updateMany({ where: { isDefault: true }, data: { isDefault: false } });
     await this.prisma.idCardTemplate.update({ where: { id }, data: { isDefault: true } });
-    return { ok: true };
+    // Cards not yet sent to print follow the rules again (a person's own template, then their role's, then this default).
+    const { moved, regenerated } = await this.reapplyWaiting();
+    await this.audit.record({ action: 'idcard.template.default', entity: 'IdCardTemplate', entityId: id, meta: { moved, regenerated } });
+    return { ok: true, moved, regenerated };
+  }
+
+  private async employeeTemplateChoices(): Promise<Record<string, string>> {
+    return this.settingsSvc.get<Record<string, string>>(EMPLOYEE_TEMPLATES_KEY, {});
+  }
+
+  private async availableTemplateIds(): Promise<Set<string>> {
+    return new Set((await this.prisma.idCardTemplate.findMany({ where: { status: { not: 'ARCHIVED' } }, select: { id: true } })).map((t) => t.id));
+  }
+
+  private async roleTemplateChoices(): Promise<Record<string, string>> {
+    return this.settingsSvc.get<Record<string, string>>(ROLE_TEMPLATES_KEY, {});
+  }
+
+  /** employee id → role key (null when the person has no sign-in account). */
+  private async rolesOf(employeeIds: string[]): Promise<Map<string, string | null>> {
+    const rows = await this.prisma.employee.findMany({ where: { id: { in: employeeIds } }, select: { id: true, user: { select: { role: { select: { key: true } } } } } });
+    return new Map(rows.map((r) => [r.id, r.user?.role.key ?? null]));
+  }
+
+  /** Works out the template id for many people with one set of lookups. */
+  private async resolver() {
+    const [def, own, byRole, available] = await Promise.all([this.defaultTemplate(), this.employeeTemplateChoices(), this.roleTemplateChoices(), this.availableTemplateIds()]);
+    return { def, pick: (employeeId: string, roleKey: string | null) => pickTemplateId(own, employeeId, byRole, roleKey, available, def.id) };
+  }
+
+  /** The template this person's card is made with: their own choice, else their role's, else the company default. */
+  private async templateFor(employeeId: string): Promise<IdCardTemplate> {
+    const { def, pick } = await this.resolver();
+    const id = pick(employeeId, (await this.rolesOf([employeeId])).get(employeeId) ?? null);
+    return id === def.id ? def : ((await this.prisma.idCardTemplate.findUnique({ where: { id } })) ?? def);
+  }
+
+  /**
+   * Cards not yet sent to print follow the rules again: moved to the template they should now use, and drawn again if they were Ready.
+   * Used after the default template or a role's template changes.
+   */
+  private async reapplyWaiting(): Promise<{ moved: number; regenerated: number }> {
+    const cards = await this.prisma.idCard.findMany({ where: { status: { in: ['QUEUED', 'READY'] } }, select: { id: true, employeeId: true, status: true, templateId: true } });
+    const { pick } = await this.resolver();
+    const roles = await this.rolesOf([...new Set(cards.map((c) => c.employeeId))]);
+    const changed = cards.map((c) => ({ ...c, to: pick(c.employeeId, roles.get(c.employeeId) ?? null) })).filter((c) => c.to !== c.templateId);
+    for (const c of changed) await this.prisma.idCard.update({ where: { id: c.id }, data: { templateId: c.to } });
+    const ready = changed.filter((c) => c.status === 'READY');
+    let regenerated = 0;
+    if (ready.length) {
+      try {
+        regenerated = (await this.generate({ cardIds: ready.map((c) => c.id) })).generated;
+      } catch (e) {
+        this.log.warn(`Could not redraw ready cards after a template change: ${(e as Error).message}`);
+      }
+    }
+    return { moved: changed.length, regenerated };
+  }
+
+  /** Every role with the template set for it (blank = the company default). */
+  async roleTemplates() {
+    const [roles, choices, available] = await Promise.all([this.prisma.role.findMany({ select: { key: true, name: true } }), this.roleTemplateChoices(), this.availableTemplateIds()]);
+    const order = ['employee', 'lead', 'manager', 'hr', 'admin'];
+    roles.sort((a, b) => (order.indexOf(a.key) + 1 || 99) - (order.indexOf(b.key) + 1 || 99) || a.name.localeCompare(b.name));
+    return { roles, choices: Object.fromEntries(Object.entries(choices).filter(([k, v]) => roles.some((r) => r.key === k) && available.has(v))) };
+  }
+
+  /** Save the template for each role (null = the company default), then bring waiting cards in line. */
+  async setRoleTemplates(input: Record<string, string | null>) {
+    const [roles, available] = await Promise.all([this.prisma.role.findMany({ select: { key: true } }), this.availableTemplateIds()]);
+    const known = new Set(roles.map((r) => r.key));
+    const next: Record<string, string> = {};
+    for (const [role, tpl] of Object.entries(input)) {
+      if (!known.has(role)) throw notFound('Role');
+      if (tpl) {
+        if (!available.has(tpl)) throw notFound('Template');
+        next[role] = tpl;
+      }
+    }
+    await this.settingsSvc.set(ROLE_TEMPLATES_KEY, next);
+    const r = await this.reapplyWaiting();
+    await this.audit.record({ action: 'idcard.role_templates', entity: 'Setting', entityId: ROLE_TEMPLATES_KEY, meta: { roles: Object.keys(next).length, ...r } });
+    return { ...(await this.roleTemplates()), ...r };
+  }
+
+  /**
+   * Choose the template for one person (null = back to the company default). A card that has not gone to print yet is redrawn with it
+   * straight away; a card already sent to print, printed or issued keeps what was printed, and the choice applies when it is reissued.
+   */
+  async setEmployeeTemplate(employeeId: string, templateId: string | null) {
+    await this.employee(employeeId);
+    if (templateId && !(await this.availableTemplateIds()).has(templateId)) throw notFound('Template');
+    const choices = { ...(await this.employeeTemplateChoices()) };
+    if (templateId) choices[employeeId] = templateId;
+    else delete choices[employeeId];
+    await this.settingsSvc.set(EMPLOYEE_TEMPLATES_KEY, choices);
+    const tpl = await this.templateFor(employeeId);
+    const card = await this.prisma.idCard.findFirst({ where: { employeeId, status: { in: ACTIVE } }, orderBy: { createdAt: 'desc' } });
+    let applied: 'NOW' | 'ON_REISSUE' | 'NO_CARD' = 'NO_CARD';
+    if (card && ['QUEUED', 'READY'].includes(card.status)) {
+      await this.prisma.idCard.update({ where: { id: card.id }, data: { templateId: tpl.id } });
+      applied = 'NOW';
+      if (card.status === 'READY') await this.generate({ cardIds: [card.id] }).catch((e) => this.log.warn(`Could not redraw the card after choosing a template: ${(e as Error).message}`));
+    } else if (card) applied = 'ON_REISSUE';
+    await this.audit.record({ action: 'idcard.employee_template', entity: 'IdCard', entityId: card?.id ?? employeeId, meta: { employeeId, templateId: templateId ?? 'default', template: tpl.name, applied } });
+    return { template: tpl.name, isDefault: tpl.isDefault, applied };
   }
 
   private async defaultTemplate(): Promise<IdCardTemplate> {
@@ -158,7 +290,11 @@ export class IdCardsService {
       'employee.blood_group': e.bloodGroup ?? null,
       'employee.photo': e.photoFileId ?? null,
       'employee.emergency_contact': e.emergencyContactName ? `${e.emergencyContactName}${e.emergencyContactPhone ? ` · ${e.emergencyContactPhone}` : ''}` : null,
-      'employee.joining_date': e.joiningDate ? fmt(e.joiningDate) : null,
+      'employee.joining_date': cardDate(dbDateKey(e.joiningDate)),
+      'employee.dob': cardDate(dbDateKey(e.dateOfBirth)),
+      'employee.mobile': cardMobile(e.phone),
+      'employee.email': e.officialEmail ?? null,
+      'employee.address': e.address ?? null,
       'employee.code_blood': [e.empCode, e.bloodGroup].filter(Boolean).join(' · '),
       'card.serial': card?.serial ?? 'IDC-PREVIEW',
       'qr.verify_url': card ? verifyUrl(card.verifyToken) : `${env.WEB_ORIGIN}/verify`,
@@ -168,6 +304,16 @@ export class IdCardsService {
       'settings.return_address': s.returnAddress ?? null,
       'settings.emergency_line': s.emergencyLine ?? null,
     };
+  }
+
+  /** Every card field for one employee (used by the visiting card designer too). */
+  async dataFor(employeeId: string): Promise<IdCardPreviewData> {
+    return this.cardData(await this.employee(employeeId), null);
+  }
+
+  /** A stored picture as a data URL, sized for drawing on a card. */
+  image(fileId: string | null | undefined, max = 700): Promise<string | null> {
+    return this.imageData(fileId, max);
   }
 
   private async imageData(fileId: string | null | undefined, max = 700): Promise<string | null> {
@@ -182,16 +328,33 @@ export class IdCardsService {
 
   /** Render both sides as 300-DPI PNGs. */
   async renderSides(tpl: IdCardTemplate, data: IdCardPreviewData): Promise<{ front: Buffer; back: Buffer }> {
-    const images = {
-      photo: await this.imageData(data['employee.photo']),
+    const photo = await this.imageData(data['employee.photo']);
+    const images: import('./card-render').CardImages = {
+      photo,
+      photoSize: await dataUrlSize(photo),
       logo: await this.imageData(data['tenant.logo'], 400),
       qr: data['qr.verify_url'] ? await qrDataUrl(data['qr.verify_url']) : null,
     };
-    const side = (els: IdCardElement[], bg: string | null) => renderCardSvg({ widthMm: tpl.widthMm, heightMm: tpl.heightMm, elements: els }, data, { ...images, bg });
-    const [front, back] = await Promise.all([
-      svgToPng(side(tpl.front as unknown as IdCardElement[], await this.imageData(tpl.frontBgFileId, 1100))),
-      svgToPng(side(tpl.back as unknown as IdCardElement[], await this.imageData(tpl.backBgFileId, 1100))),
-    ]);
+    const custom: Record<string, string | null> = {};
+    for (const el of [...(tpl.front as unknown as IdCardElement[]), ...(tpl.back as unknown as IdCardElement[])]) {
+      if (el.type === 'IMAGE' && el.fileId && !(el.fileId in custom)) custom[el.fileId] = await this.imageData(el.fileId, 900);
+    }
+    // QR elements set to BRANDED are drawn in the company colours with their own centre logo (else the company logo).
+    const qrStyled: Record<string, string | null> = {};
+    const verify = data['qr.verify_url'];
+    const branded = [...(tpl.front as unknown as IdCardElement[]), ...(tpl.back as unknown as IdCardElement[])].filter((e) => e.type === 'QR' && e.qrStyle === 'BRANDED');
+    if (verify && branded.length) {
+      const colors = await this.companyProfile(tpl.tenantId);
+      const from = darkenHex(colors.primaryColor, 0.73);
+      const to = darkenHex(colors.secondaryColor, 0.73);
+      for (const el of branded) qrStyled[el.id] = await brandedQrDataUrl(verify, { from, to, logo: await this.imageData(el.fileId ?? data['tenant.logo'], 400) });
+    }
+    images.qrStyled = qrStyled;
+    const side = async (els: IdCardElement[], bgFileId: string | null, fit: unknown) => {
+      const bg = await this.imageData(bgFileId, 1100);
+      return svgToPng(renderCardSvg({ widthMm: tpl.widthMm, heightMm: tpl.heightMm, elements: els }, data, { ...images, custom, bg, bgSize: await dataUrlSize(bg), bgFit: (fit as IdCardBgFit | null) ?? DEFAULT_ID_CARD_BG_FIT }));
+    };
+    const [front, back] = await Promise.all([side(tpl.front as unknown as IdCardElement[], tpl.frontBgFileId, tpl.frontBgFit), side(tpl.back as unknown as IdCardElement[], tpl.backBgFileId, tpl.backBgFit)]);
     return { front, back };
   }
 
@@ -221,7 +384,9 @@ export class IdCardsService {
     const e = await this.employee(id);
     const card = await this.prisma.idCard.findFirst({ where: { employeeId: id, status: { in: ACTIVE } }, orderBy: { createdAt: 'desc' } });
     const data = await this.cardData(e, card);
-    return { employeeId: id, name: e.fullName, data, qrDataUrl: await qrDataUrl(data['qr.verify_url'] ?? env.WEB_ORIGIN) };
+    const colors = await this.companyProfile(requireContext().tenantId);
+    const link = data['qr.verify_url'] ?? env.WEB_ORIGIN;
+    return { employeeId: id, name: e.fullName, data, qrDataUrl: await qrDataUrl(link), qrBrandedDataUrl: await brandedQrDataUrl(link, { from: darkenHex(colors.primaryColor, 0.73), to: darkenHex(colors.secondaryColor, 0.73) }) };
   }
 
   async previewPng(templateId: string, employeeId: string, side: 'front' | 'back') {
@@ -245,7 +410,7 @@ export class IdCardsService {
     const existing = await this.prisma.idCard.findFirst({ where: { employeeId, status: { in: ACTIVE } }, orderBy: { createdAt: 'desc' } });
     if (existing) return existing;
     const e = await this.employee(employeeId);
-    const tpl = await this.defaultTemplate();
+    const tpl = await this.templateFor(employeeId);
     const year = new Date().getFullYear();
     const serial = await this.seq.next('idcard.serial', { prefix: `IDC-${year}-`, pad: 4, period: String(year) });
     return this.prisma.idCard.create({
@@ -269,9 +434,12 @@ export class IdCardsService {
     }
   }
 
-  private row(c: IdCard, e: { fullName: string; empCode: string } | undefined, tplName: string | undefined, batch: string | undefined): IdCardRow {
+  private row(c: IdCard, e: { fullName: string; empCode: string } | undefined, tplName: string | undefined, batch: string | undefined, custom: boolean, byRole = false): IdCardRow {
     return {
       id: c.id,
+      templateId: c.templateId,
+      customTemplate: custom,
+      byRole,
       employeeId: c.employeeId,
       employee: e?.fullName ?? '—',
       empCode: e?.empCode ?? '—',
@@ -300,7 +468,12 @@ export class IdCardsService {
     const em = new Map(emps.map((e) => [e.id, e]));
     const tm = new Map(tpls.map((t) => [t.id, t.name]));
     const bm = new Map(batches.map((b) => [b.id, b.code]));
-    return rows.map((c) => this.row(c, em.get(c.employeeId), c.templateId ? tm.get(c.templateId) : undefined, c.printBatchId ? bm.get(c.printBatchId) : undefined));
+    const [choices, byRole, roles] = await Promise.all([this.employeeTemplateChoices(), this.roleTemplateChoices(), this.rolesOf(rows.map((r) => r.employeeId))]);
+    return rows.map((c) => {
+      const own = !!choices[c.employeeId] && choices[c.employeeId] === c.templateId;
+      const role = roles.get(c.employeeId);
+      return this.row(c, em.get(c.employeeId), c.templateId ? tm.get(c.templateId) : undefined, c.printBatchId ? bm.get(c.printBatchId) : undefined, own, !own && !!role && !!byRole[role] && byRole[role] === c.templateId);
+    });
   }
 
   async generatable() {
@@ -335,7 +508,8 @@ export class IdCardsService {
         skipped.push(`${e.fullName}: ${missing.map((m) => MISSING_LABELS[m] ?? m).join(', ')}`);
         continue;
       }
-      const tpl = (c.templateId && (await this.prisma.idCardTemplate.findUnique({ where: { id: c.templateId } }))) || (await this.defaultTemplate());
+      // A card that has not gone to print yet uses its person's template (or the current default).
+      const tpl = await this.templateFor(c.employeeId);
       const data = await this.cardData(e, c);
       const sides = await this.renderSides(tpl, data);
       const pdf = await this.cardsPdf([{ tpl, ...sides }]);
@@ -370,13 +544,16 @@ export class IdCardsService {
     if (!c) throw notFound('ID card');
     await this.assertCardAccess(c);
     const e = await this.employee(c.employeeId);
-    if (c.printPdfFileId) {
+    // Once a card has gone to print, its saved file is the record of what was printed. Until then the download is drawn
+    // fresh from the current template, so it always matches the designer.
+    if (c.printPdfFileId && !['QUEUED', 'READY'].includes(c.status)) {
       const { data } = await this.storage.read(c.printPdfFileId);
       return { pdf: data, filename: `${e.empCode}-id-card.pdf` };
     }
     const tpl = (c.templateId && (await this.prisma.idCardTemplate.findUnique({ where: { id: c.templateId } }))) || (await this.defaultTemplate());
-    const sides = await this.renderSides(tpl, await this.cardData(e, c));
-    return { pdf: await this.cardsPdf([{ tpl, ...sides }]), filename: `${e.empCode}-id-card-preview.pdf` };
+    const data = c.status === 'READY' ? ((c.dataSnapshot as unknown as IdCardPreviewData | null) ?? (await this.cardData(e, c))) : await this.cardData(e, c);
+    const sides = await this.renderSides(tpl, data);
+    return { pdf: await this.cardsPdf([{ tpl, ...sides }]), filename: `${e.empCode}-id-card${c.status === 'READY' ? '' : '-preview'}.pdf` };
   }
 
   async cardPng(id: string, side: 'front' | 'back'): Promise<Buffer> {
@@ -395,7 +572,7 @@ export class IdCardsService {
     if (!me) throw notFound('Employee');
     const c = await this.prisma.idCard.findFirst({ where: { employeeId: me, status: { in: ACTIVE } }, orderBy: { createdAt: 'desc' } });
     if (!c) return null;
-    return this.row(c, await this.prisma.employee.findUnique({ where: { id: me }, select: { fullName: true, empCode: true } }) ?? undefined, undefined, undefined);
+    return this.row(c, await this.prisma.employee.findUnique({ where: { id: me }, select: { fullName: true, empCode: true } }) ?? undefined, undefined, undefined, false);
   }
 
   // ── Print batches ────────────────────────────────────────────────────────
@@ -473,7 +650,7 @@ export class IdCardsService {
     if (old) await this.prisma.idCard.update({ where: { id: old.id }, data: { status: old.status === 'QUEUED' ? 'VOID' : 'REPLACED', revokedAt: new Date(), revokeReason: reason } });
     const card = await this.ensureCard(employeeId);
     await this.audit.record({ action: 'idcard.reissued', entity: 'IdCard', entityId: card.id, meta: { reason, previous: old?.id ?? null } });
-    return this.row(card, (await this.prisma.employee.findUnique({ where: { id: employeeId }, select: { fullName: true, empCode: true } })) ?? undefined, undefined, undefined);
+    return this.row(card, (await this.prisma.employee.findUnique({ where: { id: employeeId }, select: { fullName: true, empCode: true } })) ?? undefined, undefined, undefined, false);
   }
 
   async surrender(employeeId: string) {
@@ -488,35 +665,92 @@ export class IdCardsService {
 
   // ── Public verification (QR) ─────────────────────────────────────────────
 
+  /** The company details for the scan page (blank fields stay blank; colours and tagline have defaults). */
+  private async companyProfile(tenantId: string) {
+    const raw = await this.settingsSvc.getFor<unknown>(tenantId, COMPANY_PROFILE_KEY, {});
+    const r = companyProfileSchema.safeParse(raw);
+    return r.success ? r.data : DEFAULT_COMPANY_PROFILE;
+  }
+
+  /** What the employee chose to share on their card, for the page a scanned ID card opens. */
+  private async sharing(employeeId: string, e: { phone: string | null }) {
+    const p = await this.prisma.raw.vCardProfile.findUnique({ where: { employeeId } });
+    return { isPublic: p?.isPublic ?? true, phone: (p?.showPhone ?? true) ? (p?.workPhone || e.phone || null) : null, linkedin: p?.linkedinUrl ?? null };
+  }
+
+  /** The page a scanned ID card QR opens: a digital profile card (photo, contact details, Save Contact, company information). */
   async verifyHtml(token: string): Promise<{ status: number; html: string }> {
     const c = await this.prisma.raw.idCard.findUnique({ where: { verifyToken: token } });
-    const page = (body: string) =>
-      `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ID card verification</title><meta name="robots" content="noindex"><style>body{margin:0;font-family:'Segoe UI',Arial,sans-serif;background:#f7f5f2;color:#201f1d;display:grid;place-items:center;min-height:100vh}.card{background:#fff;border:1px solid #d7d3d3;border-radius:10px;padding:28px;width:min(340px,90vw);text-align:center;box-shadow:0 8px 24px rgba(0,0,0,.06)}.co{font-family:Georgia,serif;font-size:20px;border-bottom:2px solid #b68235;padding-bottom:10px;margin-bottom:16px}.ph{width:110px;height:130px;object-fit:cover;border:1px solid #d7d3d3;margin:0 auto 12px;display:block}.nm{font-family:Georgia,serif;font-size:24px}.mt{font-size:13px;color:#605d5d;margin-top:4px}.st{display:inline-block;margin-top:14px;padding:4px 12px;border-radius:4px;font-size:13px}.ok{background:#f1e4cc;color:#6e4c19}.bad{background:#fbe3e1;color:#9b2c21}.ft{font-size:11px;color:#9a9696;margin-top:16px}</style></head><body><div class="card">${body}</div></body></html>`;
-    if (!c) return { status: 404, html: page('<div class="nm">Card not found</div><div class="mt">This QR code does not match any ID card.</div>') };
-    const [e, t] = await Promise.all([
-      this.prisma.raw.employee.findUnique({ where: { id: c.employeeId }, include: { designation: true } }),
+    if (!c) {
+      const body = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ID card verification</title><meta name="robots" content="noindex"></head><body style="margin:0;font-family:Segoe UI,Arial,sans-serif;display:grid;place-items:center;min-height:100vh;background:#eef1f5"><div style="background:#fff;border-radius:16px;padding:28px;max-width:360px;text-align:center;box-shadow:0 8px 30px rgba(0,0,0,.08)"><div style="font-size:24px;font-weight:600">Card not found</div><p style="color:#5b6475">This QR code does not match any ID card.</p></div></body></html>';
+      return { status: 404, html: body };
+    }
+    const [e, t, profile] = await Promise.all([
+      this.prisma.raw.employee.findUnique({ where: { id: c.employeeId }, include: { designation: true, department: true } }),
       this.prisma.raw.tenant.findUnique({ where: { id: c.tenantId } }),
+      this.companyProfile(c.tenantId),
     ]);
-    let photo = '';
-    if (e?.photoFileId) {
+    const share = e ? await this.sharing(e.id, e) : { isPublic: false, phone: null, linkedin: null };
+    const toUrl = async (fileId: string | null | undefined, px: number) => {
+      if (!fileId) return null;
       try {
-        const { data } = await this.storage.read(e.photoFileId, c.tenantId);
-        const url = await toDataUrl(data, 300);
-        if (url) photo = `<img class="ph" src="${url}" alt="">`;
+        return await toDataUrl((await this.storage.read(fileId, c.tenantId)).data, px);
       } catch {
-        /* no photo */
+        return null;
       }
+    };
+    // The photo sits in its round frame the way HR framed it on the ID card (zoom and position), so the face stays in view.
+    const photo = await toUrl(e?.photoFileId, 600);
+    let photoFrame: { left: number; top: number; width: number; height: number } | null = null;
+    const size = await dataUrlSize(photo);
+    if (size) {
+      const used = c.templateId ? await this.prisma.raw.idCardTemplate.findUnique({ where: { id: c.templateId }, select: { front: true } }) : null;
+      const el = ((used?.front ?? []) as unknown as IdCardElement[]).find((x) => x.type === 'PHOTO');
+      const r = idCardPhotoPlacement(size, { w: 1, h: 1 }, el?.photo ?? DEFAULT_ID_CARD_PHOTO_FRAME);
+      photoFrame = { left: r.x * 100, top: r.y * 100, width: r.w * 100, height: r.h * 100 };
     }
     const valid = ['READY', 'SENT_TO_PRINT', 'PRINTED', 'ISSUED'].includes(c.status) && e?.status !== 'EXITED';
     const label = valid ? 'Valid' : c.status === 'QUEUED' ? 'Not yet issued' : 'Revoked';
     await this.audit.recordRaw(c.tenantId, { action: 'idcard.verified_public', entity: 'IdCard', entityId: c.id, meta: { status: label } });
-    const esc = (s: string) => s.replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]!);
-    return {
-      status: 200,
-      html: page(
-        `<div class="co">${esc(t?.name ?? '')}</div>${photo}<div class="nm">${esc(e?.fullName ?? '—')}</div><div class="mt">${esc(e?.designation?.name ?? '')}</div><div class="mt">${esc(e?.empCode ?? '')} · ${esc(c.serial)}</div><div class="st ${valid ? 'ok' : 'bad'}">${label}</div><div class="ft">Checked ${esc(fmtStamp(new Date()))} IST</div>`,
-      ),
-    };
+    // Contact details only for a valid card whose owner keeps their public card on.
+    const showContacts = valid && share.isPublic;
+    const html = renderScanPage({
+      valid,
+      statusLabel: label,
+      company: { name: t?.name ?? '', legalName: t?.legalName ?? t?.name ?? '', address: [t?.address, t?.city].filter(Boolean).join(', ') || null, logo: await toUrl(t?.logoFileId, 400), officePhone: t?.phone ?? null },
+      profile,
+      employee: {
+        name: e?.fullName ?? '—',
+        designation: e?.designation?.name ?? null,
+        department: e?.department?.name ?? null,
+        empCode: e?.empCode ?? '',
+        serial: c.serial,
+        email: e?.officialEmail ?? '',
+        phone: showContacts ? share.phone : null,
+        linkedin: showContacts ? share.linkedin : null,
+        photo,
+        photoFrame,
+      },
+      showContacts,
+      vcfUrl: showContacts ? `/api/v1/id-cards/verify/${token}/contact.vcf` : null,
+    });
+    return { status: 200, html };
+  }
+
+  /** The "Save Contact" file for a scanned ID card (valid cards whose owner keeps their public card on). */
+  async verifyVcf(token: string): Promise<{ status: number; vcf?: string; filename?: string }> {
+    const c = await this.prisma.raw.idCard.findUnique({ where: { verifyToken: token } });
+    if (!c || !['READY', 'SENT_TO_PRINT', 'PRINTED', 'ISSUED'].includes(c.status)) return { status: 404 };
+    const [e, t] = await Promise.all([
+      this.prisma.raw.employee.findUnique({ where: { id: c.employeeId }, include: { designation: true } }),
+      this.prisma.raw.tenant.findUnique({ where: { id: c.tenantId } }),
+    ]);
+    if (!e || e.status === 'EXITED') return { status: 404 };
+    const share = await this.sharing(e.id, e);
+    if (!share.isPublic) return { status: 404 };
+    const profile = await this.companyProfile(c.tenantId);
+    const vcf = buildVcf({ name: e.fullName, org: t?.name ?? '', title: e.designation?.name, email: e.officialEmail, phone: share.phone, url: profile.website || null, address: [t?.address, t?.city].filter(Boolean).join(', ') || null, linkedin: share.linkedin });
+    return { status: 200, vcf, filename: `${e.empCode}.vcf` };
   }
 
   /** Scan helper for Time's ID compliance (authenticated). */

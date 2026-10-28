@@ -7,7 +7,8 @@ import { get } from '@/lib/api';
 import { onRealtime } from '@/lib/socket';
 import { useToast } from '@/lib/toast';
 import { Avatar } from '@/components/ui';
-import { PunchButton } from '@/modules/time/punch';
+import { IdleWatcher } from '@/modules/time/idle';
+import { LatePunchDialog, PunchButton } from '@/modules/time/punch';
 import { GlobalSearch } from '@/modules/platform/GlobalSearch';
 
 export function AppShell() {
@@ -61,7 +62,7 @@ export function AppShell() {
             {g.items.map((it) => (
               <NavLink key={it.id} to={it.path} className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}>
                 <span>{it.label}</span>
-                {!!badges[it.id] && <span className="tnum" style={{ color: 'var(--color-accent-700)' }}>{badges[it.id]}</span>}
+                {!!badges[it.id] && <span className="tnum" style={{ color: 'var(--color-accent-300)' }}>{badges[it.id]}</span>}
               </NavLink>
             ))}
           </nav>
@@ -72,21 +73,26 @@ export function AppShell() {
         <header className="topbar">
           <button className="btn btn-secondary btn-icon mobile-nav-toggle" aria-label="Menu" onClick={() => setOpen((o) => !o)}>☰</button>
           <GlobalSearch />
-          <div style={{ marginLeft: 'auto' }} />
+          <div className="topbar-spacer" style={{ marginLeft: 'auto' }} />
           <PunchButton />
-          <button className="btn btn-secondary" onClick={() => nav('/alerts')}>Alerts · {count.data?.unread ?? 0}</button>
-          <div style={{ position: 'relative' }} ref={menuRef}>
+          <LatePunchDialog />
+          <IdleWatcher />
+          <button className="btn btn-secondary topbar-alerts" onClick={() => nav('/alerts')}>
+            <span>Alerts</span>
+            {!!count.data?.unread && <span className="count-badge">{count.data.unread}</span>}
+          </button>
+          <div className="topbar-user" style={{ position: 'relative' }} ref={menuRef}>
             <button className="user-btn" onClick={() => setMenu((m) => !m)} aria-haspopup="menu" aria-expanded={menu}>
               <Avatar initials={me.initials} name={me.name} />
-              <span style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
-                <span style={{ fontSize: 13 }}>{me.name}</span>
-                <span style={{ fontSize: 11 }} className="faint">{me.roleName}</span>
+              <span className="topbar-user-text" style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
+                <span className="topbar-user-name" style={{ fontSize: 13 }}>{me.name}</span>
+                <span className="topbar-user-role faint" style={{ fontSize: 11 }}>{me.roleName}</span>
               </span>
             </button>
             {menu && (
               <div className="menu" role="menu">
                 <button onClick={() => { setMenu(false); nav('/me'); }}>My profile &amp; devices</button>
-                <button onClick={() => { setMenu(false); nav('/visiting-card'); }}>Visiting card</button>
+                <button onClick={() => { setMenu(false); nav('/visiting-card'); }}>{granted.has('vcard.self') ? 'ID & visiting card' : 'My ID card'}</button>
                 <button onClick={() => { setMenu(false); nav('/change-password'); }}>Change password</button>
                 <button
                   onClick={async () => {

@@ -188,7 +188,8 @@ function JobMasters() {
   const m = masters.data;
   const block = (title: string, rows: { id: string; name: string; meta?: string }[] | undefined) => (
     <Card kicker={title} title={rows ? `${rows.length}` : '—'}>
-      <div style={{ maxHeight: 180, overflow: 'auto' }}>
+      {/* The scrollbar gets its own space on the right, so it never sits on top of the numbers. */}
+      <div style={{ maxHeight: 180, overflowY: 'auto', overflowX: 'hidden', scrollbarGutter: 'stable', paddingRight: 8 }}>
         {(rows ?? []).map((r) => (
           <div key={r.id} className="list-row">
             <span>{r.name}</span>

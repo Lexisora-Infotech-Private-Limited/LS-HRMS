@@ -7,6 +7,7 @@ import { WorkMetricsService } from './projects/work-metrics.service';
 import { WorkDocsService } from './projects/work-docs.service';
 import { BoardsController, TasksController } from './tasks/tasks.controller';
 import { TasksService } from './tasks/tasks.service';
+import { TaskTimerService } from './tasks/task-timer.service';
 import { BoardsService } from './boards/boards.service';
 import { GitController } from './git/git.controller';
 import { GitService } from './git/git.service';
@@ -35,6 +36,7 @@ import { WorkRegistry } from './work-registry.service';
     ClientsService,
     ProjectsService,
     TasksService,
+    TaskTimerService,
     BoardsService,
     ArchiveService,
     InternsService,

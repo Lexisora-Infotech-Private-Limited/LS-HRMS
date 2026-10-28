@@ -804,6 +804,9 @@ model IdCardTemplate {
   back          Json
   frontBgFileId String?
   backBgFileId  String?
+  /// {fit:FILL|FIT|STRETCH, zoom:50-300, x:-100..100, y:-100..100} how each background picture sits on the card
+  frontBgFit    Json?
+  backBgFit     Json?
   version       Int      @default(1)
   status        String   @default("PUBLISHED") // DRAFT | PUBLISHED | ARCHIVED
   isDefault     Boolean  @default(false)

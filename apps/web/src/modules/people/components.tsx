@@ -54,7 +54,7 @@ export function EmployeeFormModal({ profile, onClose, onCreated }: { profile?: P
   const fields: FieldDef[] = [
     { name: 'fullName', label: 'Full name', type: 'text', required: true },
     ...(editing ? [] : [{ name: 'officialEmail', label: 'Official email', type: 'email', required: true, placeholder: 'name@lexisora.com' } as FieldDef]),
-    { name: 'phone', label: 'Phone', type: 'text', required: !editing, placeholder: '+91 98250 12345' },
+    { name: 'phone', label: 'Phone', type: 'phone', required: !editing, placeholder: '+91 98250 12345' },
     { name: 'personalEmail', label: 'Personal email', type: 'email', hint: editing ? undefined : 'The onboarding invite goes here if given' },
     { name: 'departmentId', label: 'Department', type: 'select', required: true, options: opts(d, 'departments') },
     { name: 'designationId', label: 'Designation', type: 'select', required: true, options: opts(d, 'designations') },
@@ -72,7 +72,7 @@ export function EmployeeFormModal({ profile, onClose, onCreated }: { profile?: P
           { name: 'gender', label: 'Gender', type: 'select', options: ['Female', 'Male', 'Non-binary', 'Prefer not to say'].map((g) => ({ value: g, label: g })) },
           { name: 'maritalStatus', label: 'Marital status', type: 'select', options: ['Single', 'Married', 'Other'].map((g) => ({ value: g, label: g })) },
           { name: 'emergencyContactName', label: 'Emergency contact name', type: 'text' },
-          { name: 'emergencyContactPhone', label: 'Emergency contact phone', type: 'text' },
+          { name: 'emergencyContactPhone', label: 'Emergency contact phone', type: 'phone' },
           { name: 'address', label: 'Address', type: 'area' },
         ] as FieldDef[])
       : []),
@@ -106,12 +106,12 @@ export function EmployeeFormModal({ profile, onClose, onCreated }: { profile?: P
 export function SelfEditModal({ profile, onClose }: { profile: ProfileDto; onClose: () => void }) {
   const save = useAction((b: FormValues) => peopleApi.updateSelf(b as never), { success: 'Profile updated', invalidate: [['people', 'profile']] });
   const fields: FieldDef[] = [
-    { name: 'phone', label: 'Phone', type: 'text' },
+    { name: 'phone', label: 'Phone', type: 'phone' },
     { name: 'personalEmail', label: 'Personal email', type: 'email' },
     { name: 'bloodGroup', label: 'Blood group', type: 'select', options: PEOPLE_BLOOD_GROUPS.map((b) => ({ value: b, label: b })) },
     { name: 'maritalStatus', label: 'Marital status', type: 'select', options: ['Single', 'Married', 'Other'].map((g) => ({ value: g, label: g })) },
     { name: 'emergencyContactName', label: 'Emergency contact name', type: 'text' },
-    { name: 'emergencyContactPhone', label: 'Emergency contact phone', type: 'text' },
+    { name: 'emergencyContactPhone', label: 'Emergency contact phone', type: 'phone' },
     { name: 'address', label: 'Address', type: 'area' },
     { name: 'photoFileId', label: 'Photo', type: 'file', category: 'avatar', accept: 'image/*' },
   ];

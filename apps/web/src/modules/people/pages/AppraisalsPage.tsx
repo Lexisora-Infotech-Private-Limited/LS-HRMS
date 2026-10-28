@@ -95,7 +95,7 @@ function CyclesTab({ manage }: { manage: boolean }) {
   const current = open ? (q.data?.find((c) => c.id === open.id) ?? open) : null;
   return (
     <>
-      <DataTable columns={columns} rows={q.data} loading={q.isLoading} rowKey={(r) => r.id} onRowClick={setOpen} empty="No appraisal cycles yet. Create one to start." />
+      <DataTable mobileCards columns={columns} rows={q.data} loading={q.isLoading} rowKey={(r) => r.id} onRowClick={setOpen} empty="No appraisal cycles yet. Create one to start." />
       {current && <CycleModal cycle={current} manage={manage} onClose={() => setOpen(null)} />}
     </>
   );
@@ -161,7 +161,7 @@ function CycleModal({ cycle, manage, onClose }: { cycle: AppraisalCycleRow; mana
           Template {cycle.templateName} · self review due {formatDate(cycle.selfReviewDue)} · manager review due {formatDate(cycle.managerReviewDue)} · {cycle.participants} employees, {cycle.reviewers} reviewers
         </span>
       </div>
-      <DataTable columns={columns} rows={ps.data} loading={ps.isLoading} rowKey={(p) => p.id} onRowClick={(p) => nav(`/appraisals/review/${p.id}`)} empty="No employees associated yet." />
+      <DataTable mobileCards columns={columns} rows={ps.data} loading={ps.isLoading} rowKey={(p) => p.id} onRowClick={(p) => nav(`/appraisals/review/${p.id}`)} empty="No employees associated yet." />
       {confirm && next && (
         <ConfirmDialog
           title={`${next}?`}
@@ -238,7 +238,7 @@ function TemplatesTab({ manage }: { manage: boolean }) {
           <button className="btn btn-secondary" onClick={() => setEditing('new')}>New template</button>
         </div>
       )}
-      <DataTable columns={columns} rows={q.data} loading={q.isLoading} rowKey={(t) => t.id} onRowClick={setViewing} empty="No KRA templates yet." />
+      <DataTable mobileCards columns={columns} rows={q.data} loading={q.isLoading} rowKey={(t) => t.id} onRowClick={setViewing} empty="No KRA templates yet." />
       {editing && <TemplateEditor base={editing === 'new' ? null : editing} onClose={() => setEditing(null)} />}
       {viewing && (
         <Modal title={`${viewing.name} v${viewing.version}`} wide onClose={() => setViewing(null)} actions={<button className="btn btn-secondary" onClick={() => setViewing(null)}>Close</button>}>
@@ -373,7 +373,7 @@ function AssociationTab({ manage }: { manage: boolean }) {
         </div>
         {manage && !locked && <button className="btn btn-secondary" onClick={() => setAdding(true)}>Add employees</button>}
       </div>
-      <DataTable columns={columns} rows={ps.data} loading={ps.isLoading} rowKey={(p) => p.id} empty="No one is associated with this cycle yet." />
+      <DataTable mobileCards columns={columns} rows={ps.data} loading={ps.isLoading} rowKey={(p) => p.id} empty="No one is associated with this cycle yet." />
       {adding && <AddParticipantsModal cycleId={active.id} employees={employees} departments={lk.data?.departments ?? []} onClose={() => setAdding(false)} />}
       {removing && <ConfirmDialog title={`Remove ${removing.employee} from ${active.name}?`} body="Their reviews in this cycle are kept but no longer count." confirmLabel="Remove" danger busy={remove.isPending} onConfirm={() => remove.mutate(removing.id)} onClose={() => setRemoving(null)} />}
     </div>
@@ -432,5 +432,5 @@ function MineTab({ rows, loading, error }: { rows: MyReviewRow[] | undefined; lo
     { key: 'f', header: 'Final', render: (r) => scoreBand(r.finalScore, r.band) },
     { key: 'd', header: 'Due', render: (r) => (r.cycleStatus === 'CLOSED' ? <span className="faint">Closed</span> : formatDate(r.due)) },
   ];
-  return <DataTable columns={columns} rows={rows} loading={loading} rowKey={(r) => r.id} onRowClick={(r) => nav(`/appraisals/review/${r.id}`)} empty="No reviews for you right now. You'll get an alert when a cycle opens." />;
+  return <DataTable mobileCards columns={columns} rows={rows} loading={loading} rowKey={(r) => r.id} onRowClick={(r) => nav(`/appraisals/review/${r.id}`)} empty="No reviews for you right now. You'll get an alert when a cycle opens." />;
 }

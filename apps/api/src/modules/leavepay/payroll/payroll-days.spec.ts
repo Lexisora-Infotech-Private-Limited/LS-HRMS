@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyDays, GATE_OK, timesheetGate, type AttendanceOnDay, type DayClassInput, type LeaveOnDay } from './payroll-days';
+import { classifyDays, GATE_OK, latePenaltyLabel, latePenaltySplit, timesheetGate, type AttendanceOnDay, type DayClassInput, type LeaveOnDay } from './payroll-days';
 import type { CalendarFn } from '../leave/leave-calc';
 import { dow } from '../common/dates';
 
@@ -85,5 +85,32 @@ describe('timesheet gate', () => {
   });
   it('only APPROVED and NOT_REQUIRED let an item be READY', () => {
     expect(GATE_OK).toEqual(['APPROVED', 'NOT_REQUIRED']);
+  });
+});
+
+describe('late-mark penalty', () => {
+  const rule = { perPenalty: 1, penaltyDays: 0.5, source: 'LEAVE_THEN_LOP' };
+  it('each late mark costs half a day, taken from CL while it lasts', () => {
+    expect(latePenaltySplit({ ...rule, lateMarks: 1, leaveAvailable: 4 })).toEqual({ lateMarks: 1, days: 0.5, leaveDays: 0.5, lopDays: 0 });
+    expect(latePenaltySplit({ ...rule, lateMarks: 3, leaveAvailable: 4 })).toEqual({ lateMarks: 3, days: 1.5, leaveDays: 1.5, lopDays: 0 });
+  });
+  it('the rest becomes LOP when CL runs out (CL is used in half days)', () => {
+    expect(latePenaltySplit({ ...rule, lateMarks: 3, leaveAvailable: 0.7 })).toEqual({ lateMarks: 3, days: 1.5, leaveDays: 0.5, lopDays: 1 });
+    expect(latePenaltySplit({ ...rule, lateMarks: 2, leaveAvailable: -1 })).toEqual({ lateMarks: 2, days: 1, leaveDays: 0, lopDays: 1 });
+  });
+  it('LOP source never touches leave; NONE costs nothing', () => {
+    expect(latePenaltySplit({ ...rule, source: 'LOP', lateMarks: 2, leaveAvailable: 5 })).toEqual({ lateMarks: 2, days: 1, leaveDays: 0, lopDays: 1 });
+    expect(latePenaltySplit({ ...rule, source: 'NONE', lateMarks: 2, leaveAvailable: 5 }).days).toBe(0);
+  });
+  it('every 3 marks with the older rule', () => {
+    expect(latePenaltySplit({ ...rule, perPenalty: 3, lateMarks: 4, leaveAvailable: 5 }).days).toBe(0.5);
+  });
+  it('the shift\'s allowed late marks cost nothing', () => {
+    expect(latePenaltySplit({ ...rule, allowed: 3, lateMarks: 3, leaveAvailable: 5 })).toEqual({ lateMarks: 3, days: 0, leaveDays: 0, lopDays: 0 });
+    expect(latePenaltySplit({ ...rule, allowed: 3, lateMarks: 5, leaveAvailable: 5 })).toEqual({ lateMarks: 5, days: 1, leaveDays: 1, lopDays: 0 });
+  });
+  it('payslip label', () => {
+    expect(latePenaltyLabel({ lateMarks: 3, days: 1.5, leaveDays: 0.5, lopDays: 1 })).toBe('late penalty 0.5 CL + 1 LOP');
+    expect(latePenaltyLabel({ lateMarks: 0, days: 0, leaveDays: 0, lopDays: 0 })).toBeNull();
   });
 });

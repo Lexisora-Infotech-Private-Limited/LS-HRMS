@@ -45,6 +45,7 @@ export class ProfileService {
     tabs.push('assets');
     if (rel.self || hasPerm(ctx, 'employees.compensation')) tabs.push('pay');
     tabs.push('attendance');
+    if (rel.self || rel.hr || rel.manager) tabs.push('screenshots');
     if (rel.self || rel.hr) tabs.push('devices');
     return tabs;
   }

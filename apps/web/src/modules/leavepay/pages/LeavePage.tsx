@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { HALF_DAY_OPTIONS, LEAVE_STATUS_TONE, type LeaveApplyInput, type LeaveRequestRow, type TeamRequestRow } from '@lexisora/shared';
+import { HALF_DAY_OPTIONS, LEAVE_STATUS_TONE, type CompOffRow, type LeaveApplyInput, type LeaveRequestRow, type TeamRequestRow } from '@lexisora/shared';
 import { useCan } from '@/lib/auth';
 import { useAction } from '@/lib/query';
 import { useLookups, opts } from '@/components/lookups';
@@ -69,7 +69,7 @@ function MyTimeOff({ onOpen }: { onOpen: (id: string) => void }) {
   const history = useQuery({ queryKey: lpKeys.myRequests, queryFn: () => lpApi.myRequests({ pageSize: 50 }) });
   const upcoming = useQuery({ queryKey: lpKeys.upcoming, queryFn: lpApi.upcoming });
   const cols: Column<LeaveRequestRow>[] = [
-    { key: 't', header: 'Type', render: (r) => r.typeName },
+    { key: 't', header: 'Type', render: (r) => (r.autoReason === 'LATE_ARRIVAL' ? <span>{r.typeName} <Tag tone="outline" title="Booked by attendance: you were very late, or late more times this month than allowed. Excusing the late mark removes it.">Late arrival</Tag></span> : r.typeName) },
     { key: 'd', header: 'Dates', render: (r) => r.dates },
     { key: 'n', header: 'Days', render: (r) => fmtDays(r.days) },
     { key: 'r', header: 'Reason', render: (r) => r.reason ?? <span className="faint">—</span> },
@@ -116,8 +116,35 @@ function MyTimeOff({ onOpen }: { onOpen: (id: string) => void }) {
             </div>
           ))}
           {upcoming.data && !upcoming.data.length && <div className="list-row faint">No holidays or leave in the next four months.</div>}
+          <CompOffList />
         </div>
       </div>
+    </>
+  );
+}
+
+const COMP_OFF_SOURCE: Record<string, string> = { TIMESHEET: 'from timesheet', REQUEST: 'requested', MANUAL: 'HR credit' };
+const shortDate = (key: string) => new Date(`${key}T00:00:00Z`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+
+/** Comp-off earned for work on weekly offs / holidays (auto-credited from approved timesheets, requests, HR credits). */
+function CompOffList() {
+  const q = useQuery({ queryKey: lpKeys.compOffs, queryFn: lpApi.myCompOffs });
+  const rows = (q.data ?? []).filter((g) => g.status !== 'REJECTED' && g.status !== 'CANCELLED').slice(0, 8);
+  if (!rows.length) return null;
+  const state = (g: CompOffRow) =>
+    g.status === 'PENDING' ? 'Pending approval' : g.status === 'USED' ? 'Used' : g.status === 'EXPIRED' ? 'Expired' : `${fmtDays(g.remaining)} left · use by ${shortDate(g.expiresOn)}`;
+  return (
+    <>
+      <h4 style={{ margin: '12px 0 0' }}>Comp-off</h4>
+      {rows.map((g) => (
+        <div key={g.id} className="list-row" title={g.reason ?? undefined}>
+          <span>
+            {fmtDays(g.units)} day · worked {shortDate(g.workedDate)}
+            <span className="faint"> · {COMP_OFF_SOURCE[g.source] ?? g.source.toLowerCase()}</span>
+          </span>
+          <span className={g.status === 'EXPIRED' || g.status === 'USED' ? 'faint' : undefined}>{state(g)}</span>
+        </div>
+      ))}
     </>
   );
 }
@@ -203,7 +230,12 @@ function ApplyModal({ onClose }: { onClose: () => void }) {
   const blocked = !body || !p || p.blocks.length > 0 || (p.lopDays > 0 && !v.acceptLop) || preview.isFetching;
   return (
     <Modal
-      title="Apply time off"
+      title={
+        <div className="row-between" style={{ flexWrap: 'nowrap' }}>
+          <span>Apply time off</span>
+          <button className="btn btn-ghost btn-sm" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+      }
       onClose={onClose}
       wide
       actions={

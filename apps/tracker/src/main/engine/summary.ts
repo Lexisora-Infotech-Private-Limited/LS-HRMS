@@ -4,9 +4,11 @@ import type { OpenSegment, Segment, SegmentKind } from './types';
 /**
  * Day summary: totals, per-task time and the timeline bar — the same formula the
  * server uses (spec T3 §5):
- *   worked  = Σ WORK + Σ IDLE_WORK (claimed idle, pending review — shown immediately)
+ *   worked  = Σ WORK (+ claims the Project Lead approved, from the server)
  *   break   = Σ BREAK (incl. idle counted as break)
  *   idle    = Σ IDLE (deducted) + pending idle while the prompt is open
+ *             + Σ IDLE_WORK (claimed "I was working", waiting for review — like the timesheet,
+ *               it only counts as work once approved)
  *   span(first punch-in .. last punch-out) = worked + break + idle   (tested)
  */
 
@@ -24,6 +26,7 @@ export interface DayTotals {
   idleSec: number;
   idleDeductedSec: number;
   idlePendingSec: number;
+  /** Claimed idle waiting for review (part of idleSec until approved). */
   claimedSec: number;
   perTask: Map<string | null, number>;
 }
@@ -42,10 +45,11 @@ export function computeTotals(segments: readonly Segment[], live?: LiveState | n
   };
   const add = (kind: SegmentKind, taskId: string | null, s: number) => {
     if (s <= 0) return;
-    if (kind === 'WORK' || kind === 'IDLE_WORK') {
+    if (kind === 'WORK') {
       t.workedSec += s;
-      if (kind === 'IDLE_WORK') t.claimedSec += s;
       t.perTask.set(taskId, (t.perTask.get(taskId) ?? 0) + s);
+    } else if (kind === 'IDLE_WORK') {
+      t.claimedSec += s;
     } else if (kind === 'BREAK') {
       t.breakSec += s;
     } else {
@@ -55,15 +59,19 @@ export function computeTotals(segments: readonly Segment[], live?: LiveState | n
   for (const s of segments) add(s.kind, s.taskId, sec(s.startedAt, s.endedAt));
   if (live?.open) add(live.open.kind, live.open.taskId, sec(live.open.startedAt, live.openEnd));
   if (live?.pendingIdle) t.idlePendingSec = sec(live.pendingIdle.since, live.pendingIdle.end);
-  t.idleSec = t.idleDeductedSec + t.idlePendingSec;
+  t.idleSec = t.idleDeductedSec + t.idlePendingSec + t.claimedSec;
   return t;
 }
 
 /** Server baseline (already-synced time from any device) + local delta not yet in it. */
 export interface ServerBaseline {
+  /** Work only; claims still waiting for review are in `idlePendingSeconds`. */
   workedSeconds: number;
   breakSeconds: number;
+  /** Deducted idle only. */
   idleSeconds: number;
+  /** "I was working" claims not yet reviewed. */
+  idlePendingSeconds?: number;
   screenshots: number;
   byTask: { taskId: string | null; key: string; title: string; seconds: number }[];
 }
@@ -72,14 +80,16 @@ export function combine(server: ServerBaseline | null, delta: DayTotals): DayTot
   if (!server) return delta;
   const perTask = new Map(delta.perTask);
   for (const b of server.byTask) perTask.set(b.taskId, (perTask.get(b.taskId) ?? 0) + b.seconds);
+  const serverClaimed = server.idlePendingSeconds ?? 0;
   const idleDeductedSec = server.idleSeconds + delta.idleDeductedSec;
+  const claimedSec = serverClaimed + delta.claimedSec;
   return {
     workedSec: server.workedSeconds + delta.workedSec,
     breakSec: server.breakSeconds + delta.breakSec,
     idleDeductedSec,
     idlePendingSec: delta.idlePendingSec,
-    idleSec: idleDeductedSec + delta.idlePendingSec,
-    claimedSec: delta.claimedSec,
+    idleSec: idleDeductedSec + delta.idlePendingSec + claimedSec,
+    claimedSec,
     perTask,
   };
 }

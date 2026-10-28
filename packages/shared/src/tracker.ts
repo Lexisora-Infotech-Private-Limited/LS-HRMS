@@ -291,8 +291,10 @@ export type TrackerTimelineBlock = {
 
 export type TrackerToday = {
   status: 'OUT' | 'WORKING' | 'BREAK';
+  /** Work only (WORK segments + approved idle claims); claims waiting for review are in idlePendingSeconds. */
   workedSeconds: number;
   breakSeconds: number;
+  /** Deducted idle (incl. rejected claims). */
   idleSeconds: number;
   screenshots: number;
   byTask: { taskId: string | null; key: string; title: string; seconds: number }[];
@@ -300,7 +302,7 @@ export type TrackerToday = {
   // additions
   date?: string; // YYYY-MM-DD IST
   mode?: TrackerMode;
-  /** Idle marked "I was working" and not yet reviewed (already included in workedSeconds). */
+  /** Idle marked "I was working" and not yet reviewed (not part of workedSeconds until approved). */
   idlePendingSeconds?: number;
   firstInAt?: string | null;
   lastOutAt?: string | null;
@@ -322,7 +324,11 @@ export const TRACKER_SOCKET_EVENTS = {
   attendancePunched: 'attendance.punched', // { direction, source, at }
   tasksUpdated: 'tasks.updated', // {}
   syncNow: 'command.syncNow', // {}
+  /** The task board moved a card: start timing `taskId`, or stop (taskId null) when `ifActive` is the active task. */
+  switchTask: 'command.switchTask', // TrackerSwitchCommand
 } as const;
+
+export type TrackerSwitchCommand = { taskId: string | null; ifActive?: string | null; key?: string | null; by?: string | null };
 
 // ── Web: devices ─────────────────────────────────────────────────────────────
 
@@ -438,6 +444,14 @@ export const screenshotsQuery = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(200),
 });
 export type ScreenshotsQuery = z.infer<typeof screenshotsQuery>;
+
+export const screenshotIntervalUpdateSchema = z.object({
+  // null clears the override and falls back to the tenant's AttendancePolicy default.
+  minutes: z.number().int().min(1).max(60).nullable(),
+});
+export type ScreenshotIntervalUpdateInput = z.infer<typeof screenshotIntervalUpdateSchema>;
+
+export type ScreenshotIntervalDto = { overrideMin: number | null; policyDefaultMin: number; effectiveMin: number };
 
 export type ScreenshotRow = {
   id: string;

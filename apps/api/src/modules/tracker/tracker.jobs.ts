@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
-import { TRACKER_SOCKET_EVENTS, trackerWorkDate } from '@lexisora/shared';
+import { TRACKER_SOCKET_EVENTS, trackerWorkDate, type TrackerSwitchCommand } from '@lexisora/shared';
 import { PrismaService } from '../../core/prisma/prisma.service';
 import { EventsService } from '../../core/registry/events.service';
 import { ApprovalCountsService } from '../../core/registry/registries';
@@ -75,6 +75,16 @@ export class TrackerJobs implements OnModuleInit {
       if (!p.assigneeEmployeeId) return;
       const ids = await this.devices.activeDeviceIdsForEmployees([p.assigneeEmployeeId]);
       for (const id of ids) this.realtime.toRoom(`d:${id}`, TRACKER_SOCKET_EVENTS.tasksUpdated, {});
+    });
+    // Task board moves drive the desktop timer: start on In progress, stop when the card leaves it.
+    this.events.on('task.timerCommand', async (p: TrackerSwitchCommand & { employeeId: string }) => {
+      const { employeeId, ...cmd } = p;
+      const ids = await this.devices.activeDeviceIdsForEmployees([employeeId]);
+      for (const id of ids) this.realtime.toRoom(`d:${id}`, TRACKER_SOCKET_EVENTS.switchTask, cmd);
+    });
+    // Idle claims decided in the timesheet approval UI (review.service applies its own decisions).
+    this.events.on('idle.claimDecided', async (p: { claimId: string; status: string; note?: string | null; source?: string }) => {
+      if (p.source === 'approval') await this.review.applyApprovalDecision(p);
     });
     // An approved timesheet settles any idle claims nobody decided explicitly.
     this.events.on('timesheet.approved', async (p: { employeeId: string; weekStart: string | Date }) => {

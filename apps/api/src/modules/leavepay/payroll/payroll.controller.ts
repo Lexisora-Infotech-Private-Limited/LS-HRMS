@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Put, Query, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { z } from 'zod';
 import {
@@ -7,14 +7,24 @@ import {
   payrollHoldSchema,
   payrollProfileSchema,
   payrollRunSchema,
+  payslipAssignSchema,
+  payslipCanvasSchema,
   payslipListQuery,
+  payslipTemplateInputSchema,
   salaryPreviewSchema,
   salaryRevisionSchema,
+  salaryTemplatePreviewSchema,
+  salaryTemplateSchema,
   type AdjustmentInput,
   type PayrollProfileInput,
   type PayrollRunInput,
+  type PayslipAssignInput,
+  type PayslipCanvas,
+  type PayslipTemplateInput,
   type SalaryPreviewInput,
   type SalaryRevisionInput,
+  type SalaryTemplateInput,
+  type SalaryTemplatePreviewInput,
 } from '@lexisora/shared';
 import { RequirePerm } from '../../../core/auth/decorators';
 import { ZodPipe } from '../../../core/http/zod.pipe';
@@ -189,5 +199,82 @@ export class SalaryController {
   @RequirePerm('payroll.manage')
   profile(@Param('id') id: string, @Body(new ZodPipe(payrollProfileSchema)) body: PayrollProfileInput) {
     return this.salary.updateProfile(id, body);
+  }
+}
+
+/** Salary structure templates — editable by Admin/CEO and HR (both hold payroll.manage). */
+@Controller('salary-templates')
+@RequirePerm('payroll.manage')
+export class SalaryTemplatesController {
+  constructor(private readonly salary: SalaryService) {}
+
+  @Get()
+  list() {
+    return this.salary.listTemplates();
+  }
+
+  @Post('preview')
+  preview(@Body(new ZodPipe(salaryTemplatePreviewSchema)) body: SalaryTemplatePreviewInput) {
+    return this.salary.previewTemplate(body);
+  }
+
+  @Post()
+  create(@Body(new ZodPipe(salaryTemplateSchema)) body: SalaryTemplateInput) {
+    return this.salary.createTemplate(body);
+  }
+
+  @Patch(':id')
+  update(@Param('id') id: string, @Body(new ZodPipe(salaryTemplateSchema)) body: SalaryTemplateInput) {
+    return this.salary.updateTemplate(id, body);
+  }
+
+  @Delete(':id')
+  remove(@Param('id') id: string) {
+    return this.salary.removeTemplate(id);
+  }
+}
+
+/** Payslip templates — a company keeps several, picks a default and sets one per salary structure (Admin/CEO and HR). */
+@Controller('payslip-templates')
+@RequirePerm('payroll.manage')
+export class PayslipTemplateController {
+  constructor(private readonly payslips: PayslipService) {}
+
+  @Get()
+  list() {
+    return this.payslips.templatesView();
+  }
+
+  @Post()
+  create(@Body(new ZodPipe(payslipTemplateInputSchema)) body: PayslipTemplateInput) {
+    return this.payslips.createTemplate(body.name, body.design);
+  }
+
+  /** Choose the template one salary structure uses. */
+  @Put('assign')
+  assign(@Body(new ZodPipe(payslipAssignSchema)) body: PayslipAssignInput) {
+    return this.payslips.assignTemplate(body.salaryTemplateId, body.templateId);
+  }
+
+  @Put(':id')
+  save(@Param('id') id: string, @Body(new ZodPipe(payslipTemplateInputSchema)) body: PayslipTemplateInput) {
+    return this.payslips.saveTemplate(id, body.name, body.design);
+  }
+
+  @Post(':id/default')
+  @HttpCode(200)
+  makeDefault(@Param('id') id: string) {
+    return this.payslips.setDefaultTemplate(id);
+  }
+
+  @Delete(':id')
+  remove(@Param('id') id: string) {
+    return this.payslips.removeTemplate(id);
+  }
+
+  /** A sample payslip PDF in the design being edited (nothing is saved). */
+  @Post('preview')
+  async preview(@Body(new ZodPipe(payslipCanvasSchema)) body: PayslipCanvas, @Res() res: Response) {
+    sendFile(res, await this.payslips.previewPdf(body), 'payslip-preview.pdf', 'application/pdf', true);
   }
 }

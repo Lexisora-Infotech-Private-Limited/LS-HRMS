@@ -201,6 +201,6 @@ export class InterviewsController {
   @Post(':id/result')
   @HttpCode(200)
   result(@Param('id') id: string, @Body(new ZodPipe(interviewResultSchema)) dto: z.infer<typeof interviewResultSchema>) {
-    return this.interviews.setResult(id, dto.result);
+    return this.interviews.setResult(id, dto.result, dto.overrideReason);
   }
 }

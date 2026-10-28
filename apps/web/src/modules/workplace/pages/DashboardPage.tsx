@@ -253,7 +253,7 @@ function BoardTaskModal({ onClose }: { onClose: () => void }) {
       { name: 'projectId', label: 'Project', type: 'select', required: true, options: opts(lk.data, 'projects') },
       { name: 'moduleName', label: 'Module', type: 'text', placeholder: 'e.g. Billing' },
       { name: 'assigneeEmployeeId', label: 'Assignee', type: 'select', options: opts(lk.data, 'employees'), placeholder: 'Unassigned' },
-      { name: 'estimatedHours', label: 'Estimated hours', type: 'number', placeholder: 'e.g. 6' },
+      { name: 'estimatedHours', label: 'Estimated hours', type: 'number', placeholder: 'e.g. 6', required: true },
       { name: 'dueDate', label: 'Due date', type: 'date' },
       { name: 'departmentId', label: 'Team board', type: 'select', required: true, options: opts(lk.data, 'teams') },
       { name: 'description', label: 'Description', type: 'area' },

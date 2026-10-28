@@ -25,6 +25,7 @@ import {
 import { RequirePerm } from '../../../core/auth/decorators';
 import { forbidden } from '../../../core/http/errors';
 import { ZodPipe } from '../../../core/http/zod.pipe';
+import { sendFile } from '../../workplace/common/http';
 import { MastersService } from '../masters/masters.service';
 import { PeopleAccess } from '../people.access';
 import { EmployeesService } from './employees.service';
@@ -73,6 +74,12 @@ export class EmployeesController {
   @RequirePerm('employees.manage')
   template(@Res() res: Response) {
     sendCsv(res, 'employee-import-template.csv', this.employees.templateCsv());
+  }
+
+  @Get('import/template.xlsx')
+  @RequirePerm('employees.manage')
+  async templateXlsx(@Res() res: Response) {
+    sendFile(res, await this.employees.templateXlsx(), 'employee-import-template.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   }
 
   @Post('import')

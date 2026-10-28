@@ -19,6 +19,7 @@ import type {
   HireInput,
   IdCardPreviewData,
   IdCardRow,
+  IdCardRoleTemplates,
   IdCardSettings,
   IdCardTemplateDto,
   IdCardTemplateInput,
@@ -53,6 +54,9 @@ import type {
   UpdateSelfInput,
   VaultRow,
   VaultUploadInput,
+  CompanyProfile,
+  VCardAccess,
+  VCardAccessDto,
   VCardDto,
   EmployeeRow,
 } from '@lexisora/shared';
@@ -84,7 +88,7 @@ export type KitList = { items: KitItemDto[]; rows: KitRow[] };
 export type KitItemInput = { name: string; sizes: string[]; stock: Record<string, number>; lowStockThreshold: number; isActive: boolean };
 
 // ID & visiting cards
-export type IdPreview = { employeeId: string; name: string; data: IdCardPreviewData; qrDataUrl: string };
+export type IdPreview = { employeeId: string; name: string; data: IdCardPreviewData; qrDataUrl: string; /** the QR in the company colours, for QR items set to Branded */ qrBrandedDataUrl: string };
 export type Generatable = { count: number; waiting: { cardId: string; employeeId: string; name: string; missing: string[] }[]; ready: number };
 export type PrintBatchRow = { id: string; code: string; sentAt: string | null; cards: number; vendor: string; status: string; pdfFileId: string; sentBy: string | null };
 export type VCardFull = VCardDto & { slug: string; tenantSlug: string; vcf: string };
@@ -109,6 +113,8 @@ export const peopleKeys = {
   kits: ['people', 'kits'] as const,
   idcards: ['people', 'idcards'] as const,
   vcard: ['people', 'vcard'] as const,
+  vcardAccess: ['people', 'vcard', 'access'] as const,
+  companyProfile: ['people', 'vcard', 'company'] as const,
 };
 
 export const peopleApi = {
@@ -195,7 +201,7 @@ export const peopleApi = {
   cancelInterview: (id: string, reason?: string | null) => post<unknown>(`/interviews/${id}/cancel`, { reason }),
   noShow: (id: string) => post<InterviewDetail>(`/interviews/${id}/no-show`),
   scorecard: (id: string, b: ScorecardInput) => put<InterviewDetail>(`/interviews/${id}/scorecard`, b),
-  interviewResult: (id: string, result: 'PENDING' | 'SELECTED' | 'REJECTED' | 'ON_HOLD') => post<InterviewDetail>(`/interviews/${id}/result`, { result }),
+  interviewResult: (id: string, result: 'PENDING' | 'SELECTED' | 'REJECTED' | 'ON_HOLD', overrideReason?: string) => post<InterviewDetail>(`/interviews/${id}/result`, { result, ...(overrideReason ? { overrideReason } : {}) }),
 
   // Appraisals
   cycles: () => get<AppraisalCycleRow[]>('/appraisals/cycles'),
@@ -240,7 +246,11 @@ export const peopleApi = {
   idTemplates: () => get<IdCardTemplateDto[]>('/id-cards/templates'),
   createIdTemplate: (b: IdCardTemplateInput) => post<IdCardTemplateDto>('/id-cards/templates', b),
   updateIdTemplate: (id: string, b: IdCardTemplateInput) => put<IdCardTemplateDto>(`/id-cards/templates/${id}`, b),
+  deleteIdTemplate: (id: string) => del<{ ok: true; people: number; roles: number; moved: number; regenerated: number }>(`/id-cards/templates/${id}`),
   setDefaultIdTemplate: (id: string) => post<unknown>(`/id-cards/templates/${id}/default`),
+  roleTemplates: () => get<IdCardRoleTemplates>('/id-cards/role-templates'),
+  saveRoleTemplates: (choices: Record<string, string | null>) => put<IdCardRoleTemplates & { moved: number; regenerated: number }>('/id-cards/role-templates', { choices }),
+  setEmployeeIdTemplate: (employeeId: string, templateId: string | null) => put<{ template: string; isDefault: boolean; applied: 'NOW' | 'ON_REISSUE' | 'NO_CARD' }>(`/id-cards/employee-template/${employeeId}`, { templateId }),
   idPreviewData: (employeeId?: string | null) => get<IdPreview>('/id-cards/preview-data', employeeId ? { employeeId } : undefined),
   idCards: (status?: string, q?: string) => get<IdCardRow[]>('/id-cards', { status, q }),
   generatable: () => get<Generatable>('/id-cards/generatable'),
@@ -255,6 +265,15 @@ export const peopleApi = {
 
   // Visiting card
   vcard: () => get<VCardFull>('/vcard'),
+  vcardTemplates: () => get<IdCardTemplateDto[]>('/vcard/templates'),
+  createVcardTemplate: (b: IdCardTemplateInput) => post<IdCardTemplateDto>('/vcard/templates', b),
+  updateVcardTemplate: (id: string, b: IdCardTemplateInput) => put<IdCardTemplateDto>(`/vcard/templates/${id}`, b),
+  deleteVcardTemplate: (id: string) => del<{ ok: true }>(`/vcard/templates/${id}`),
+  setDefaultVcardTemplate: (id: string) => post<unknown>(`/vcard/templates/${id}/default`),
+  companyProfile: () => get<CompanyProfile>('/vcard/company'),
+  saveCompanyProfile: (b: CompanyProfile) => put<CompanyProfile>('/vcard/company', b),
+  vcardAccess: () => get<VCardAccessDto>('/vcard/access'),
+  saveVcardAccess: (b: VCardAccess) => put<VCardAccessDto>('/vcard/access', b),
   saveVcard: (b: { showPhone?: boolean; workPhone?: string | null; linkedinUrl?: string | null; isPublic?: boolean }) => put<unknown>('/vcard', b),
   shareVcardEmail: (to: string[], message?: string | null) => post<{ sent: number }>('/vcard/share/email', { to, message }),
   shareVcardWhatsapp: (phone?: string | null) => post<{ mode: 'deeplink'; url: string }>('/vcard/share/whatsapp', { phone: phone || null }),

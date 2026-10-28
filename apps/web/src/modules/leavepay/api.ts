@@ -1,10 +1,14 @@
+import { useQuery } from '@tanstack/react-query';
 import type {
   AdjustmentRow,
+  CompOffRow,
+  CompOffRules,
   CreditBatchRow,
   CreditRuleRow,
+  HolidayInput,
+  HolidayRow,
   LeaveApplyInput,
   LeaveBalanceView,
-  LeaveHolidayRow,
   LeavePreview,
   LeaveRequestDetail,
   LeaveRequestRow,
@@ -20,17 +24,25 @@ import type {
   PayrollRunView,
   PayslipDetail,
   PayslipRow,
+  PayslipAssignInput,
+  PayslipCanvas,
+  PayslipTemplateInput,
+  PayslipTemplatesView,
   SalaryListRow,
   SalaryPreview,
   SalaryPreviewInput,
   SalaryRevisionInput,
+  SalaryTemplateInput,
+  SalaryTemplatePreviewInput,
+  SalaryTemplateRow,
   SalaryView,
   TeamRequestRow,
   UpcomingItem,
 } from '@lexisora/shared';
-import { del, download, get, patch, post } from '@/lib/api';
+import { del, download, get, patch, post, postBlob, put } from '@/lib/api';
 
 /** Leave + payroll API (docs/specs/spec-leavepay.md). */
+
 
 export const lpKeys = {
   balances: ['leavepay', 'balances'] as const,
@@ -43,12 +55,16 @@ export const lpKeys = {
   batches: ['leavepay', 'batches'] as const,
   credits: ['leavepay', 'credits'] as const,
   admin: ['leavepay', 'admin-requests'] as const,
-  holidays: ['leavepay', 'holidays'] as const,
+  holidays: (year: number) => ['leavepay', 'holidays', year] as const,
+  compOffs: ['leavepay', 'comp-offs'] as const,
+  compOffRules: ['leavepay', 'comp-off-rules'] as const,
   period: (p: string) => ['leavepay', 'payroll', p] as const,
   payroll: ['leavepay', 'payroll'] as const,
   item: (id: string) => ['leavepay', 'payroll-item', id] as const,
   salaries: ['leavepay', 'salaries'] as const,
   salary: (id: string) => ['leavepay', 'salary', id] as const,
+  templates: ['leavepay', 'salary-templates'] as const,
+  payslipTemplate: ['leavepay', 'payslip-templates'] as const,
   payslips: ['leavepay', 'payslips'] as const,
   payslip: (id: string) => ['leavepay', 'payslip', id] as const,
   adjustments: ['leavepay', 'adjustments'] as const,
@@ -56,6 +72,12 @@ export const lpKeys = {
 
 /** Every leave query (invalidate after a leave mutation). */
 export const LEAVE_ALL = ['leavepay'] as const;
+
+/** Built-in holiday lists the API can import (time/lib/holiday-lists.ts). */
+export const HOLIDAY_CALENDARS = ['National', 'Gujarat', 'Maharashtra'] as const;
+export type HolidayCalendar = (typeof HOLIDAY_CALENDARS)[number];
+/** Holiday edits change attendance, timesheets, leave counts and the Policies holiday list. */
+export const HOLIDAY_DEPENDENTS = [LEAVE_ALL, ['time'], ['workplace']];
 
 export type AdminRequests = Paginated<LeaveRequestRow> & { counts: Record<string, number> };
 
@@ -76,6 +98,9 @@ export const lpApi = {
   decideCancellation: (id: string, approve: boolean) => post<LeaveRequestRow>(`/leave/requests/${id}/cancellation/${approve ? 'approve' : 'reject'}`),
   approveCompOff: (id: string) => post(`/leave/comp-off/requests/${id}/approve`, {}),
   rejectCompOff: (id: string, comment: string) => post(`/leave/comp-off/requests/${id}/reject`, { comment }),
+  // comp-off — self
+  myCompOffs: () => get<CompOffRow[]>('/leave/me/comp-offs'),
+  compOffRules: () => get<CompOffRules>('/leave/comp-off/rules'),
   // leave — setup
   types: () => get<LeaveTypeRow[]>('/leave/types'),
   createType: (body: Partial<LeaveTypeInput>) => post<LeaveTypeRow>('/leave/types', body),
@@ -87,7 +112,14 @@ export const lpApi = {
   credits: () => get<ManualCreditRow[]>('/leave/credits'),
   credit: (body: ManualCreditInput) => post<{ employees?: number }>('/leave/credits', body),
   adminRequests: (q: Record<string, unknown>) => get<AdminRequests>('/leave/admin/requests', q),
-  holidays: () => get<LeaveHolidayRow[]>('/leave/holidays'),
+  // holidays — the time-domain calendar (reads open to all; writes need holidays.manage)
+  holidays: (year: number) => get<HolidayRow[]>('/holidays', { year }),
+  createHoliday: (body: HolidayInput) => post<{ ok: boolean; count: number }>('/holidays', body),
+  updateHoliday: (id: string, body: Partial<HolidayInput>) => patch<{ ok: boolean }>(`/holidays/${id}`, body),
+  deleteHoliday: (id: string) => del<{ ok: boolean }>(`/holidays/${id}`),
+  /** `skipped`: dates that already had a holiday (one holiday per date and location). */
+  importHolidays: (body: { year: number; calendar: HolidayCalendar }) => post<{ ok: boolean; count: number; skipped: number }>('/holidays/import', body),
+  copyHolidays: (body: { fromYear: number; toYear: number }) => post<{ ok: boolean; count: number; skipped: number }>('/holidays/copy', body),
   // payroll
   period: (period: string, refresh = false) => get<PayrollPeriodView>(`/payroll/period/${period}`, refresh ? { refresh: true } : undefined),
   createRun: (body: PayrollRunInput) => post<PayrollRunView>('/payroll/runs', body),
@@ -105,6 +137,18 @@ export const lpApi = {
   salaries: () => get<SalaryListRow[]>('/salary/employees'),
   salary: (employeeId: string) => get<SalaryView>(`/salary/employee/${employeeId}`),
   salaryPreview: (body: SalaryPreviewInput) => post<SalaryPreview>('/salary/preview', body),
+  payslipTemplates: () => get<PayslipTemplatesView>('/payslip-templates'),
+  createPayslipTemplate: (body: PayslipTemplateInput) => post<PayslipTemplatesView>('/payslip-templates', body),
+  savePayslipTemplate: (id: string, body: PayslipTemplateInput) => put<PayslipTemplatesView>(`/payslip-templates/${id}`, body),
+  setDefaultPayslipTemplate: (id: string) => post<PayslipTemplatesView>(`/payslip-templates/${id}/default`),
+  deletePayslipTemplate: (id: string) => del<PayslipTemplatesView>(`/payslip-templates/${id}`),
+  assignPayslipTemplate: (body: PayslipAssignInput) => put<PayslipTemplatesView>('/payslip-templates/assign', body),
+  previewPayslipPdf: (body: PayslipCanvas) => postBlob('/payslip-templates/preview', body),
+  templates: () => get<SalaryTemplateRow[]>('/salary-templates'),
+  createTemplate: (body: SalaryTemplateInput) => post<SalaryTemplateRow>('/salary-templates', body),
+  updateTemplate: (id: string, body: SalaryTemplateInput) => patch<SalaryTemplateRow>(`/salary-templates/${id}`, body),
+  deleteTemplate: (id: string) => del<{ ok: true; deactivated: boolean }>(`/salary-templates/${id}`),
+  previewTemplate: (body: SalaryTemplatePreviewInput) => post<Pick<SalaryPreview, 'grossMonthlyPaise' | 'ctcAnnualPaise' | 'ctcMonthlyPaise' | 'rows' | 'warnings'> & { lowestCtcPaise: number }>('/salary-templates/preview', body),
   revise: (employeeId: string, body: SalaryRevisionInput) => post<SalaryView>(`/salary/employee/${employeeId}/revisions`, body),
   updateProfile: (employeeId: string, body: PayrollProfileInput) => patch<SalaryView>(`/salary/employee/${employeeId}/profile`, body),
   // payslips
@@ -117,6 +161,16 @@ export const lpApi = {
 export function currentPeriod(): string {
   const d = new Date(Date.now() + 330 * 60_000);
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+/** Comp-off thresholds for the signed-in employee (timesheet hints). Quietly empty without leave access. */
+export const useCompOffRules = () => useQuery({ queryKey: lpKeys.compOffRules, queryFn: lpApi.compOffRules, staleTime: 300_000, retry: false });
+
+/** Same rule as the API (leave-calc compOffUnitsFor): 1 from the full-day threshold, ½ from the half-day one. */
+export function compOffUnits(minutes: number, rules: Pick<CompOffRules, 'fullDayMinutes' | 'halfDayMinutes'>): number {
+  if (minutes >= rules.fullDayMinutes) return 1;
+  if (minutes >= rules.halfDayMinutes) return 0.5;
+  return 0;
 }
 
 export const fmtDays = (n: number) => (Number.isInteger(n) ? String(n) : String(Math.round(n * 10) / 10));

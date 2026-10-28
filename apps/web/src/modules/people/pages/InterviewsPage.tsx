@@ -88,8 +88,9 @@ function InterviewModal({ id, onClose }: { id: string; onClose: () => void }) {
   const me = useMe();
   const q = useQuery({ queryKey: peopleKeys.interview(id), queryFn: () => peopleApi.interview(id) });
   const [dialog, setDialog] = useState<null | 'reschedule' | 'cancel'>(null);
+  const [overrideFor, setOverrideFor] = useState<null | 'SELECTED' | 'REJECTED'>(null);
   const inv = [peopleKeys.interviews, peopleKeys.candidates];
-  const result = useAction((r: 'PENDING' | 'SELECTED' | 'REJECTED' | 'ON_HOLD') => peopleApi.interviewResult(id, r), { success: (_x, r) => `Result: ${r === 'ON_HOLD' ? 'on hold' : r.toLowerCase()}`, invalidate: inv });
+  const result = useAction((a: { r: 'PENDING' | 'SELECTED' | 'REJECTED' | 'ON_HOLD'; reason?: string }) => peopleApi.interviewResult(id, a.r, a.reason), { success: (_x, a) => `Result: ${a.r === 'ON_HOLD' ? 'on hold' : a.r.toLowerCase()}`, invalidate: inv });
   const noShow = useAction(() => peopleApi.noShow(id), { success: 'Marked as no-show', invalidate: inv });
   const reschedule = useAction((b: { date: string; time: string; durationMin?: number }) => peopleApi.reschedule(id, b), { success: (r) => (r.emailed ? 'Updated invite emailed' : 'Interview moved'), invalidate: inv });
   const cancel = useAction((reason: string) => peopleApi.cancelInterview(id, reason), { success: 'Interview cancelled · candidate and panel informed', invalidate: inv });
@@ -98,8 +99,12 @@ function InterviewModal({ id, onClose }: { id: string; onClose: () => void }) {
     if (q.error) onClose();
   }, [q.error, onClose]);
   const started = i ? new Date(i.startsAt).getTime() <= Date.now() : false;
+  // Results open with the scorecards: 15 minutes before the start.
+  const resultOpen = i ? new Date(i.startsAt).getTime() <= Date.now() + 15 * 60_000 : false;
   const isLead = !!i && i.panelists.some((p) => p.role === 'LEAD' && p.employeeId === me.employeeId);
   const canDecide = !!i && (i.canManage || isLead) && i.status !== 'CANCELLED' && i.status !== 'NO_SHOW';
+  // A decision needs every panelist's submitted scorecard; HR can still record it with a reason.
+  const waiting = i ? i.panelists.filter((p) => p.scorecard?.status !== 'SUBMITTED') : [];
 
   return (
     <Modal
@@ -157,18 +162,37 @@ function InterviewModal({ id, onClose }: { id: string; onClose: () => void }) {
             ))}
           </div>
           {canDecide && (
-            <div className="row-between" style={{ gap: 8 }}>
-              <span className="faint" style={{ fontSize: 13 }}>
-                Result{i.suggestedResult ? ` · panel suggests ${i.suggestedResult === 'ON_HOLD' ? 'on hold' : i.suggestedResult.toLowerCase()}` : ''}
-              </span>
-              <div className="row" style={{ gap: 6 }}>
-                {(['SELECTED', 'ON_HOLD', 'REJECTED'] as const).map((r) => (
-                  <button key={r} className={`btn btn-sm ${i.result === r ? 'btn-primary' : 'btn-secondary'}`} disabled={result.isPending} onClick={() => result.mutate(r)}>
-                    {r === 'SELECTED' ? 'Selected' : r === 'ON_HOLD' ? 'On hold' : 'Rejected'}
-                  </button>
-                ))}
-                {i.result !== 'PENDING' && <button className="btn btn-ghost btn-sm" onClick={() => result.mutate('PENDING')}>Reset</button>}
+            <div className="stack" style={{ gap: 6 }}>
+              <div className="row-between" style={{ gap: 8 }}>
+                <span className="faint" style={{ fontSize: 13 }}>
+                  Result{i.suggestedResult ? ` · panel suggests ${i.suggestedResult === 'ON_HOLD' ? 'on hold' : i.suggestedResult.toLowerCase()}` : ''}
+                </span>
+                <div className="row" style={{ gap: 6 }}>
+                  {(['SELECTED', 'ON_HOLD', 'REJECTED'] as const).map((r) => {
+                    const decision = r !== 'ON_HOLD';
+                    const blockedByCards = decision && waiting.length > 0 && !i.canManage;
+                    const title = !resultOpen ? 'Available from 15 minutes before the interview starts' : blockedByCards ? 'Waiting for the panel scorecards' : undefined;
+                    return (
+                      <button
+                        key={r}
+                        className={`btn btn-sm ${i.result === r ? 'btn-primary' : 'btn-secondary'}`}
+                        disabled={result.isPending || !resultOpen || blockedByCards}
+                        title={title}
+                        onClick={() => (decision && waiting.length > 0 ? setOverrideFor(r as 'SELECTED' | 'REJECTED') : result.mutate({ r }))}
+                      >
+                        {r === 'SELECTED' ? 'Selected' : r === 'ON_HOLD' ? 'On hold' : 'Rejected'}
+                      </button>
+                    );
+                  })}
+                  {i.result !== 'PENDING' && <button className="btn btn-ghost btn-sm" onClick={() => result.mutate({ r: 'PENDING' })}>Reset</button>}
+                </div>
               </div>
+              {resultOpen && waiting.length > 0 && i.result === 'PENDING' && (
+                <div className="pp-sub" style={{ fontSize: 12.5 }}>
+                  Scorecard pending — {waiting.map((p) => p.name).join(', ')}.{' '}
+                  {i.canManage ? 'You can still record a result, but you will be asked for a reason.' : 'You can decide once they have submitted.'}
+                </div>
+              )}
             </div>
           )}
           {i.isPanelist && i.status !== 'CANCELLED' && <Scorecard i={i} />}
@@ -186,6 +210,16 @@ function InterviewModal({ id, onClose }: { id: string; onClose: () => void }) {
           submitLabel="Move & email"
           onClose={() => setDialog(null)}
           onSubmit={(v) => reschedule.mutateAsync({ date: String(v.date), time: String(v.time), durationMin: v.durationMin ? Number(v.durationMin) : undefined })}
+        />
+      )}
+      {i && overrideFor && (
+        <PromptModal
+          title={`Record “${overrideFor === 'SELECTED' ? 'Selected' : 'Rejected'}” without all scorecards`}
+          label={`Reason (kept in the audit trail) — scorecard pending: ${waiting.map((p) => p.name).join(', ')}`}
+          submitLabel="Record result"
+          area
+          onClose={() => setOverrideFor(null)}
+          onSubmit={(reason) => result.mutateAsync({ r: overrideFor, reason })}
         />
       )}
       {i && dialog === 'cancel' && <PromptModal title="Cancel interview" label="Reason (internal)" submitLabel="Cancel & inform" initial="Rescheduling" onClose={() => setDialog(null)} onSubmit={(r) => cancel.mutateAsync(r)} />}

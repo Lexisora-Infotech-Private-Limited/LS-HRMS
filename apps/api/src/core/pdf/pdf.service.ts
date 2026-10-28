@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import PDFDocument from 'pdfkit';
+import { registerPdfFonts } from './fonts';
 
 export type Pdf = PDFKit.PDFDocument;
 
@@ -14,6 +15,7 @@ export class PdfService {
   render(build: (doc: Pdf) => void, opts: PDFKit.PDFDocumentOptions = { size: 'A4', margin: 48 }): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       const doc = new PDFDocument({ bufferPages: true, ...opts });
+      registerPdfFonts(doc);
       const chunks: Buffer[] = [];
       doc.on('data', (c: Buffer) => chunks.push(c));
       doc.on('end', () => resolve(Buffer.concat(chunks)));

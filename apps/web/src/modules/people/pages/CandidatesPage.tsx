@@ -115,7 +115,7 @@ function AddCandidateModal({ onClose, onAdded }: { onClose: () => void; onAdded:
   const fields: FieldDef[] = [
     { name: 'fullName', label: 'Name', type: 'text', required: true },
     { name: 'email', label: 'Email', type: 'email', required: true },
-    { name: 'phone', label: 'Phone', type: 'text', required: true, placeholder: '+91 98250 12345' },
+    { name: 'phone', label: 'Phone', type: 'phone', required: true, placeholder: '+91 98250 12345' },
     { name: 'jobId', label: 'Applied for', type: 'select', required: true, options: d.jobs ?? [] },
     { name: 'source', label: 'Source', type: 'select', required: true, options: CANDIDATE_SOURCES.map((s) => ({ value: s, label: CANDIDATE_SOURCE_LABELS[s] })) },
     { name: 'referredByEmployeeId', label: 'Referred by', type: 'select', options: d.employees ?? [], showIf: (v) => v.source === 'REFERRAL' },

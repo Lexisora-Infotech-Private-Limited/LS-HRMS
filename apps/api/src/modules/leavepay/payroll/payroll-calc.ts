@@ -5,7 +5,8 @@
  *   idle     = max(0, monthly deducted idle − allowance) / 60 × grossFixed / (WD × shiftNet/60)   (D12)
  *   PF → ESI → PT → TDS, net rounded to the rupee.
  */
-import type { StructureLine } from './salary';
+import type { EsiSettings, PfSettings } from '@lexisora/shared';
+import { esiRatesOf, pfRates, type StructureLine } from './salary';
 import { computeEsi, computePf, computePt, esiCovered, monthlyTds, type Declarations, type Regime } from './statutory';
 import { fyMonthsRemaining } from '../common/dates';
 
@@ -22,6 +23,12 @@ export type CalcInput = {
   payType: 'SALARY' | 'STIPEND';
   /** Earning components of the active structure (Basic/HRA/Special or Stipend). */
   structure: StructureLine[];
+  /** Company deductions from the salary structure template (flat monthly amounts), taken after statutory lines. */
+  customDeductions?: StructureLine[];
+  /** PF rates snapshotted on the salary revision (undefined = statutory defaults). */
+  pfConfig?: PfSettings | null;
+  /** ESI settings snapshotted on the salary revision (undefined = statutory defaults). */
+  esiConfig?: EsiSettings | null;
   grossFixedPaise: number;
   days: {
     workingDays: number;
@@ -30,6 +37,8 @@ export type CalcInput = {
     unpaidLeaveDays: number;
     absentDays: number;
     projectedDays: number;
+    /** Part of the late-mark penalty that is not covered by CL. */
+    latePenaltyLopDays?: number;
   };
   idle: { apply: boolean; rawMinutes: number; allowanceMinutes: number; shiftNetMinutes: number };
   profile: { pfEnabled: boolean; pfCeilingOpted: boolean; esiMode: string; ptStateCode: string; taxRegime: Regime; gender?: string | null; declarations?: Declarations | null };
@@ -83,9 +92,10 @@ export function calculateItem(input: CalcInput): CalcResult {
   if (!input.structure.length || input.grossFixedPaise <= 0) errors.push('No salary structure');
   if (WD <= 0) errors.push('No working days in the period');
 
-  const lopDays = r2(input.days.unpaidLeaveDays + input.days.absentDays);
+  const latePenaltyLop = input.days.latePenaltyLopDays ?? 0;
+  const lopDays = r2(input.days.unpaidLeaveDays + input.days.absentDays + latePenaltyLop);
   const paidDays = Math.max(0, r2(input.days.eligibleDays - lopDays));
-  trace.push(`Working days ${WD}; eligible ${input.days.eligibleDays}; paid leave ${input.days.paidLeaveDays}; LOP ${lopDays} → paid days ${paidDays}`);
+  trace.push(`Working days ${WD}; eligible ${input.days.eligibleDays}; paid leave ${input.days.paidLeaveDays}; LOP ${lopDays}${latePenaltyLop ? ` (incl. late-mark penalty ${latePenaltyLop})` : ''} → paid days ${paidDays}`);
 
   // Earnings (prorated on paid days).
   let order = 0;
@@ -142,12 +152,13 @@ export function calculateItem(input: CalcInput): CalcResult {
   const idleForWages = input.idleReducesStatutoryWages === false ? 0 : idleDed;
   const pfApplies = input.profile.pfEnabled && (!isStipend || intern.pf);
   const pfWage = Math.max(0, basicEarned + adjPf - Math.round(idleForWages * basicShare));
-  const pf = computePf(pfWage, { enabled: pfApplies, ceilingOpted: input.profile.pfCeilingOpted });
+  const pf = computePf(pfWage, { enabled: pfApplies, ceilingOpted: input.profile.pfCeilingOpted, rates: pfRates(input.pfConfig) });
   if (pfApplies) trace.push(pf.trace);
 
-  const esiApplies = (!isStipend || intern.esi) && esiCovered(input.grossFixedPaise, input.profile.esiMode);
+  const esiRates = esiRatesOf(input.esiConfig);
+  const esiApplies = (!isStipend || intern.esi) && esiRates?.enabled !== false && esiCovered(input.grossFixedPaise, input.profile.esiMode, esiRates?.thresholdPaise);
   const esiWage = Math.max(0, grossEarned + adjEsi - idleForWages);
-  const esi = computeEsi(esiWage, esiApplies, paidDays);
+  const esi = computeEsi(esiWage, esiApplies, paidDays, esiRates);
   if (esiApplies) trace.push(esi.trace);
 
   const ptApplies = !isStipend || intern.pt;
@@ -157,7 +168,7 @@ export function calculateItem(input: CalcInput): CalcResult {
   const taxableMonthly = grossEarned - idleDed + adjTaxable;
   let tds = 0;
   if (!isStipend || intern.tds) {
-    const fixedPf = computePf(input.structure.filter((c) => c.code === 'BASIC' || c.code === 'DA').reduce((s, c) => s + c.monthlyPaise, 0), { enabled: pfApplies, ceilingOpted: input.profile.pfCeilingOpted });
+    const fixedPf = computePf(input.structure.filter((c) => c.code === 'BASIC' || c.code === 'DA').reduce((s, c) => s + c.monthlyPaise, 0), { enabled: pfApplies, ceilingOpted: input.profile.pfCeilingOpted, rates: pfRates(input.pfConfig) });
     const t = monthlyTds({
       regime: input.profile.taxRegime,
       monthsRemaining: fyMonthsRemaining(input.period),
@@ -188,8 +199,20 @@ export function calculateItem(input: CalcInput): CalcResult {
   if (pf.erPaise) lines.push({ componentCode: 'PF_ER', label: 'PF (employer)', kind: 'EMPLOYER', amountPaise: pf.erPaise, order: 200 });
   if (esi.erPaise) lines.push({ componentCode: 'ESI_ER', label: 'ESI (employer)', kind: 'EMPLOYER', amountPaise: esi.erPaise, order: 201 });
 
+  // Company deductions (template): a flat monthly amount, only when the employee has paid days, never more than the earnings left.
+  let customDed = 0;
+  for (const [i, c] of (input.customDeductions ?? []).entries()) {
+    if (paidDays <= 0 || c.monthlyPaise <= 0) continue;
+    const room = Math.max(0, grossEarned + adjPos - (pf.eePaise + esi.eePaise + pt + tds + idleDed + adjNeg) - customDed);
+    const amt = Math.min(c.monthlyPaise, room);
+    if (amt <= 0) continue;
+    customDed += amt;
+    lines.push({ componentCode: c.code, label: c.label, kind: 'DEDUCTION', amountPaise: amt, order: 110 + i });
+    trace.push(`${c.label} deduction ${rupees(amt)}${amt < c.monthlyPaise ? ` (capped from ${rupees(c.monthlyPaise)})` : ''}`);
+  }
+
   const totalEarnings = grossEarned + adjPos;
-  let totalDeductions = pf.eePaise + esi.eePaise + pt + tds + idleDed + adjNeg;
+  let totalDeductions = pf.eePaise + esi.eePaise + pt + tds + idleDed + adjNeg + customDed;
   const rawNet = totalEarnings - totalDeductions;
   const net = Math.round(rawNet / 100) * 100;
   const rounding = net - rawNet;

@@ -7,10 +7,12 @@ export type Option = { value: string; label: string };
 export type FieldDef = {
   name: string;
   label: string;
-  type: 'text' | 'email' | 'number' | 'money' | 'date' | 'time' | 'datetime' | 'select' | 'multiselect' | 'area' | 'file' | 'checkbox' | 'password' | 'color';
+  type: 'text' | 'phone' | 'email' | 'number' | 'money' | 'date' | 'time' | 'datetime' | 'select' | 'multiselect' | 'area' | 'file' | 'checkbox' | 'password' | 'color';
   /** 2 = full row (wireframe "span 2"). */
   span?: 1 | 2;
   options?: Option[];
+  /** Options that depend on other fields' current values (overrides `options`). */
+  optionsFor?: (values: Record<string, any>) => Option[];
   required?: boolean;
   placeholder?: string;
   hint?: string;
@@ -23,6 +25,18 @@ export type FieldDef = {
 };
 
 export type FormValues = Record<string, any>;
+
+/**
+ * Phone input filter: optional leading +, digits and single spaces only.
+ * Indian numbers are capped at 10 digits (12 with a +91 prefix); other country codes at 15 (E.164).
+ */
+export function cleanPhone(v: string) {
+  const plus = v.trimStart().startsWith('+');
+  const body = v.replace(/[^\d ]/g, '').replace(/ {2,}/g, ' ').trimStart();
+  const limit = !plus ? 10 : body.replace(/ /g, '').startsWith('91') ? 12 : 15;
+  let digits = 0;
+  return (plus ? '+' : '') + body.split('').filter((c) => c === ' ' || ++digits <= limit).join('').trimEnd().concat(body.endsWith(' ') && digits < limit ? ' ' : '');
+}
 
 function initialValue(f: FieldDef, init?: FormValues) {
   if (init && init[f.name] !== undefined && init[f.name] !== null) return init[f.name];
@@ -45,6 +59,7 @@ export function FormModal({
   onClose,
   intro,
   wide,
+  onFieldChange,
 }: {
   title: ReactNode;
   fields: FieldDef[];
@@ -54,13 +69,20 @@ export function FormModal({
   onClose: () => void;
   intro?: ReactNode;
   wide?: boolean;
+  /** Called after a field changes; return values to patch other fields (e.g. reset a dependent dropdown). */
+  onFieldChange?: (name: string, value: any, values: FormValues) => FormValues | void;
 }) {
   const [values, setValues] = useState<FormValues>(() => Object.fromEntries(fields.map((f) => [f.name, initialValue(f, initial)])));
   const [files, setFiles] = useState<Record<string, File | null>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const set = (name: string, v: any) => setValues((s) => ({ ...s, [name]: v }));
+  const set = (name: string, v: any) =>
+    setValues((s) => {
+      const next = { ...s, [name]: v };
+      const patch = onFieldChange?.(name, v, next);
+      return patch ? { ...next, ...patch } : next;
+    });
   const visible = fields.filter((f) => !f.showIf || f.showIf(values));
 
   async function submit() {
@@ -125,7 +147,7 @@ export function FormModal({
         {visible.map((f) => (
           <div key={f.name} className={`field${f.span === 2 || f.type === 'area' || f.type === 'file' ? ' span-2' : ''}`}>
             {f.type !== 'checkbox' && <label htmlFor={`f-${f.name}`}>{f.label}{f.required ? '' : ''}</label>}
-            <FieldInput f={f} value={values[f.name]} onChange={(v) => set(f.name, v)} file={files[f.name] ?? null} onFile={(file) => setFiles((s) => ({ ...s, [f.name]: file }))} invalid={!!errors[f.name]} />
+            <FieldInput f={f.optionsFor ? { ...f, options: f.optionsFor(values) } : f} value={values[f.name]} onChange={(v) => set(f.name, v)} file={files[f.name] ?? null} onFile={(file) => setFiles((s) => ({ ...s, [f.name]: file }))} invalid={!!errors[f.name]} />
             {errors[f.name] ? <div className="field-error">{errors[f.name]}</div> : f.hint ? <div className="field-hint">{f.hint}</div> : null}
           </div>
         ))}
@@ -163,6 +185,8 @@ export function FieldInput({ f, value, onChange, file, onFile, invalid }: { f: F
       );
     case 'file':
       return <FileDrop file={file ?? null} onFile={onFile ?? (() => {})} accept={f.accept} existing={value ? 'File attached' : undefined} />;
+    case 'phone':
+      return <input className="input" {...common} type="tel" inputMode="tel" autoComplete="off" maxLength={18} placeholder={f.placeholder} value={value ?? ''} onChange={(e) => onChange(cleanPhone(e.target.value))} />;
     case 'money':
       return <input className="input" {...common} inputMode="decimal" placeholder={f.placeholder ?? '₹'} value={value ?? ''} onChange={(e) => onChange(e.target.value)} />;
     case 'datetime':

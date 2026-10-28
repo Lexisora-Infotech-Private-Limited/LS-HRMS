@@ -20,7 +20,7 @@ export type TimesheetStatusKey = 'DRAFT' | 'SUBMITTED' | 'PENDING_RM' | 'APPROVE
 
 /** Wireframe labels for attendance day status tags. */
 export const DAY_STATUS_LABEL: Record<TimeDayStatus, string> = {
-  PENDING: 'Today',
+  PENDING: 'In progress',
   PRESENT: 'Present',
   HALF_DAY: 'Half day',
   ABSENT: 'Absent',
@@ -50,13 +50,67 @@ export const TIMESHEET_STATUS_LABEL: Record<TimesheetStatusKey, string> = {
 };
 
 // ── Punch ─────────────────────────────────────────────────────────────────────
+const lateReasonText = z.string().trim().min(5, 'Say why you are late (at least 5 characters)').max(300);
 export const punchSchema = z.object({
   direction: z.enum(['IN', 'OUT']).optional(),
   lat: z.number().min(-90).max(90).optional(),
   lng: z.number().min(-180).max(180).optional(),
   accuracyM: z.number().min(0).max(100000).optional(),
+  /** Why the punch-in is late (asked by the "You're late" dialog after a LATE_REASON_REQUIRED reply). */
+  lateReason: lateReasonText.optional(),
+  /** "I understand" on a late beyond the month's limit (LATE_CONFIRM_REQUIRED): the first half becomes half-day leave. */
+  lateAck: z.boolean().optional(),
 });
 export type PunchInput = z.infer<typeof punchSchema>;
+/** Add / change the late reason of a day afterwards (biometric and desktop punches can't ask). */
+export const lateReasonSchema = z.object({ reason: lateReasonText });
+
+/**
+ * 422 LATE_REASON_REQUIRED details: a web punch-in after shift start + grace, within the month's
+ * allowed number of lates — the web asks for a reason (the permission) and re-sends with `lateReason`.
+ * 422 LATE_CONFIRM_REQUIRED: a late beyond the month's limit — no permission is asked; the web shows
+ * the consequence (first half = half-day leave) and re-sends with `lateAck` (reason optional).
+ */
+export type LatePrompt = {
+  punchAt: string; // HH:MM
+  shiftStart: string; // HH:MM (mid-shift when the first half is a planned leave)
+  graceMinutes: number;
+  lateAfter: string; // HH:MM
+  lateByMinutes: number;
+  /** The first half becomes a half day (late by the shift's half-day threshold, or over the month's limit). */
+  halfDay: boolean;
+  halfDayAfterMinutes: number | null;
+  /** This would be late arrival number `lateCount` this month. */
+  lateCount: number;
+  /** Lates allowed a month on this shift (0 = no limit). */
+  lateAllowed: number;
+  /** Beyond the month's limit: a notice to acknowledge, not a permission request. */
+  overLimit: boolean;
+  /** A reason must be typed (within the limit, when HR asks for reasons). */
+  reasonRequired: boolean;
+  /** What this late arrival costs, in words (late mark / half-day leave …). */
+  consequence: string;
+};
+
+/** Today's lateness for the punch card (null fields before the first punch-in). */
+export type TodayLate = {
+  workingDay: boolean;
+  shiftStart: string;
+  graceMinutes: number;
+  lateAfter: string;
+  halfDayAfterMinutes: number | null;
+  reasonRequired: boolean;
+  isLate: boolean;
+  lateByMinutes: number;
+  lateHalfDay: boolean;
+  reason: string | null;
+  /** Today is late arrival number `lateCount` this month (0 when not late). */
+  lateCount: number;
+  /** Lates allowed a month on this shift (0 = no limit). */
+  lateAllowed: number;
+  /** Today's late is beyond the limit (first half = half-day leave). */
+  lateOverLimit: boolean;
+};
 
 export type AttendanceToday = {
   state: 'IN' | 'OUT';
@@ -76,8 +130,28 @@ export type AttendanceToday = {
   modeChip: string;
   trackerRequired: boolean;
   idleThresholdMinutes: number;
+  /** The web app should watch for idle: auto-idle on, a non-desktop session open, no tracker data today. */
+  webIdleWatch: boolean;
+  late: TodayLate;
 };
 export type PunchResult = { ok: true; direction: 'IN' | 'OUT'; at: string; source: TimePunchSource; message: string; today: AttendanceToday };
+
+// ── Web idle (no input ≥ autoIdleMinutes while punched in) ────────────────────
+export const IDLE_SPAN_REASONS = ['BREAK', 'MEETING', 'OTHER'] as const;
+export type IdleSpanReason = (typeof IDLE_SPAN_REASONS)[number];
+export const IDLE_SPAN_REASON_LABEL: Record<IdleSpanReason, string> = { BREAK: 'Break', MEETING: 'Meeting', OTHER: 'Other' };
+
+export const idleSpanSchema = z
+  .object({
+    clientId: z.string().uuid(),
+    startedAt: z.string().datetime(),
+    endedAt: z.string().datetime(),
+    reason: z.enum(IDLE_SPAN_REASONS),
+    note: z.string().trim().max(200).optional(),
+  })
+  .refine((v) => v.reason !== 'OTHER' || (v.note?.length ?? 0) >= 3, { message: 'Type the reason (at least 3 characters)', path: ['note'] });
+export type IdleSpanInput = z.infer<typeof idleSpanSchema>;
+export type IdleSpanResult = { ok: true; saved: boolean; minutes: number; message: string };
 
 export type AttendanceDayRow = {
   id: string | null;
@@ -91,8 +165,17 @@ export type AttendanceDayRow = {
   workedMinutes: number;
   status: TimeDayStatus;
   statusLabel: string;
+  isToday: boolean;
   isLate: boolean;
   lateByMinutes: number;
+  /** Late by the shift's half-day threshold → the first half is a half day (leave when the policy says so). */
+  lateHalfDay: boolean;
+  lateReason: string | null;
+  /** The employee can still add / change the late reason (own day, late, not locked, inside the correction window). */
+  canAddLateReason: boolean;
+  isEarlyOut: boolean;
+  /** MISSED_PUNCH: start (HH:MM) of the session that was never punched out. */
+  openSince: string | null;
   holidayName: string | null;
   leaveTypeCode: string | null;
   isLocked: boolean;
@@ -103,6 +186,7 @@ export type AttendanceDayRow = {
 export type AttendanceMonthSummary = {
   month: string;
   presentDays: number;
+  /** Every late arrival this month (excused ones and absent days aside), including ones that became half days. */
   lateMarks: number;
   activeMinutes: number;
   idleMinutes: number;
@@ -111,6 +195,14 @@ export type AttendanceMonthSummary = {
   absentDays: number;
   missedPunchDays: number;
   idleDeductibleMinutes: number;
+  /** Days the month's late marks cost so far (taken from CL, then LOP, when payroll is finalized). */
+  latePenaltyDays: number;
+  /** Late days charged as half days (late by the half-day threshold, or beyond the month's limit). */
+  lateHalfDays: number;
+  /** The rules behind the figures, for the explanation under them. */
+  lateRules: { allowedMarks: number; allowedFrom: string | null; marksPerPenalty: number; penaltyDays: number; source: 'LEAVE_THEN_LOP' | 'LOP' | 'NONE'; graceMinutes: number; halfDayAfterMinutes: number | null; halfDayAsLeave: boolean };
+  /** Corrections left this month (maxRegularizationsPerMonth − used). */
+  correctionsLeft: number;
 };
 export type AttendanceMonth = {
   employee: { id: string; name: string; empCode: string; workMode: string };
@@ -118,10 +210,39 @@ export type AttendanceMonth = {
   days: AttendanceDayRow[];
   locked: boolean;
 };
-export type TimelineSegment = { kind: 'active' | 'break' | 'idle'; start: string; end: string; label: string };
-export type AttendanceTimeline = { date: string; axisStart: string; axisEnd: string; ticks: string[]; segments: TimelineSegment[]; idleThresholdMinutes: number; source: 'tracker' | 'sessions' | 'none' };
+/** missing = a session that was never punched out (auto-closed at shift end). */
+export type TimelineSegment = { kind: 'active' | 'break' | 'idle' | 'missing'; start: string; end: string; label: string };
+export type AttendanceTimeline = {
+  date: string;
+  axisStart: string;
+  axisEnd: string;
+  ticks: string[];
+  segments: TimelineSegment[];
+  idleThresholdMinutes: number;
+  source: 'tracker' | 'sessions' | 'none';
+  /** Expected start (ISO) and lateness, for the "before punch-in" part of the strip. */
+  expectedStart: string;
+  lateAfter: string;
+  firstIn: string | null;
+  lateByMinutes: number;
+  workingDay: boolean;
+};
 
-export type TeamTodayRow = { employeeId: string; name: string; empCode: string; department: string | null; workMode: string; status: string; in: string | null; out: string | null; source: string | null; isLate: boolean };
+export type TeamTodayRow = {
+  employeeId: string;
+  name: string;
+  empCode: string;
+  department: string | null;
+  workMode: string;
+  status: string;
+  in: string | null;
+  out: string | null;
+  source: string | null;
+  isLate: boolean;
+  lateByMinutes: number;
+  lateHalfDay: boolean;
+  lateReason: string | null;
+};
 export type TeamToday = { date: string; counts: { present: number; late: number; absent: number; onLeave: number; notYetIn: number; total: number }; rows: TeamTodayRow[] };
 
 export const dayOverrideSchema = z.object({
@@ -176,6 +297,10 @@ export type RegularizationRow = {
   decisionComment: string | null;
   createdAt: string;
   devicePunchesNow: boolean;
+  attachmentFileId: string | null;
+  /** What was recorded before the correction (HH:MM), for the approver. */
+  recordedIn: string | null;
+  recordedOut: string | null;
 };
 
 // ── Shifts ────────────────────────────────────────────────────────────────────
@@ -188,7 +313,12 @@ export const shiftSchema = z.object({
   weeklyOffDays: z.array(z.number().int().min(0).max(6)).max(6, 'Keep at least one working day'),
   minFullDayMinutes: intish(60, 1440).optional(),
   minHalfDayMinutes: intish(30, 1440).optional(),
+  /** Late by this many minutes or more (from shift start) → half day. null / 0 = off. */
   halfDayIfLateByMinutes: intish(0, 600).optional().nullable(),
+  /** Late marks a month that cost nothing before the late-mark penalty starts. */
+  lateMarksAllowed: intish(0, 31).optional(),
+  /** Leaving this many minutes before shift end still isn't an early out. */
+  earlyOutGraceMinutes: intish(0, 240).optional(),
   isDefault: z.boolean().optional(),
 });
 export type ShiftInput = z.infer<typeof shiftSchema>;
@@ -199,7 +329,7 @@ export const allocateShiftSchema = z.object({
   effectiveTo: dateKey.optional().nullable(),
 });
 export type AllocateShiftInput = z.infer<typeof allocateShiftSchema>;
-export type ShiftRow = { id: string; name: string; timing: string; start: string; end: string; startMinute: number; endMinute: number; graceMinutes: number; breakMinutes: number; weeklyOffDays: number[]; weeklyOff: string; employees: number; isDefault: boolean; minFullDayMinutes: number; minHalfDayMinutes: number; halfDayIfLateByMinutes: number | null };
+export type ShiftRow = { id: string; name: string; timing: string; start: string; end: string; startMinute: number; endMinute: number; graceMinutes: number; breakMinutes: number; weeklyOffDays: number[]; weeklyOff: string; employees: number; isDefault: boolean; minFullDayMinutes: number; minHalfDayMinutes: number; halfDayIfLateByMinutes: number | null; earlyOutGraceMinutes: number; lateMarksAllowed: number; lateMarksAllowedFrom: string | null };
 export type ShiftAllocationRow = { id: string; employeeId: string; employeeName: string; department: string | null; shiftId: string; shiftName: string; from: string; to: string | null; allocatedBy: string | null; current: boolean };
 
 // ── Locations ─────────────────────────────────────────────────────────────────
@@ -218,7 +348,7 @@ export type LocationRow = { id: string; name: string; address: string | null; ge
 export type LocationDetail = LocationRow & { employeeList: { id: string; name: string; empCode: string; department: string | null; workMode: string }[]; devices: BiometricDeviceRow[] };
 
 // ── Attendance policy ─────────────────────────────────────────────────────────
-export const POLICY_BOOL_FIELDS = ['biometricMandatory', 'allowWebPunch', 'allowDesktopPunch', 'autoIdleEnabled', 'screenshotsEnabled', 'blurScreenshots', 'deductIdleFromPayroll', 'earlyOutCountsAsLate', 'timesheetRequired', 'trackerRequired', 'punchInReminder'] as const;
+export const POLICY_BOOL_FIELDS = ['biometricMandatory', 'allowWebPunch', 'allowDesktopPunch', 'autoIdleEnabled', 'screenshotsEnabled', 'blurScreenshots', 'deductIdleFromPayroll', 'earlyOutCountsAsLate', 'lateReasonRequired', 'lateHalfDayAsLeave', 'timesheetRequired', 'trackerRequired', 'punchInReminder'] as const;
 export const policyPatchSchema = z.object({
   expectedVersion: z.number().int().optional(),
   biometricMandatory: z.boolean().optional(),
@@ -239,6 +369,8 @@ export const policyPatchSchema = z.object({
   latePenaltyDays: z.coerce.number().min(0).max(5).optional(),
   latePenaltySource: z.enum(['LEAVE_THEN_LOP', 'LOP', 'NONE']).optional(),
   earlyOutCountsAsLate: z.boolean().optional(),
+  lateReasonRequired: z.boolean().optional(),
+  lateHalfDayAsLeave: z.boolean().optional(),
   missedPunchAutoCloseHours: intish(1, 24).optional(),
   maxRegularizationsPerMonth: intish(0, 31).optional(),
   regularizationWindowDays: intish(1, 60).optional(),
@@ -267,6 +399,10 @@ export type AttendancePolicyDto = {
   latePenaltyDays: number;
   latePenaltySource: 'LEAVE_THEN_LOP' | 'LOP' | 'NONE';
   earlyOutCountsAsLate: boolean;
+  lateReasonRequired: boolean;
+  lateHalfDayAsLeave: boolean;
+  /** Late half days become leave from this date (set when the rule is switched on). */
+  lateHalfDayLeaveFrom: string;
   missedPunchAutoCloseHours: number;
   maxRegularizationsPerMonth: number;
   regularizationWindowDays: number;
@@ -298,6 +434,13 @@ export const holidaySchema = z.object({
   locationIds: z.array(z.string()).optional(),
 });
 export type HolidayInput = z.infer<typeof holidaySchema>;
+/**
+ * Two holidays on the same date clash when their locations overlap (empty locationIds = every
+ * location). A Gujarat holiday for Ahmedabad and a Maharashtra one for Pune on one date don't.
+ */
+export function holidayLocationsOverlap(a: readonly string[], b: readonly string[]): boolean {
+  return !a.length || !b.length || a.some((x) => b.includes(x));
+}
 export const holidayImportSchema = z.object({ year: z.coerce.number().int().min(2000).max(2100), calendar: z.enum(['National', 'Gujarat', 'Maharashtra']) });
 export const holidayCopySchema = z.object({ fromYear: z.coerce.number().int(), toYear: z.coerce.number().int() });
 export type HolidayRow = { id: string; date: string; dateLabel: string; weekday: string; name: string; type: 'MANDATORY' | 'OPTIONAL'; calendar: string; locations: string; locationIds: string[] };
@@ -402,20 +545,61 @@ export const submitTimesheetSchema = z.object({ expectedVersion: z.number().int(
 export type TimesheetChainChip = { key: 'employee' | 'pl' | 'rm' | 'payroll'; label: string; tone: 'accent' | 'outline' | 'neutral'; tooltip?: string };
 export type TimesheetCellDto = {
   date: string;
+  /** Counted minutes (tracked + approved idle + accepted outside hours + counted edits). */
   final: number;
   tracked: number;
   adjustment: number;
+  /** Accepted outside hours. */
   outsideHours: number;
   idleAsWork: number;
   pendingIdle: number;
+  /** Manual increase waiting for the Project Lead (not in `final`). */
+  pendingAdjustment: number;
+  /** Outside-hours entries waiting for the Project Lead (not in `final`). */
+  pendingOutside: number;
+  /** pendingAdjustment + pendingOutside. */
+  pending: number;
+  /** What a cell edit starts from: final + pendingAdjustment. */
+  claimed: number;
   adjusted: boolean;
   adjustmentReason: string | null;
   ohPending: boolean;
   editable: boolean;
   outOfPeriod: boolean;
 };
-export type TimesheetLineDto = { id: string; label: string; subLabel: string | null; projectId: string | null; taskId: string | null; billable: boolean; isManual: boolean; total: number; cells: TimesheetCellDto[] };
+export type TimesheetLineTask = { status: string; statusLabel: string; active: boolean; estimatedMinutes: number | null; loggedMinutes: number };
+export type TimesheetLineDto = {
+  id: string;
+  label: string;
+  subLabel: string | null;
+  projectId: string | null;
+  taskId: string | null;
+  billable: boolean;
+  isManual: boolean;
+  /** Counted minutes this week. */
+  total: number;
+  /** Minutes waiting for review this week. */
+  pending: number;
+  /** No time this week and the task is no longer being worked on: hidden unless "Show empty rows". */
+  quiet: boolean;
+  task: TimesheetLineTask | null;
+  cells: TimesheetCellDto[];
+};
 export type OutsideHoursDto = { id: string; date: string; dateLabel: string; from: string; to: string; minutes: number; taskText: string; projectId: string | null; projectName: string | null; reason: string; reviewStatus: string };
+export type TimesheetDayLeave = { typeCode: string | null; fraction: number; session: string | null; label: string };
+export type TimesheetDay = {
+  date: string;
+  dow: string;
+  label: string;
+  future: boolean;
+  weeklyOff: boolean;
+  holiday: string | null;
+  locked: boolean;
+  /** Approved leave on the day (null when none). */
+  leave: TimesheetDayLeave | null;
+  /** Hours expected: 0 on a weekly off / holiday, less leave taken. */
+  expectedMinutes: number;
+};
 export type TimesheetWeek = {
   id: string;
   employee: { id: string; name: string };
@@ -426,11 +610,14 @@ export type TimesheetWeek = {
   status: TimesheetStatusKey;
   statusLabel: string;
   editable: boolean;
-  days: { date: string; dow: string; label: string; future: boolean; weeklyOff: boolean; holiday: string | null; locked: boolean }[];
+  days: TimesheetDay[];
   lines: TimesheetLineDto[];
   idleRow: number[];
+  /** Counted minutes per day. */
   dayTotals: number[];
-  totals: { worked: number; idle: number; tracked: number; adjustments: number; outsideHours: number; idleAsWork: number };
+  /** Minutes waiting for review per day (not in dayTotals). */
+  pendingRow: number[];
+  totals: { worked: number; idle: number; tracked: number; adjustments: number; outsideHours: number; idleAsWork: number; pending: number; expected: number };
   chain: TimesheetChainChip[];
   returned: { by: string | null; comment: string } | null;
   outsideHours: OutsideHoursDto[];
@@ -452,7 +639,7 @@ export const itemDecisionSchema = z.object({ type: z.enum(['OUTSIDE_HOURS', 'IDL
 export const approveStepSchema = z.object({ comment: z.string().trim().max(1000).optional().nullable(), decisions: z.array(itemDecisionSchema).default([]) });
 export type ApproveStepInput = z.infer<typeof approveStepSchema>;
 export const returnStepSchema = z.object({ comment: z.string().trim().min(5, 'Add a comment for the employee (at least 5 characters)').max(1000) });
-export type ApprovalRow = { stepId: string; timesheetId: string; level: number; employeeId: string; name: string; week: string; weekStart: string; workedMinutes: number; idleMinutes: number; hours: string; idle: string; shots: number; flags: number; status: string; statusLabel: string; stepStatus: string; projectName: string | null };
+export type ApprovalRow = { stepId: string; timesheetId: string; level: number; employeeId: string; name: string; week: string; weekStart: string; workedMinutes: number; idleMinutes: number; hours: string; idle: string; shots: number; flags: number; status: string; statusLabel: string; stepStatus: string; projectName: string | null; pendingMinutes: number };
 export type ApprovalList = { items: ApprovalRow[]; counts: { l1: number; l2: number; corrections: number }; canL1: boolean; canL2: boolean; canCorrections: boolean; isAdmin: boolean };
 export type ReviewItem = { type: 'OUTSIDE_HOURS' | 'IDLE_AS_WORK' | 'MANUAL_INCREASE'; id: string; date: string; dateLabel: string; minutes: number; task: string; reason: string; status: string };
 export type ScreenshotThumb = { id: string; capturedAt: string; time: string; taskKey: string; fileId: string | null; blurred: boolean };

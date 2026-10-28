@@ -187,7 +187,10 @@ export function Modal({ title, onClose, children, actions, wide }: { title: Reac
   return (
     <div className="dialog-backdrop" onMouseDown={onClose}>
       <div className={`dialog${wide ? ' dialog-wide' : ''}`} role="dialog" aria-modal onMouseDown={(e) => e.stopPropagation()}>
-        <div className="dialog-title">{title}</div>
+        <div className="dialog-head">
+          <div className="dialog-title">{title}</div>
+          <button type="button" className="dialog-close" aria-label="Close" onClick={onClose}>×</button>
+        </div>
         {children}
         {actions && <div className="dialog-actions">{actions}</div>}
       </div>

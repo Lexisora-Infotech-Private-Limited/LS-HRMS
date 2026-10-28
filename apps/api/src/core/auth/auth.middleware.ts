@@ -3,6 +3,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
 import { runWithContext, type RequestContext } from '../context/request-context';
 import { TokenService } from './token.service';
+import { applyVcardAccess } from './vcard-access';
 
 /**
  * Optional hook for device tokens (set by the tracker module): returns false if the
@@ -44,7 +45,7 @@ export class AuthMiddleware implements NestMiddleware {
       userId: user.id,
       employeeId: user.employee?.id ?? null,
       roleKey: user.role.key,
-      permissions: new Set(user.role.permissions),
+      permissions: new Set(await applyVcardAccess(this.prisma, user.tenantId, { roleKey: user.role.key, employeeId: user.employee?.id ?? null }, user.role.permissions)),
       isPlatformAdmin: user.isPlatformAdmin,
       userName: user.employee?.fullName ?? user.name,
       ip: req.ip,

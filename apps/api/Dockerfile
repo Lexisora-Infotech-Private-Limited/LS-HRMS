@@ -13,9 +13,12 @@ RUN pnpm --filter @lexisora/shared build \
 
 FROM node:22-bookworm-slim
 WORKDIR /repo
-RUN apt-get update && apt-get install -y --no-install-recommends openssl tini && rm -rf /var/lib/apt/lists/*
+# fontconfig + fonts: ID cards and visiting cards are drawn from SVG text (Arial / Times / Georgia fall back to Liberation and DejaVu); without fonts every letter prints as an empty box
+RUN apt-get update && apt-get install -y --no-install-recommends openssl tini fontconfig fonts-liberation fonts-dejavu-core fonts-open-sans fonts-roboto fonts-lato fonts-crosextra-carlito fonts-crosextra-caladea && fc-cache -f && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production
 COPY --from=build /repo /repo
+# the bundled font families (payslip PDFs read the files directly; ID and visiting cards need them in the system font list)
+RUN mkdir -p /usr/local/share/fonts/lexisora && cp /repo/apps/api/assets/fonts/*.ttf /usr/local/share/fonts/lexisora/ && fc-cache -f
 RUN sed -i 's/\r$//' /repo/apps/api/docker-entrypoint.sh && chmod +x /repo/apps/api/docker-entrypoint.sh
 WORKDIR /repo/apps/api
 EXPOSE 4000

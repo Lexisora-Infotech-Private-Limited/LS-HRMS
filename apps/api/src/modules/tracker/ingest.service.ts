@@ -32,7 +32,9 @@ import {
   dbDate,
   estimateSkewSeconds,
   findTrackingGaps,
+  foldLiveState,
   isSkewFlagged,
+  type LiveState,
   matchIdleResolution,
   partitionByClientId,
   pickClaimReviewer,
@@ -76,11 +78,16 @@ export class IngestService {
   ) {}
 
   // ── tasks ───────────────────────────────────────────────────────────────
+  /**
+   * The tracker's task list: my Allotted and In progress cards (the timer runs only on In progress;
+   * starting an Allotted one moves its card there), most recently started first, plus internal
+   * standing activities.
+   */
   async tasks(employeeId: string): Promise<TrackerTask[]> {
     const today = trackerWorkDate(new Date());
     const [assigned, standing, summary] = await Promise.all([
       this.prisma.task.findMany({
-        where: { assigneeEmployeeId: employeeId, status: { notIn: ['DONE', 'CANCELLED'] }, isStanding: false },
+        where: { assigneeEmployeeId: employeeId, status: { in: ['ALLOTTED', 'WIP'] }, isStanding: false },
         include: { project: { select: { id: true, key: true, name: true, status: true } } },
         take: 100,
       }),
@@ -93,7 +100,12 @@ export class IngestService {
     ]);
     const perTask = new Map(((summary?.perTask as TrackerPerTask[] | null) ?? []).map((p) => [p.taskId, p.seconds]));
     const live = assigned.filter((t) => !['ARCHIVED', 'CANCELLED'].includes(t.project.status));
-    live.sort((a, b) => (TASK_ORDER[a.status] ?? 9) - (TASK_ORDER[b.status] ?? 9) || a.key.localeCompare(b.key, 'en', { numeric: true }));
+    live.sort(
+      (a, b) =>
+        (TASK_ORDER[a.status] ?? 9) - (TASK_ORDER[b.status] ?? 9) ||
+        (a.status === 'WIP' ? b.statusChangedAt.getTime() - a.statusChangedAt.getTime() : 0) ||
+        a.key.localeCompare(b.key, 'en', { numeric: true }),
+    );
     const map = (t: (typeof assigned)[number], isStanding: boolean): TrackerTask => ({
       id: t.id,
       key: t.key,
@@ -126,7 +138,7 @@ export class IngestService {
     const perTask = (summary?.perTask as TrackerPerTask[] | null) ?? [];
     return {
       status,
-      workedSeconds: (summary?.workedSec ?? 0) + (summary?.idlePendingSec ?? 0),
+      workedSeconds: summary?.workedSec ?? 0,
       breakSeconds: summary?.breakSec ?? 0,
       idleSeconds: summary?.idleDeductedSec ?? 0,
       screenshots: summary?.screenshotCount ?? 0,
@@ -183,7 +195,11 @@ export class IngestService {
         taskId: input.taskId ?? null,
       },
     });
-    await this.prisma.trackerDevice.update({ where: { id: deviceId }, data: { lastSeenAt: now, liveStatus: input.direction === 'IN' ? 'WORKING' : 'OUT', liveTaskId: input.taskId ?? null } });
+    const live = { status: input.direction === 'IN' ? ('WORKING' as const) : ('OUT' as const), taskId: input.taskId ?? null };
+    await this.prisma.trackerDevice.update({ where: { id: deviceId }, data: { lastSeenAt: now, liveStatus: live.status, liveTaskId: live.taskId } });
+    if (device.liveStatus !== live.status || device.liveTaskId !== live.taskId) {
+      this.events.emit('tracker.liveChanged', { employeeId, deviceId, status: live.status, taskId: live.taskId, prevTaskId: device.liveTaskId });
+    }
     await this.audit.record({ action: 'tracker.punch', entity: 'TrackerDevice', entityId: deviceId, meta: { direction: input.direction, source: 'DESKTOP', at: at.toISOString() } });
     return { ok: true, direction: input.direction, at: at.toISOString(), today: await this.today(employeeId, workDate) };
   }
@@ -227,6 +243,9 @@ export class IngestService {
         }),
       });
     }
+
+    // Live state for the task board (Running / Paused) from what the device just did.
+    if (evPart.fresh.length) await this.updateLive(deviceId, employeeId, evPart.fresh.map((e) => ({ type: e.type, taskId: e.taskId, at: fix(e.at) })), now);
 
     // 2. segments (idempotent, validated, idle resolved)
     const existingSeg = batch.segments.length
@@ -396,6 +415,21 @@ export class IngestService {
     };
   }
 
+  /**
+   * The device's live state after a sync, in the order its events were produced. A backlog synced
+   * late (newest event > 5 min old) is left to the next heartbeat, which reports the current state.
+   */
+  private async updateLive(deviceId: string, employeeId: string, events: { type: string; taskId?: string | null; at: Date }[], now: Date) {
+    const last = events[events.length - 1];
+    if (!last || now.getTime() - last.at.getTime() > 5 * 60_000) return;
+    const d = await this.prisma.trackerDevice.findUnique({ where: { id: deviceId }, select: { liveStatus: true, liveTaskId: true } });
+    if (!d) return;
+    const next = foldLiveState({ status: (d.liveStatus as LiveState['status']) ?? null, taskId: d.liveTaskId }, events);
+    if (next.status === d.liveStatus && next.taskId === d.liveTaskId) return;
+    await this.prisma.trackerDevice.update({ where: { id: deviceId }, data: { liveStatus: next.status, liveTaskId: next.taskId } });
+    this.events.emit('tracker.liveChanged', { employeeId, deviceId, status: next.status, taskId: next.taskId, prevTaskId: d.liveTaskId });
+  }
+
   private async notifyClaimReviewers(
     name: string,
     claims: Prisma.IdleClaimCreateManyInput[],
@@ -509,8 +543,9 @@ export class IngestService {
     });
   }
 
+  /** "Added to your weekly timesheet at HH:MM" shows the latest confirmation. */
   private async markConfirmed(employeeId: string, dateKey: string) {
-    await this.prisma.trackerDaySummary.updateMany({ where: { employeeId, workDate: dbDate(dateKey), confirmedAt: null }, data: { confirmedAt: new Date() } });
+    await this.prisma.trackerDaySummary.updateMany({ where: { employeeId, workDate: dbDate(dateKey) }, data: { confirmedAt: new Date() } });
   }
 
   /** "Add to weekly timesheet": idempotent; re-projects and asks time to rebuild the timesheet. */

@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnApplicationBootstrap, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../../core/prisma/prisma.service';
 import { LookupsService } from '../../core/lookups/lookups';
@@ -29,7 +29,7 @@ import { TimesheetService } from './services/timesheet.service';
  *  - crons: auto-close open sessions (6 h after shift end), Friday timesheet reminders, overdue approvals
  */
 @Injectable()
-export class TimeRegistry implements OnModuleInit {
+export class TimeRegistry implements OnModuleInit, OnApplicationBootstrap {
   private readonly log = new Logger('TimeRegistry');
   constructor(
     private readonly prisma: PrismaService,
@@ -128,10 +128,24 @@ export class TimeRegistry implements OnModuleInit {
     }
   }
 
-  /** Close sessions left open past shift end + policy.missedPunchAutoCloseHours (default 6 h). */
+  /** Startup catch-up: finish days left "in progress" while the server was down (the night job missed them). */
+  onApplicationBootstrap() {
+    setTimeout(() => void this.forEachTenant(() => this.attendance.finalizeStale()), 15_000).unref?.();
+  }
+
+  /** Close sessions left open past shift end + policy.missedPunchAutoCloseHours (default 6 h), then finish stale days. */
   @Cron('*/30 * * * *')
   async autoClose() {
-    await this.forEachTenant(() => this.attendance.autoCloseDue());
+    await this.forEachTenant(async () => {
+      await this.attendance.autoCloseDue();
+      await this.attendance.finalizeStale();
+    });
+  }
+
+  /** Every 10 min: "You haven't punched in yet" once shift start + grace has passed (policy.punchInReminder). */
+  @Cron('*/10 * * * *')
+  async punchInReminders() {
+    await this.forEachTenant(() => this.attendance.punchInReminders());
   }
 
   /** Friday 16:00 IST: remind employees to submit this week's timesheet. */
@@ -152,10 +166,13 @@ export class TimeRegistry implements OnModuleInit {
     await this.forEachTenant(() => this.bio.offlineCheck());
   }
 
-  /** 00:30 IST: materialise yesterday's attendance days (absences, weekly offs) for everyone. */
+  /** 00:30 IST: materialise yesterday's attendance days (absences, weekly offs) for everyone, and any older day still in progress. */
   @Cron('30 0 * * *', { timeZone: 'Asia/Kolkata' })
   async closeYesterday() {
     const y = addDays(istKeyOf(new Date()), -1);
-    await this.forEachTenant(() => this.attendance.recomputeRange(null, y, y));
+    await this.forEachTenant(async () => {
+      await this.attendance.recomputeRange(null, y, y);
+      await this.attendance.finalizeStale();
+    });
   }
 }

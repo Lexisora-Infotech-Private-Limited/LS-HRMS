@@ -167,30 +167,43 @@ export function taskRows(tasks: readonly TrackerTask[], perTask: ReadonlyMap<str
   });
 }
 
-/** Daily summary "By task": every task with time today, in task-list order, then the rest by time. */
+/**
+ * Daily summary "By task": every assigned task (even with no time yet today, so the whole
+ * project's task list is visible), plus any other task actually tracked today (e.g. a since-
+ * removed assignment, from the known-tasks cache) and the "No task selected" bucket. Task-list
+ * order first, then the rest by time.
+ */
 export function byTaskRows(
   tasks: readonly TrackerTask[],
   perTask: ReadonlyMap<string | null, number>,
   known: ReadonlyMap<string, TaskMeta>,
-): { key: string; title: string; time: string }[] {
+): { key: string; title: string; time: string; projectName?: string }[] {
   const order = new Map(tasks.map((t, i) => [t.id, i]));
-  const rows = [...perTask.entries()]
-    .filter(([, s]) => s >= 1)
-    .map(([id, s]) => {
-      const meta = id ? (known.get(id) ?? tasks.find((t) => t.id === id)) : null;
-      return {
-        id,
-        seconds: s,
-        key: meta?.key ?? (id ? '—' : ''),
-        title: meta?.title ?? (id ? 'Task' : 'No task selected'),
-      };
-    });
+  const byId = new Map<string, { id: string; seconds: number; key: string; title: string; projectName?: string }>();
+  for (const t of tasks) byId.set(t.id, { id: t.id, seconds: 0, key: t.key, title: t.title, projectName: t.projectName });
+  let noTaskSeconds = 0;
+  for (const [id, s] of perTask) {
+    if (id == null) {
+      noTaskSeconds += s;
+      continue;
+    }
+    const existing = byId.get(id);
+    if (existing) {
+      existing.seconds = s;
+      continue;
+    }
+    if (s < 1) continue;
+    const meta = known.get(id);
+    byId.set(id, { id, seconds: s, key: meta?.key ?? '—', title: meta?.title ?? 'Task', projectName: meta?.projectName });
+  }
+  const rows = [...byId.values()];
+  if (noTaskSeconds >= 1) rows.push({ id: '', seconds: noTaskSeconds, key: '', title: 'No task selected', projectName: undefined });
   rows.sort((a, b) => {
     const oa = a.id ? (order.get(a.id) ?? 1e6) : 2e6;
     const ob = b.id ? (order.get(b.id) ?? 1e6) : 2e6;
     return oa - ob || b.seconds - a.seconds;
   });
-  return rows.map((r) => ({ key: r.key, title: r.title, time: hm(r.seconds) }));
+  return rows.map((r) => ({ key: r.key, title: r.title, time: hm(r.seconds), projectName: r.projectName }));
 }
 
 export function summaryTitle(status: EngineStatus, workedSec: number): string {

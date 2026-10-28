@@ -433,12 +433,45 @@ export class ProjectsService {
   }
 
   // ── Members ─────────────────────────────────────────────────────────────
+  /** Project role → the department board that role works on (LEAD has no board of its own). */
+  private static readonly ROLE_BOARD: Record<string, string> = { MEMBER: 'Development', QA: 'QA', DESIGN: 'Design' };
+
+  /** Project members get access to the board matching their role automatically (if the project has that board). */
+  private async grantRoleBoard(p: { id: string; boardDepartmentIds: string[]; name: string }, employeeId: string, role: string, userId: string | null, by: string | null) {
+    const deptName = ProjectsService.ROLE_BOARD[role];
+    if (!deptName || !p.boardDepartmentIds.length) return;
+    const dept = await this.prisma.department.findFirst({ where: { id: { in: p.boardDepartmentIds }, name: deptName } });
+    if (!dept || dept.leadEmployeeId === employeeId) return;
+    if (await this.prisma.boardMember.count({ where: { projectId: p.id, departmentId: dept.id, employeeId } })) return;
+    await this.prisma.boardMember.create({ data: { tenantId: currentTenantId(), projectId: p.id, departmentId: dept.id, employeeId, allocatedByEmployeeId: null } });
+    if (userId) {
+      await this.notifications.notify({ userIds: [userId], type: 'board.allocated', title: `You now have access to the ${dept.name} board of ${p.name}`, link: `/board?project=${p.id}&board=${dept.id}`, from: by ?? undefined });
+      this.events.accessChanged([userId], p.id, dept.id);
+    }
+    this.events.boardChanged(p.id, dept.id);
+  }
+
+  /** Role changed: drop the board that role auto-granted (rows a department lead allocated by hand are kept). */
+  private async revokeRoleBoard(p: { id: string; boardDepartmentIds: string[] }, employeeId: string, oldRole: string, userId: string | null) {
+    const deptName = ProjectsService.ROLE_BOARD[oldRole];
+    if (!deptName || !p.boardDepartmentIds.length) return;
+    const dept = await this.prisma.department.findFirst({ where: { id: { in: p.boardDepartmentIds }, name: deptName } });
+    if (!dept) return;
+    const row = await this.prisma.boardMember.findFirst({ where: { projectId: p.id, departmentId: dept.id, employeeId, allocatedByEmployeeId: null } });
+    if (!row) return;
+    await this.prisma.boardMember.delete({ where: { id: row.id } });
+    await this.prisma.task.updateMany({ where: { projectId: p.id, departmentId: dept.id, assigneeEmployeeId: employeeId, status: 'ALLOTTED' }, data: { status: 'OPEN', assigneeEmployeeId: null, version: { increment: 1 } } });
+    if (userId) this.events.accessChanged([userId], p.id, dept.id);
+    this.events.boardChanged(p.id, dept.id);
+  }
+
   async addMember(id: string, input: { employeeId: string; role: string; allocationPct?: number | null }) {
     const { v, p } = await this.requireManage(id);
     const e = await this.prisma.employee.findFirst({ where: { id: input.employeeId }, select: { id: true, fullName: true, userId: true, status: true } });
     if (!e || e.status === 'EXITED') throw badRequest('Employee not found');
     if (await this.prisma.projectMember.count({ where: { projectId: id, employeeId: e.id } })) throw conflict(`${e.fullName} is already on this project`);
     await this.prisma.projectMember.create({ data: { tenantId: currentTenantId(), projectId: id, employeeId: e.id, role: input.role, allocationPct: input.allocationPct ?? null } });
+    await this.grantRoleBoard(p, e.id, input.role, e.userId, v.name);
     await this.audit.record({ action: 'project.member.added', entity: 'Project', entityId: id, meta: { employeeId: e.id, name: e.fullName, role: input.role } });
     this.events.emit('project.member.added', { projectId: id, employeeId: e.id });
     if (e.userId) await this.notifications.notify({ userIds: [e.userId], type: 'project.member', title: `You were added to ${p.name}`, link: `/projects/${id}`, from: v.name });
@@ -446,11 +479,16 @@ export class ProjectsService {
   }
 
   async updateMember(id: string, memberId: string, input: { role?: string; allocationPct?: number | null }) {
-    const { p } = await this.requireManage(id);
+    const { v, p } = await this.requireManage(id);
     const m = await this.prisma.projectMember.findFirst({ where: { id: memberId, projectId: id } });
     if (!m) throw notFound('Member');
     if (m.employeeId === p.leadEmployeeId && input.role && input.role !== 'LEAD') throw conflict('Change the project lead first');
     await this.prisma.projectMember.update({ where: { id: memberId }, data: { role: input.role ?? undefined, allocationPct: input.allocationPct } });
+    if (input.role && input.role !== m.role) {
+      const emp = await this.prisma.employee.findFirst({ where: { id: m.employeeId }, select: { userId: true } });
+      await this.revokeRoleBoard(p, m.employeeId, m.role, emp?.userId ?? null);
+      await this.grantRoleBoard(p, m.employeeId, input.role, emp?.userId ?? null, v.name);
+    }
     await this.audit.record({ action: 'project.member.updated', entity: 'Project', entityId: id, meta: { memberId, ...input } as Prisma.InputJsonValue });
     return { ok: true };
   }

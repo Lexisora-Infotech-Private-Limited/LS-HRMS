@@ -143,7 +143,7 @@ export class VaultService {
     if (i.source === 'SELF_UPLOAD' && !/^(application\/pdf|image\/(png|jpe?g|webp))$/.test(file.mime)) throw new AppError(422, 'FILE_TYPE', 'Upload a PDF, JPG or PNG');
     if (i.source === 'SELF_UPLOAD' && file.size > 10 * 1024 * 1024) throw new AppError(422, 'FILE_TOO_LARGE', 'Documents are limited to 10 MB');
     if (file.sha256) {
-      const dup = await this.prisma.employeeDocument.findFirst({ where: { employeeId, docType: i.docType, deletedAt: null, isCurrent: true, fileId: { not: i.fileId } }, select: { fileId: true } });
+      const dup = await this.prisma.employeeDocument.findFirst({ where: { employeeId, docType: i.docType, deletedAt: null, isCurrent: true, verificationStatus: { not: 'REJECTED' }, fileId: { not: i.fileId } }, select: { fileId: true } });
       if (dup) {
         const f2 = await this.prisma.fileObject.findUnique({ where: { id: dup.fileId }, select: { sha256: true } });
         if (f2?.sha256 && f2.sha256 === file.sha256) throw new AppError(409, 'DUPLICATE_DOCUMENT', 'This exact file is already in your vault');

@@ -37,6 +37,7 @@ import {
   suggestResult,
   templateWeightsValid,
   validateBank,
+  parseMobile,
   validateCsvRow,
   validateCsvRows,
   verhoeffDigit,
@@ -154,9 +155,9 @@ describe('CSV row validation', () => {
   });
   it('resolves managers defined in the same file and orders them first', () => {
     const rows = [
-      row({ official_email: 'report@lexisora.com', manager_email: 'lead@lexisora.com' }),
-      row({ official_email: 'lead@lexisora.com', manager_email: '' }),
-      row({ official_email: 'report@lexisora.com' }), // duplicate
+      row({ official_email: 'report@lexisora.com', manager_email: 'lead@lexisora.com', phone: '98250 11111' }),
+      row({ official_email: 'lead@lexisora.com', manager_email: '', phone: '98250 22222' }),
+      row({ official_email: 'report@lexisora.com', phone: '98250 33333' }), // duplicate
       row({ official_email: 'x@lexisora.com', phone: '1' }), // invalid
     ];
     const { valid, errors } = validateCsvRows(rows, ctx);
@@ -169,6 +170,70 @@ describe('CSV row validation', () => {
     const { valid, errors } = validateCsvRows(rows, ctx);
     expect(valid).toHaveLength(0);
     expect(errors.some((e) => e.row === 1 && e.field === 'manager_email')).toBe(true);
+  });
+});
+
+describe('mobile numbers', () => {
+  it('accepts Indian numbers written the usual ways and returns the 10 digits', () => {
+    for (const t of ['9825011111', '98250 11111', '+91 98250 11111', '+91-9825011111', '919825011111', '09825011111', '(98250) 11111']) expect(parseMobile(t)).toEqual({ ok: true, value: '9825011111' });
+  });
+  it('rejects the wrong length or a number that cannot be a mobile', () => {
+    expect((parseMobile('98250111112') as { message: string }).message).toMatch(/exactly 10 digits \(this has 11\)/); // an extra digit
+    expect((parseMobile('982501111') as { message: string }).message).toMatch(/exactly 10 digits/);
+    expect((parseMobile('1234567890') as { message: string }).message).toMatch(/starts with 6, 7, 8 or 9/);
+    expect(parseMobile('').ok).toBe(false);
+    expect(parseMobile('98250abc11').ok).toBe(false);
+  });
+  it('lets another country code through with 8 to 15 digits', () => {
+    expect(parseMobile('+1 415 555 2671')).toEqual({ ok: true, value: '+14155552671' });
+    expect(parseMobile('+44 20').ok).toBe(false);
+  });
+});
+
+describe('duplicates and S.No in the import', () => {
+  const ctx: CsvLookupCtx = {
+    departments: new Map([['development', 'd1']]),
+    designations: new Map([['software engineer', 'g1']]),
+    branches: new Map(),
+    managersByEmail: new Map(),
+    existingEmails: new Set(),
+    existingEmailOwners: new Map([['priya@lexisora.com', 'Priya Sharma (LX-0012)'], ['priya.home@gmail.com', 'Priya Sharma (LX-0012)']]),
+    existingPhones: new Map([['9825011111', 'Priya Sharma (LX-0012)']]),
+    today: '2026-10-16',
+  };
+  const mk = (o: Record<string, string> = {}) => ({ s_no: '1', full_name: 'Aditya K', official_email: 'aditya@lexisora.com', phone: '98250 22222', department: 'Development', designation: 'Software Engineer', joining_date: '16-10-2026', ...o });
+
+  it('rejects a phone number that already belongs to an employee, however it is written', () => {
+    for (const phone of ['9825011111', '+91 98250 11111', '098250 11111']) {
+      const r = validateCsvRow(mk({ phone }), 1, ctx);
+      expect(r.errors.map((e) => e.field)).toEqual(['phone']);
+      expect(r.errors[0]!.message).toMatch(/already belongs to employee Priya Sharma \(LX-0012\)/);
+    }
+  });
+  it('rejects a personal email already used by an employee, as official or personal email', () => {
+    expect(validateCsvRow(mk({ personal_email: 'priya.home@gmail.com' }), 1, ctx).errors[0]).toMatchObject({ field: 'personal_email' });
+    expect(validateCsvRow(mk({ personal_email: 'priya@lexisora.com' }), 1, ctx).errors[0]).toMatchObject({ field: 'personal_email' });
+    expect(validateCsvRow(mk({ official_email: 'priya.home@gmail.com' }), 1, ctx).errors[0]).toMatchObject({ field: 'official_email' });
+  });
+  it('rejects the same phone or personal email on two rows of the file, keeping the first, and names the S.No', () => {
+    const { valid, errors } = validateCsvRows(
+      [
+        mk({ s_no: '10', official_email: 'a@lexisora.com', personal_email: 'same@gmail.com', phone: '98250 22222' }),
+        mk({ s_no: '11', official_email: 'b@lexisora.com', phone: '+91 9825022222' }),
+        mk({ s_no: '12', official_email: 'c@lexisora.com', phone: '98250 44444', personal_email: 'same@gmail.com' }),
+        mk({ s_no: '13', official_email: 'd@lexisora.com', phone: '98250 55555' }),
+      ],
+      ctx,
+    );
+    expect(valid.map((v) => v.sNo)).toEqual(['10', '13']);
+    expect(errors.map((e) => [e.sNo, e.field])).toEqual([['11', 'phone'], ['12', 'personal_email']]);
+    expect(errors[0]!.message).toBe('Same phone number for S.No 10 and S.No 11');
+    expect(errors[1]!.message).toBe('same@gmail.com is used by both S.No 10 and S.No 12');
+  });
+  it('uses the row position when there is no S.No, and stores the cleaned 10-digit phone', () => {
+    const { valid, errors } = validateCsvRows([mk({ s_no: '' }), mk({ s_no: '', official_email: 'bad' })], ctx);
+    expect(valid[0]).toMatchObject({ sNo: '1', phone: '9825022222' });
+    expect(errors[0]).toMatchObject({ row: 2, sNo: '2' });
   });
 });
 

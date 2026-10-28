@@ -6,14 +6,15 @@ import { AuditService } from '../../../core/audit/audit.service';
 import { RealtimeGateway } from '../../../core/realtime/realtime.gateway';
 import { NotificationsService } from '../../../core/notifications/notifications.service';
 import { EventsService } from '../../../core/registry/events.service';
+import { JobsService } from '../../../core/jobs/jobs.service';
 import { requireContext } from '../../../core/context/request-context';
 import { AppError } from '../../../core/http/errors';
 import { CrossReader } from '../cross';
 import { normalizePolicy, type LocationRules } from '../lib/policy';
-import { dateOf, keyOf } from '../lib/time-utils';
+import { dateOf, istKeyOf, keyOf } from '../lib/time-utils';
 import type { ShiftLike } from '../lib/day-calc';
 
-export const POLICY_DEFAULTS: Record<PolicyAudience, Omit<AttendancePolicy, 'id' | 'tenantId' | 'audience' | 'updatedAt' | 'updatedByName' | 'version'>> = {
+export const POLICY_DEFAULTS: Record<PolicyAudience, Omit<AttendancePolicy, 'id' | 'tenantId' | 'audience' | 'updatedAt' | 'updatedByName' | 'version' | 'lateHalfDayLeaveFrom'>> = {
   OFFICE: {
     biometricMandatory: true,
     allowWebPunch: false,
@@ -29,10 +30,12 @@ export const POLICY_DEFAULTS: Record<PolicyAudience, Omit<AttendancePolicy, 'id'
     offlineRetentionDays: 7,
     screenshotRetentionDays: 90,
     idleDeductionMode: 'SHORTFALL_ONLY',
-    lateMarksPerPenalty: 3,
+    lateMarksPerPenalty: 1,
     latePenaltyDays: 0.5,
     latePenaltySource: 'LEAVE_THEN_LOP',
     earlyOutCountsAsLate: false,
+    lateReasonRequired: true,
+    lateHalfDayAsLeave: true,
     missedPunchAutoCloseHours: 6,
     maxRegularizationsPerMonth: 3,
     regularizationWindowDays: 7,
@@ -55,10 +58,12 @@ export const POLICY_DEFAULTS: Record<PolicyAudience, Omit<AttendancePolicy, 'id'
     offlineRetentionDays: 7,
     screenshotRetentionDays: 90,
     idleDeductionMode: 'SHORTFALL_ONLY',
-    lateMarksPerPenalty: 3,
+    lateMarksPerPenalty: 1,
     latePenaltyDays: 0.5,
     latePenaltySource: 'LEAVE_THEN_LOP',
     earlyOutCountsAsLate: false,
+    lateReasonRequired: true,
+    lateHalfDayAsLeave: true,
     missedPunchAutoCloseHours: 6,
     maxRegularizationsPerMonth: 3,
     regularizationWindowDays: 7,
@@ -83,6 +88,8 @@ export const GENERAL_SHIFT: ShiftLike & { id: null } = {
   earlyOutGraceMinutes: 15,
 };
 
+/** Policy fields computeDay / the late-arrival leave depend on (a change recomputes the open month). */
+const DAY_RULE_FIELDS = ['earlyOutCountsAsLate', 'deductIdleFromPayroll', 'idleDeductionMode', 'lateHalfDayAsLeave', 'latePenaltySource'] as const;
 const MONITORING_FIELDS = ['allowWebPunch', 'allowDesktopPunch', 'biometricMandatory', 'autoIdleEnabled', 'autoIdleMinutes', 'screenshotsEnabled', 'screenshotIntervalMinutes', 'blurScreenshots'] as const;
 const FIELD_LABEL: Record<string, string> = {
   biometricMandatory: 'Biometric punch mandatory',
@@ -147,6 +154,8 @@ export function toShiftLike(s: Shift | null): ShiftLike {
     minHalfDayMinutes: s.minHalfDayMinutes,
     halfDayIfLateByMinutes: s.halfDayIfLateByMinutes,
     earlyOutGraceMinutes: s.earlyOutGraceMinutes,
+    lateMarksAllowed: s.lateMarksAllowed,
+    lateMarksAllowedFrom: s.lateMarksAllowedFrom ? keyOf(s.lateMarksAllowedFrom) : null,
   };
 }
 
@@ -163,6 +172,7 @@ export class PolicyService {
     private readonly notifications: NotificationsService,
     private readonly cross: CrossReader,
     private readonly events: EventsService,
+    private readonly jobs: JobsService,
   ) {}
 
   // ── policy ──
@@ -195,6 +205,8 @@ export class PolicyService {
     const ctx = requireContext();
     const data: any = {};
     for (const k of Object.keys(diff)) data[k] = (next as any)[k];
+    // Switching late half days → leave on applies from today, never to days before it.
+    if (diff.lateHalfDayAsLeave?.to === true) data.lateHalfDayLeaveFrom = dateOf(istKeyOf(new Date()));
     const saved = await this.prisma.attendancePolicy.update({ where: { id: current.id }, data: { ...data, version: current.version + 1, updatedByName: ctx.userName ?? null } });
     await this.audit.record({ action: 'attendance_policy.updated', entity: 'AttendancePolicy', entityId: saved.id, meta: { audience, version: saved.version, diff } as any });
 
@@ -204,6 +216,11 @@ export class PolicyService {
     this.events.emit('policy.updated', { audience, version: saved.version, updatedAt: saved.updatedAt.toISOString() });
 
     const affected = await this.employeesInAudience(audience);
+    // Rules that change how a day is counted: recompute this month's open days so the screens and payroll agree.
+    if (Object.keys(diff).some((k) => (DAY_RULE_FIELDS as readonly string[]).includes(k)) && affected.length) {
+      const today = istKeyOf(new Date());
+      await this.jobs.enqueue('time.recomputeRange', { tenantId: ctx.tenantId, employeeIds: affected.map((e) => e.id), from: `${today.slice(0, 7)}-01`, to: today });
+    }
     const pushedTo = await this.cross.activeTrackerDevices(affected.map((e) => e.id));
     // DPDP: monitoring / punch-method changes are disclosed to affected employees.
     const material = Object.keys(diff).filter((k) => (MONITORING_FIELDS as readonly string[]).includes(k));
@@ -297,6 +314,9 @@ export function toPolicyDto(p: AttendancePolicy): AttendancePolicyDto {
     latePenaltyDays: p.latePenaltyDays,
     latePenaltySource: p.latePenaltySource as AttendancePolicyDto['latePenaltySource'],
     earlyOutCountsAsLate: p.earlyOutCountsAsLate,
+    lateReasonRequired: p.lateReasonRequired,
+    lateHalfDayAsLeave: p.lateHalfDayAsLeave,
+    lateHalfDayLeaveFrom: keyOf(p.lateHalfDayLeaveFrom),
     missedPunchAutoCloseHours: p.missedPunchAutoCloseHours,
     maxRegularizationsPerMonth: p.maxRegularizationsPerMonth,
     regularizationWindowDays: p.regularizationWindowDays,
