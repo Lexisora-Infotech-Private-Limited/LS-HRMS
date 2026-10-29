@@ -25,6 +25,9 @@ jobs:
       JWT_REFRESH_SECRET: ci-refresh-secret
       DATA_ENCRYPTION_KEY: Y2ktZGF0YS1rZXktMzItYnl0ZXMtbG9uZy0hLSEhISE=
       JOBS_DISABLED: "true"
+      # Works around a libvips/liborc AVX-512 vectorization bug that segfaults
+      # (SIGSEGV, exit 139) sharp() calls on some GitHub-hosted runner CPUs.
+      VIPS_NOVECTOR: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

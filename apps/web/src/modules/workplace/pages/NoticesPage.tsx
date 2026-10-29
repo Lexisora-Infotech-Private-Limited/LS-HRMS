@@ -114,8 +114,8 @@ export default function NoticesPage() {
   return (
     <div data-screen-label="Notice board" className="stack" style={{ gap: 18 }}>
       <PageHeader
-        title="Notice board"
-        sub="Global notices reach everyone. Team-specific notices are visible only to the selected department or project."
+        title=" NewNotice board"
+        sub="Stay updated on company announcements, events, and policy changes."
         actions={
           canPublish ? (
             <button className="btn btn-primary" onClick={() => setForm({ notice: null })}>
