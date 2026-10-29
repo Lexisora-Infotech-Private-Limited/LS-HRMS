@@ -15,7 +15,9 @@ The sections below are the same steps done by hand.
 
 - Docker Desktop running (WSL 2 backend).
 - Ports: web portal **8080** (or the first free of 8088 / 8090 / 8180 — `new-env.ps1` picks it and
-  prints the address), **4000** (API / desktop tracker), **8026** (mail outbox). All are set in `.env.prod`.
+  prints the address); the portal is also available on **8081** and **80**. API / desktop tracker:
+  **4000**. Database browser: **8082** (localhost only; use an SSH tunnel for remote access).
+  Mail outbox: **8026**. The configurable ports are set in `.env.prod`.
   Stop the development servers (`pnpm dev`) first — they also use port 4000.
 
 ## 2. Create the environment file (once)
@@ -51,8 +53,15 @@ Then open the web portal address printed by `new-env.ps1` (e.g. **http://localho
 | What | Where |
 |---|---|
 | Web portal | http://localhost:8080 |
+| Web portal (alternate) | http://localhost:8081 |
 | API health | http://localhost:4000/api/v1/health |
+| Database browser (Adminer) | http://localhost:8082 |
 | Invite / password-reset emails (until SMTP is configured) | http://localhost:8026 |
+
+Adminer connects to PostgreSQL using server `postgres`, database `hrms`, and username `hrms`.
+Use the `POSTGRES_PASSWORD` value from `.env.prod`. To access Adminer from your computer, create
+an SSH tunnel with `ssh -L 8082:127.0.0.1:8082 <user>@<server>` and open http://localhost:8082.
+The browser is intentionally not exposed directly to the public internet.
 
 ## 4. First steps as admin (real company)
 
@@ -81,10 +90,11 @@ code-signing certificate.
 
 ## 6. Access from other computers on your network
 
-Find this PC's IP (`ipconfig`), allow ports 8080 and 4000 in Windows Firewall, and set in `.env.prod`:
+Find this PC's IP (`ipconfig`), allow ports 8081 (or the configured web port) and 4000 in Windows
+Firewall, and set in `.env.prod`:
 
 ```
-WEB_ORIGIN=http://<this-PC's-IP>:8080
+WEB_ORIGIN=http://<this-PC's-IP>:8081
 COOKIE_SECURE=false
 ```
 
@@ -114,10 +124,14 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 
 Data stays in the `pgdata` and `storage` Docker volumes. Take a backup before every update.
 
-On Linux (or Git Bash), `./deploy.sh` does the whole update: fast-forwards `main` (or `DEPLOY_BRANCH`),
-rebuilds the images, dumps the database to `backups/<timestamp>-predeploy/`, runs
-`prisma migrate deploy`, then swaps the api/web containers and waits until they are healthy. If the
-backup or a migration fails, the running containers are left as they were.
+On Linux (or Git Bash), `./deploy.sh` pulls `main`, rebuilds and starts the Compose services, prunes
+unused images, and checks the API health endpoint for up to 30 seconds. It does not make a backup;
+run the backup procedure before updating production. The API container applies committed Prisma
+migrations on startup when migration files are present.
+
+GitHub Actions deploys automatically after a successful CI run for a push to `main`. Configure
+`SERVER_HOST`, `SERVER_USER`, and `SERVER_SSH_KEY` under **Settings → Secrets and variables → Actions**
+so the workflow can connect to this server.
 
 Schema changes must ship as migration files: after editing `apps/api/prisma/schema/*.prisma`, run
 `pnpm --filter @lexisora/api prisma:migrate` and commit the new folder under `prisma/schema/migrations/`.

@@ -4,6 +4,7 @@
 #   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 #
 #   Web portal   http://localhost:8080
+#   DB viewer    http://localhost:8081          (Adminer; server: postgres, user/db: hrms)
 #   API          http://localhost:4000/api/v1   (the desktop tracker's default server address)
 #   Mail outbox  http://localhost:8026          (Mailpit catches invite/reset emails unless SMTP_* is set)
 #
@@ -25,6 +26,16 @@ services:
       test: ["CMD-SHELL", "pg_isready -U hrms"]
       interval: 5s
       retries: 20
+
+  adminer:
+    image: adminer:latest
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    ports:
+      - "8081:8080"
 
   redis:
     image: redis:7-alpine
@@ -89,6 +100,7 @@ services:
     depends_on: [api]
     ports:
       - "${WEB_PORT:-8080}:80"
+      - "80:80"
 
 volumes:
   pgdata:
