@@ -79,7 +79,7 @@ export default function DashboardPage() {
           <div className="row-between">
             <h4 style={{ margin: 0 }}>Announcements</h4>
             <button className="wp-link" onClick={() => nav('/notices')}>
-              Notice boards
+              New Notice board
             </button>
           </div>
           {(data?.announcements ?? []).map((a) => (
