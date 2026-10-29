@@ -31,6 +31,7 @@
 .nav-link.active { background: var(--color-sidebar-active-bg); color: var(--color-sidebar-active-text); }
 .topbar { display: flex; align-items: center; gap: 14px; padding: 12px 32px; border-bottom: 1px solid var(--color-divider); flex-wrap: wrap; position: sticky; top: 0; background: var(--color-bg); z-index: 20; }
 .main { padding: 28px 32px 64px; display: flex; flex-direction: column; gap: 22px; max-width: 1320px; width: 100%; }
+.topbar-punch { font-size: 15px; padding: 7px 14px; }
 .avatar {
   width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--color-accent); display: grid; place-items: center;
   font-family: var(--font-heading); font-size: 14px; color: var(--color-accent-700); flex: none; overflow: hidden; background: var(--color-bg);

@@ -195,15 +195,25 @@ function TeamRequests({ onOpen }: { onOpen: (id: string) => void }) {
 
 // ── Apply ────────────────────────────────────────────────────────────────
 
+const istToday = () => new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10);
+const addDaysKey = (key: string, n: number) => new Date(new Date(`${key}T00:00:00Z`).getTime() + n * 86_400_000).toISOString().slice(0, 10);
+
 function ApplyModal({ onClose }: { onClose: () => void }) {
   const look = useLookups(['leaveTypes', 'employees']);
   const types = opts(look.data, 'leaveTypes');
+  const typeRows = useQuery({ queryKey: lpKeys.types, queryFn: lpApi.types });
   const balances = useQuery({ queryKey: lpKeys.balances, queryFn: lpApi.balances });
   const [v, setV] = useState({ leaveTypeId: '', fromDate: '', toDate: '', halfDay: 'NONE' as LeaveApplyInput['halfDay'], notify: '', reason: '', acceptLop: false });
   const set = (k: keyof typeof v, val: any) => setV((s) => ({ ...s, [k]: val }));
   useEffect(() => {
     if (!v.leaveTypeId && types.length) set('leaveTypeId', types[0]!.value);
   }, [types, v.leaveTypeId]);
+  const backdateLimitDays = typeRows.data?.find((t) => t.id === v.leaveTypeId)?.backdateLimitDays ?? 0;
+  const minFromDate = addDaysKey(istToday(), -backdateLimitDays);
+  // Clamp an already-picked From date when switching to a leave type with a tighter backdating limit.
+  useEffect(() => {
+    if (v.fromDate && v.fromDate < minFromDate) set('fromDate', minFromDate);
+  }, [minFromDate, v.fromDate]);
   const single = !!v.fromDate && (v.fromDate === v.toDate || !v.toDate);
   const body: LeaveApplyInput | null = useMemo(() => {
     if (!v.leaveTypeId || !v.fromDate) return null;
@@ -259,7 +269,8 @@ function ApplyModal({ onClose }: { onClose: () => void }) {
         </div>
         <div className="field">
           <label htmlFor="lv-from">From</label>
-          <input id="lv-from" type="date" className="input" value={v.fromDate} onChange={(e) => setV((s) => ({ ...s, fromDate: e.target.value, toDate: !s.toDate || s.toDate < e.target.value ? e.target.value : s.toDate }))} />
+          <input id="lv-from" type="date" className="input" min={minFromDate} value={v.fromDate} onChange={(e) => setV((s) => ({ ...s, fromDate: e.target.value, toDate: !s.toDate || s.toDate < e.target.value ? e.target.value : s.toDate }))} />
+          {backdateLimitDays > 0 && <div className="field-hint">Can be applied at most {backdateLimitDays} day{backdateLimitDays === 1 ? '' : 's'} back</div>}
         </div>
         <div className="field">
           <label htmlFor="lv-to">To</label>

@@ -85,10 +85,7 @@ export default function VisitingCardPage() {
           <div className="faint" style={{ fontSize: 12, lineHeight: 1.5, maxWidth: 260 }}>
             {c.isPublic ? (
               <>
-                Public card:{' '}
-                <a href={c.publicUrl} target="_blank" rel="noopener noreferrer" style={{ wordBreak: 'break-all' }}>{c.publicUrl.replace(/^https?:\/\//, '')}</a>
-                <br />
-                <button className="btn btn-ghost btn-sm" style={{ paddingLeft: 0 }} onClick={() => void copyLink(c.publicUrl)}>Copy link</button>
+                <button className="btn btn-ghost btn-sm" style={{ paddingLeft: 0 }} onClick={() => void copyLink(c.publicUrl)}>Copy public card link</button>
                 <button className="btn btn-ghost btn-sm" disabled={busy === 'vcf'} onClick={() => void save('vcf')}>Save contact (.vcf)</button>
               </>
             ) : (
