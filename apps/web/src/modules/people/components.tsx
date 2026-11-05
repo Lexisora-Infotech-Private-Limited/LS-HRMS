@@ -65,11 +65,11 @@ export function EmployeeFormModal({ profile, onClose, onCreated }: { profile?: P
     { name: 'shiftId', label: 'Shift', type: 'select', options: d.shifts ?? [], placeholder: 'Default shift' },
     { name: 'branchId', label: 'Branch', type: 'select', options: d.branches ?? [], placeholder: 'Head office' },
     { name: 'workLocationId', label: 'Work location', type: 'select', options: d.locations ?? [], placeholder: 'By work mode', showIf: (v) => v.workMode !== 'REMOTE' },
+    { name: 'gender', label: 'Gender', type: 'select', required: true, options: ['Female', 'Male', 'Non-binary', 'Prefer not to say'].map((g) => ({ value: g, label: g })) },
     ...(editing
       ? ([
           { name: 'bloodGroup', label: 'Blood group', type: 'select', options: PEOPLE_BLOOD_GROUPS.map((b) => ({ value: b, label: b })) },
           { name: 'dateOfBirth', label: 'Date of birth', type: 'date' },
-          { name: 'gender', label: 'Gender', type: 'select', options: ['Female', 'Male', 'Non-binary', 'Prefer not to say'].map((g) => ({ value: g, label: g })) },
           { name: 'maritalStatus', label: 'Marital status', type: 'select', options: ['Single', 'Married', 'Other'].map((g) => ({ value: g, label: g })) },
           { name: 'emergencyContactName', label: 'Emergency contact name', type: 'text' },
           { name: 'emergencyContactPhone', label: 'Emergency contact phone', type: 'phone' },
