@@ -263,6 +263,7 @@ export class EmployeesService {
           shiftId: input.shiftId ?? null,
           workLocationId: input.workLocationId ?? null,
           photoFileId: input.photoFileId ?? null,
+          gender: input.gender ?? null,
           status: input.skipOnboarding ? 'ACTIVE' : 'ONBOARDING',
           joiningDate: toDbDate(input.joiningDate),
         } as Prisma.EmployeeUncheckedCreateInput,

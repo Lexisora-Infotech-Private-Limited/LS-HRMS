@@ -146,7 +146,7 @@ export function FormModal({
       >
         {visible.map((f) => (
           <div key={f.name} className={`field${f.span === 2 || f.type === 'area' || f.type === 'file' ? ' span-2' : ''}`}>
-            {f.type !== 'checkbox' && <label htmlFor={`f-${f.name}`}>{f.label}{f.required ? '' : ''}</label>}
+            {f.type !== 'checkbox' && <label htmlFor={`f-${f.name}`}>{f.label}{f.required ? <span className="field-required"> *</span> : null}</label>}
             <FieldInput f={f.optionsFor ? { ...f, options: f.optionsFor(values) } : f} value={values[f.name]} onChange={(v) => set(f.name, v)} file={files[f.name] ?? null} onFile={(file) => setFiles((s) => ({ ...s, [f.name]: file }))} invalid={!!errors[f.name]} />
             {errors[f.name] ? <div className="field-error">{errors[f.name]}</div> : f.hint ? <div className="field-hint">{f.hint}</div> : null}
           </div>

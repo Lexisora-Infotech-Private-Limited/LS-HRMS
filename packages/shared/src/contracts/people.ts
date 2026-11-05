@@ -85,6 +85,7 @@ export const createEmployeeSchema = z.object({
   workLocationId: z.string().optional().nullable(),
   branchId: z.string().optional().nullable(),
   photoFileId: z.string().optional().nullable(),
+  gender: optStr,
   empCodeOverride: z
     .string()
     .trim()

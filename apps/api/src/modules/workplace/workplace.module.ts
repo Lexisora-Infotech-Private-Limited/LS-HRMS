@@ -27,7 +27,6 @@ import { CctvController } from './cctv/cctv.controller';
 import { CctvService } from './cctv/cctv.service';
 import { WorkplaceRegistry } from './workplace.registry';
 import { WorkplaceHubRegistry } from './workplace-hub.registry';
-
 /**
  * Workplace domain — dashboard (greeting, thought of the day, to-dos, approvals card,
  * announcements, birthdays & events), notice board, company feed, kudos & Employee of the
