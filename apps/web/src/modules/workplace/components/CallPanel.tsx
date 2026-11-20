@@ -214,7 +214,10 @@ export function CallPanel({ call: initial, onClose }: Props) {
             <div className="kicker">{KIND_LABEL[call.kind] ?? 'Call'} · {mm} · {count} {count === 1 ? 'participant' : 'participants'}</div>
             <div className="dialog-title" style={{ margin: '2px 0 0' }}>{call.channelLabel}</div>
           </div>
-          {call.recording && <span className="wp-rec" role="status">REC</span>}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {call.recording && <span className="wp-rec" role="status">REC</span>}
+            <button type="button" className="dialog-close" aria-label="Close" onClick={() => void leave()}>×</button>
+          </div>
         </div>
         {call.recording && <div className="note" style={{ marginTop: 10 }}>This call may be recorded</div>}
         {call.notice && <div className="note" style={{ marginTop: 10 }}>{call.notice} — showing your local camera, microphone and screen preview only.</div>}

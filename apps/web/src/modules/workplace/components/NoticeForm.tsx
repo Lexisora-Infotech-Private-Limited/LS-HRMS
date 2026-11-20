@@ -127,7 +127,7 @@ export function NoticeFormModal({ notice, onClose, onSaved }: { notice?: NoticeD
       >
         <div className="form-grid">
           <div className="field span-2">
-            <label htmlFor="n-title">Title</label>
+            <label htmlFor="n-title">Title<span className="field-required"> *</span></label>
             <input id="n-title" className="input" value={title} maxLength={150} onChange={(e) => setTitle(e.target.value)} aria-invalid={!!errors.title || undefined} />
             {errors.title && <div className="field-error">{errors.title}</div>}
           </div>
@@ -148,7 +148,7 @@ export function NoticeFormModal({ notice, onClose, onSaved }: { notice?: NoticeD
             </label>
           </div>
           <div className="field span-2">
-            <label>Team</label>
+            <label>Team{visibility === 'TEAM' && !live ? <span className="field-required"> *</span> : null}</label>
             <div className={`wp-team-pick${visibility === 'GLOBAL' || live ? ' disabled' : ''}`} aria-disabled={visibility === 'GLOBAL' || live}>
               {(['Departments', 'Projects'] as const).map((g) => {
                 const list = teamOptions.filter((t) => t.group === g);
