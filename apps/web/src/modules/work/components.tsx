@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { WORK_DOC_KINDS, formatDate, type ProjectDocumentRow } from '@lexisora/shared';
+import { WORK_DOC_KINDS, formatDate, istDateKey, type ProjectDocumentRow } from '@lexisora/shared';
 import { download, uploadFile } from '@/lib/api';
 import { useAction } from '@/lib/query';
 import { useToast } from '@/lib/toast';
@@ -204,7 +204,8 @@ export function AddTaskModal({
     const raw = (v.estimatedHours ?? '').trim().replace(/h$/i, '');
     const est = Number(raw);
     if (!raw || !Number.isFinite(est) || est <= 0) return setErr('Estimate is required and must be more than 0 hours');
-    if (est > 200) return setErr('Estimate over 200h — split the task');
+    if (est > 16) return setErr('Estimate cannot be more than 16 hours — split the task');
+    if (v.dueDate && v.dueDate < istDateKey(new Date())) return setErr('Due date cannot be in the past');
     setErr(null);
     add.mutate({
       title: v.title.trim(),
@@ -237,8 +238,8 @@ export function AddTaskModal({
         {f('title', 'Title', 'text', { span: 2, required: true })}
         {f('moduleName', 'Module', 'select', { options: modules, placeholder: 'No module' })}
         {f('assigneeEmployeeId', 'Assignee', 'select', { options: assignees, placeholder: 'Unassigned (Open)' })}
-        {f('estimatedHours', 'Estimate (hours)', 'text', { placeholder: 'e.g. 8 or 1.5', required: true })}
-        {f('dueDate', 'Due date', 'date')}
+        {f('estimatedHours', 'Estimate (hours)', 'text', { placeholder: 'e.g. 8 or 1.5 (max 16)', required: true })}
+        {f('dueDate', 'Due date', 'date', { min: istDateKey(new Date()) })}
         <button type="submit" hidden />
       </form>
       {err && <div className="field-error" role="alert">{err}</div>}

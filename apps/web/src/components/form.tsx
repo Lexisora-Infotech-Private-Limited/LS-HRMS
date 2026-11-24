@@ -19,6 +19,9 @@ export type FieldDef = {
   /** File upload category (FileObject.category). Value becomes the FileObject id. */
   category?: string;
   accept?: string;
+  /** Earliest / latest value the native picker allows (date: 'yyyy-mm-dd', number: a number). */
+  min?: string | number;
+  max?: string | number;
   /** Hide/show based on current values. */
   showIf?: (values: Record<string, any>) => boolean;
   disabled?: boolean;
@@ -192,7 +195,7 @@ export function FieldInput({ f, value, onChange, file, onFile, invalid }: { f: F
     case 'datetime':
       return <input className="input" {...common} type="datetime-local" value={value ?? ''} onChange={(e) => onChange(e.target.value)} />;
     default:
-      return <input className="input" {...common} type={f.type} placeholder={f.placeholder} value={value ?? ''} onChange={(e) => onChange(e.target.value)} />;
+      return <input className="input" {...common} type={f.type} min={f.min} max={f.max} placeholder={f.placeholder} value={value ?? ''} onChange={(e) => onChange(e.target.value)} />;
   }
 }
 

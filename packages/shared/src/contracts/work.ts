@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { paginationQuery } from '../api';
+import { istDateKey } from '../format';
 
 /**
  * Work domain contracts: clients, projects, team boards, tasks, GitLab, archive, interns.
@@ -286,19 +287,21 @@ export type ProjectDetail = ProjectRow & {
 export const boardQuery = z.object({ includeDone: z.coerce.boolean().optional() });
 export const boardMemberInput = z.object({ employeeId: z.string().min(1) });
 
-export const taskCreateInput = z.object({
-  title: z.string().trim().min(2, 'Title is required').max(200),
-  projectId: z.string().min(1, 'Project is required'),
-  moduleName: optText(60),
-  assigneeEmployeeId: z.union([z.string().min(1), z.literal(''), z.null()]).optional().transform((v) => (v ? v : null)),
-  estimatedHours: z
-    .number({ required_error: 'Estimate is required', invalid_type_error: 'Estimate is required' })
-    .positive('Estimate must be more than 0 hours')
-    .max(200, 'Estimate over 200h — split the task'),
-  dueDate: optDate,
-  departmentId: z.string().min(1, 'Team board is required'),
-  description: optText(8000),
-});
+export const taskCreateInput = z
+  .object({
+    title: z.string().trim().min(2, 'Title is required').max(200),
+    projectId: z.string().min(1, 'Project is required'),
+    moduleName: optText(60),
+    assigneeEmployeeId: z.union([z.string().min(1), z.literal(''), z.null()]).optional().transform((v) => (v ? v : null)),
+    estimatedHours: z
+      .number({ required_error: 'Estimate is required', invalid_type_error: 'Estimate is required' })
+      .positive('Estimate must be more than 0 hours')
+      .max(16, 'Estimate cannot be more than 16 hours — split the task'),
+    dueDate: optDate,
+    departmentId: z.string().min(1, 'Team board is required'),
+    description: optText(8000),
+  })
+  .refine((v) => !v.dueDate || v.dueDate >= istDateKey(new Date()), { message: 'Due date cannot be in the past', path: ['dueDate'] });
 export type TaskCreateInput = z.infer<typeof taskCreateInput>;
 export const taskUpdateInput = z
   .object({
