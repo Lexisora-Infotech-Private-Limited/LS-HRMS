@@ -154,10 +154,12 @@ function table(c: Ctx, e: El<'table'>) {
   const head = full ? [e.heading, e.fullMonthHeading, e.amountHeading] : [e.heading, e.amountHeading];
   const totalCells = full ? [e.totalLabel, '', money(total)] : [e.totalLabel, money(total)];
 
+  const startY = e.y;
   let y = e.y;
   plan.forEach((p, i) => {
     y += p.gapBefore;
     const cells = p.kind === 'head' ? head : p.kind === 'total' ? totalCells : body[i - 1]!.cells;
+    if (p.kind === 'head' && e.headerFill) doc.rect(e.x, y, e.w, p.height).fill(e.headerFill);
     if (p.kind === 'total' && e.totalFill) doc.rect(e.x, y, e.w, p.height).fill(e.totalFill);
     let x = e.x;
     const hs = e.headStyle;
@@ -177,4 +179,5 @@ function table(c: Ctx, e: El<'table'>) {
     }
     y += p.gapAfter;
   });
+  if (e.border) doc.lineWidth(e.borderWidth).strokeColor(e.border).rect(e.x, startY, e.w, y - startY).stroke();
 }

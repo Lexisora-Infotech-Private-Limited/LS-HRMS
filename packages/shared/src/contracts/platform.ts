@@ -250,16 +250,16 @@ export const TOP_LEVEL_ROLE_KEYS = ['hr', 'admin'] as const;
 
 // ── Alerts (core /notifications, rendered by the platform Alerts screen) ──────
 
-export const ALERT_TABS = ['all', 'unread', 'approvals', 'reminders'] as const;
+export const ALERT_TABS = ['all', 'unread', 'approvals', 'reminders', 'other'] as const;
 export type AlertTab = (typeof ALERT_TABS)[number];
 export type AlertCategory = 'approval' | 'reminder' | 'info';
 
-/** Buckets free-form notification types for the Alerts tabs. */
+/** Buckets free-form notification types for the Alerts tabs. Every category has a tab (`info` → "Other"), so the tab counts always add up to "All". */
 export function alertCategory(type: string, link?: string | null, title?: string | null): AlertCategory {
   const t = type.toLowerCase();
   const ttl = (title ?? '').toLowerCase();
   if ((link ?? '').startsWith('/approvals') || /approv|request|submitted|claim|pending|awaiting_decision/.test(t) || /awaiting your (approval|decision)|needs your approval/.test(ttl)) return 'approval';
-  if (/remind|due|acknowledg|birthday|anniversar|expir|incomplete|missing|renewal/.test(t) || /^(reminder|acknowledge|birthday)|awaiting your submission|due (today|tomorrow)/.test(ttl)) return 'reminder';
+  if (/remind|due|acknowledg|birthday|anniversar|expir|incomplete|missing|missed|renewal|timesheet/.test(t) || /^(reminder|acknowledge|birthday)|awaiting your submission|due (today|tomorrow)|missed punch/.test(ttl)) return 'reminder';
   return 'info';
 }
 

@@ -458,6 +458,15 @@ function Properties({ e, set, focus, components }: { e: PayslipElement; set: (pa
             <Tick checked={!!e.headStyle} onChange={(on) => set({ headStyle: on ? { font: 'HELVETICA', size: 9, bold: true, italic: false, color: e.headColor, align: 'LEFT', textCase: 'UPPER' } : null })} label="Choose the heading font, size and colour" />
             {e.headStyle && <StyleBar value={e.headStyle} onChange={(headStyle) => set({ headStyle })} noAlign />}
           </div>
+          <div className="row" style={{ gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Tick checked={!!e.headerFill} onChange={(on) => set({ headerFill: on ? '#f6f5f4' : null })} label="Shade the heading row" />
+            {e.headerFill && <ColorField label="Heading row shade" value={e.headerFill} onChange={(headerFill) => set({ headerFill })} />}
+          </div>
+          <div className="row" style={{ gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Tick checked={!!e.border} onChange={(on) => set({ border: on ? '#d7d3d3' : null })} label="Border around the table" />
+            {e.border && <ColorField label="Border colour" value={e.border} onChange={(border) => set({ border })} />}
+            {e.border && <Field label="Border width"><Num label="Border width" min={0.25} max={6} step={0.25} value={e.borderWidth} onChange={(borderWidth) => set({ borderWidth })} /></Field>}
+          </div>
           {e.kind === 'EARNINGS' && (
             <div className="row" style={{ gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
               <Tick checked={e.showFullMonth} onChange={(showFullMonth) => set({ showFullMonth })} label={`Show a “${e.fullMonthHeading}” column`} />
@@ -611,10 +620,10 @@ function NodeBody({ e, scale, values, logoSrc, editing, onText, onStopEdit }: { 
             : body[i - 1]!.cells;
       const lineCss = `${Math.max(0.5, e.lineWidth * scale)}px ${e.lineDashed ? 'dashed' : 'solid'} ${e.lineColor}`;
       return (
-        <div style={{ width: '100%', height: '100%', overflow: 'visible' }}>
+        <div style={{ width: '100%', height: '100%', overflow: 'visible', border: e.border ? `${Math.max(0.5, e.borderWidth * scale)}px solid ${e.border}` : undefined, boxSizing: 'border-box' }}>
           {plan.map((p, i) => (
             <div key={i} style={{ marginTop: p.gapBefore * scale, marginBottom: p.gapAfter * scale }}>
-              <div style={{ display: 'flex', height: p.height * scale, alignItems: 'center', borderBottom: p.line ? lineCss : undefined, background: p.kind === 'total' && e.totalFill ? e.totalFill : undefined, boxSizing: 'border-box' }}>
+              <div style={{ display: 'flex', height: p.height * scale, alignItems: 'center', borderBottom: p.line ? lineCss : undefined, background: p.kind === 'head' && e.headerFill ? e.headerFill : p.kind === 'total' && e.totalFill ? e.totalFill : undefined, boxSizing: 'border-box' }}>
                 {cellsFor(p.kind, i).map((c, j) => (
                   <span
                     key={j}

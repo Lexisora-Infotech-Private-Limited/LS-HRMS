@@ -39,6 +39,9 @@ describe('Alerts', () => {
     expect(alertCategory('birthday.reminder', '/feed')).toBe('reminder');
     expect(alertCategory('helpdesk.resolved', '/helpdesk')).toBe('info');
     expect(alertCategory('leave.decided', '/leave')).toBe('info');
+    // "Missed punch" alerts and plain timesheet status updates must land under Reminders, not vanish into an invisible bucket.
+    expect(alertCategory('attendance.missedPunch', '/attendance', 'Missed punch on Fri 20 Nov')).toBe('reminder');
+    expect(alertCategory('timesheet', '/timesheet')).toBe('reminder');
   });
 });
 

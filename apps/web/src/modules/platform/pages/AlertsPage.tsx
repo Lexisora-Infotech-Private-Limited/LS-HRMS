@@ -33,10 +33,15 @@ export default function AlertsPage() {
     unread: rows.filter((a) => !a.readAt).length,
     approvals: rows.filter((a) => cat.get(a.id) === 'approval').length,
     reminders: rows.filter((a) => cat.get(a.id) === 'reminder').length,
+    other: rows.filter((a) => cat.get(a.id) === 'info').length,
   };
-  const shown = rows.filter((a) =>
-    tab === 'all' ? true : tab === 'unread' ? !a.readAt : tab === 'approvals' ? cat.get(a.id) === 'approval' : cat.get(a.id) === 'reminder',
-  );
+  const shown = rows.filter((a) => {
+    if (tab === 'all') return true;
+    if (tab === 'unread') return !a.readAt;
+    if (tab === 'approvals') return cat.get(a.id) === 'approval';
+    if (tab === 'reminders') return cat.get(a.id) === 'reminder';
+    return cat.get(a.id) === 'info';
+  });
 
   async function open(a: AlertDto) {
     if (!a.readAt) {
@@ -73,6 +78,7 @@ export default function AlertsPage() {
     unread: 'No unread alerts.',
     approvals: 'Nothing is waiting for your approval.',
     reminders: 'No reminders right now.',
+    other: 'No other updates.',
   };
 
   return (
@@ -92,6 +98,7 @@ export default function AlertsPage() {
           { value: 'unread', label: `Unread · ${counts.unread}` },
           { value: 'approvals', label: `Approvals · ${counts.approvals}` },
           { value: 'reminders', label: `Reminders · ${counts.reminders}` },
+          { value: 'other', label: `Other · ${counts.other}` },
         ]}
         value={tab}
         onChange={setTab}

@@ -82,7 +82,12 @@ const tableEl = z.object({
   cellPadding: pt(0, 30, 3),
   rules: z.boolean().default(true),
   headColor: hexColor.default('#605d5d'),
+  /** A shaded background behind the heading row. */
+  headerFill: hexColor.nullable().default(null),
   totalFill: hexColor.nullable().default(null),
+  /** A border drawn around the whole table (head, rows and total together). null = no border. */
+  border: hexColor.nullable().default(null),
+  borderWidth: pt(0.25, 6, 0.8),
   style: payslipStyleSchema.default({}),
   lineColor: hexColor.default('#d7d3d3'),
   lineWidth: pt(0.25, 4, 0.5),
@@ -184,14 +189,14 @@ const classicPreset = (accent: string): PayslipCanvas =>
       rows: [R('Pay period', '{{pay.period}}'), R('Pay date', '{{pay.date}}'), R('Working days', '{{pay.workingDays}}'), R('Paid days', '{{pay.paidDays}}'), R('LOP days', '{{pay.lopDays}}'), R('Leave', '{{pay.leave}}'), R('Bank account', '{{employee.bank}}')],
       rowHeight: 16,
     },
-    { type: 'table', x: 48, y: 330, w: 499, h: 150, kind: 'EARNINGS', heading: 'Earnings', showFullMonth: true, fullMonthHeading: 'Full month', amountHeading: 'Earned', totalLabel: 'Total earnings' },
-    { type: 'table', x: 48, y: 495, w: 499, h: 100, kind: 'DEDUCTIONS', heading: 'Deductions', totalLabel: 'Total deductions' },
-    { type: 'text', x: 48, y: 610, w: 499, h: 24, text: 'Net pay  {{pay.net}}', style: { font: 'TIMES', size: 16, bold: true } },
-    { type: 'text', x: 48, y: 634, w: 499, h: 14, text: '{{pay.netInWords}}', style: { size: 9, color: '#605d5d' } },
-    { type: 'text', x: 48, y: 660, w: 499, h: 14, text: '{{note.idle}}', style: muted },
-    { type: 'text', x: 48, y: 674, w: 499, h: 14, text: '{{note.employer}}', style: muted },
-    { type: 'text', x: 48, y: 688, w: 499, h: 14, text: '{{note.ytd}}', style: muted },
-    { type: 'text', x: 48, y: 740, w: 499, h: 12, text: 'This is a computer-generated payslip and does not require a signature.', style: { size: 7.5, color: '#605d5d', align: 'CENTER' } },
+    { type: 'table', x: 48, y: 330, w: 499, h: 150, kind: 'EARNINGS', heading: 'Earnings', showFullMonth: true, fullMonthHeading: 'Full month', amountHeading: 'Earned', totalLabel: 'Total earnings', headerFill: '#f6f3ea', headColor: '#6b4a1f', totalFill: '#f6f3ea', border: '#ddd6c7', cellPadding: 5 },
+    { type: 'table', x: 48, y: 495, w: 499, h: 140, kind: 'DEDUCTIONS', heading: 'Deductions', totalLabel: 'Total deductions', headerFill: '#f6f3ea', headColor: '#6b4a1f', totalFill: '#f6f3ea', border: '#ddd6c7', cellPadding: 5 },
+    { type: 'text', x: 48, y: 650, w: 499, h: 24, text: 'Net pay  {{pay.net}}', style: { font: 'TIMES', size: 16, bold: true } },
+    { type: 'text', x: 48, y: 674, w: 499, h: 14, text: '{{pay.netInWords}}', style: { size: 9, color: '#605d5d' } },
+    { type: 'text', x: 48, y: 700, w: 499, h: 14, text: '{{note.idle}}', style: muted },
+    { type: 'text', x: 48, y: 714, w: 499, h: 14, text: '{{note.employer}}', style: muted },
+    { type: 'text', x: 48, y: 728, w: 499, h: 14, text: '{{note.ytd}}', style: muted },
+    { type: 'text', x: 48, y: 780, w: 499, h: 12, text: 'This is a computer-generated payslip and does not require a signature.', style: { size: 7.5, color: '#605d5d', align: 'CENTER' } },
   ]);
 
 const summaryPreset = (accent: string): PayslipCanvas =>

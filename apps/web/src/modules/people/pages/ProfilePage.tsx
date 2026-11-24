@@ -16,7 +16,7 @@ import {
   type ProfilePayRow,
   type ProfileTab,
 } from '@lexisora/shared';
-import { fileUrl } from '@/lib/api';
+import { fileUrl, uploadFile } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { useAction } from '@/lib/query';
 import { FormModal, type FieldDef } from '@/components/form';
