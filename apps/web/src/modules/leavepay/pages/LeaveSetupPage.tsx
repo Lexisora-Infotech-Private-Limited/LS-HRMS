@@ -9,7 +9,7 @@ import { DataTable, Pager, type Column } from '@/components/table';
 import { ConfirmDialog, ErrorBlock, PageHeader, Seg, Tabs, Tag } from '@/components/ui';
 import { dur } from '@/modules/time/api';
 import { HOLIDAY_CALENDARS, HOLIDAY_DEPENDENTS, LEAVE_ALL, currentPeriod, fmtDays, lpApi, lpKeys, useCompOffRules, type HolidayCalendar } from '../api';
-import { RejectModal } from '../components';
+import { LeaveDocument, RejectModal } from '../components';
 import '../leavepay.css';
 
 type Tab = 'types' | 'basic' | 'manual' | 'requests' | 'holidays';
@@ -221,7 +221,7 @@ function RequestsTab() {
   const c = list.data?.counts ?? {};
   const cols: Column<LeaveRequestRow>[] = [
     { key: 'e', header: 'Employee', render: (r) => <div><div>{r.employeeName}</div><div className="faint" style={{ fontSize: 11.5 }}>{r.employeeCode}{r.department ? ` · ${r.department}` : ''}</div></div> },
-    { key: 't', header: 'Type', render: (r) => r.typeName },
+    { key: 't', header: 'Type', render: (r) => <span>{r.typeName}{r.hasAttachment && <> <LeaveDocument row={r} /></>}</span> },
     { key: 'd', header: 'Dates', render: (r) => r.dates },
     { key: 'n', header: 'Days', num: true, render: (r) => fmtDays(r.days) },
     { key: 'r', header: 'Reason', render: (r) => r.reason ?? '—' },

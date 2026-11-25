@@ -10,7 +10,7 @@ import { useLookups, opts } from '@/components/lookups';
 import { Empty, Modal, Tag, humanize } from '@/components/ui';
 import { workApi, workKeys, type DocInput } from './api';
 
-/** Right-side drawer (task detail, archive item, client detail). */
+/** Right-side drawer (task detail, archive item, client detail). Closes from its ✕ or Escape, not an outside click (see Modal). */
 export function Drawer({ onClose, children, label }: { onClose: () => void; children: ReactNode; label?: string }) {
   useEffect(() => {
     const k = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -18,7 +18,7 @@ export function Drawer({ onClose, children, label }: { onClose: () => void; chil
     return () => window.removeEventListener('keydown', k);
   }, [onClose]);
   return (
-    <div className="wk-drawer-backdrop" onMouseDown={onClose}>
+    <div className="wk-drawer-backdrop">
       <aside className="wk-drawer" role="dialog" aria-modal aria-label={label} onMouseDown={(e) => e.stopPropagation()}>
         {children}
       </aside>

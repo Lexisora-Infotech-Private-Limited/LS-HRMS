@@ -57,7 +57,7 @@ export function QrScanPageDrawer({ onClose }: { onClose: () => void }) {
   const c = company.data;
   const line = (label: string, v: string | undefined) => (v ? <div key={label} style={{ fontSize: 10.5, lineHeight: 1.5, overflowWrap: 'anywhere' }}><b>{label}</b> {v}</div> : null);
   return (
-    <div className="dialog-backdrop" style={{ placeItems: 'stretch end', padding: 0 }} onMouseDown={onClose}>
+    <div className="dialog-backdrop" style={{ placeItems: 'stretch end', padding: 0 }}>
       <aside
         role="dialog"
         aria-modal

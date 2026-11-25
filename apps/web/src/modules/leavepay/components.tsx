@@ -1,7 +1,24 @@
 import { useState } from 'react';
+import type { LeaveRequestRow } from '@lexisora/shared';
+import { fileUrl } from '@/lib/api';
 import { useAction } from '@/lib/query';
-import { Modal } from '@/components/ui';
+import { Modal, Tag } from '@/components/ui';
 import { LEAVE_ALL, lpApi } from './api';
+
+/**
+ * Supporting document of a leave request (medical certificate etc.). The API only sends the file
+ * id to people allowed to open it (the employee, the approver, HR); everyone else sees that a
+ * document is attached but can't open it.
+ */
+export function LeaveDocument({ row, name }: { row: Pick<LeaveRequestRow, 'hasAttachment' | 'attachmentFileId'>; name?: string }) {
+  if (!row.hasAttachment) return null;
+  if (!row.attachmentFileId) return <Tag tone="outline" title="Visible to the employee, the approver and HR only">Document attached</Tag>;
+  return (
+    <a className="btn btn-ghost btn-sm" href={fileUrl(row.attachmentFileId)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} title="Open the supporting document">
+      {name ? `View document · ${name}` : 'View document'}
+    </a>
+  );
+}
 
 export type RejectTarget = { id: string; employeeName: string; typeName: string; status: string; kind?: string };
 

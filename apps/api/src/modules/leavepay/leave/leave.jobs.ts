@@ -54,6 +54,15 @@ export class LeaveJobs {
     await this.eachTenant('leave.compOffExpiry', () => this.admin.expireCompOffs());
   }
 
+  /** Hourly: requests waiting on someone who can no longer approve (left, disabled, role changed) move to who can. */
+  @Cron('5 * * * *', { timeZone: 'Asia/Kolkata' })
+  async rerouteStuck() {
+    await this.eachTenant('leave.reroute', async () => {
+      const n = await this.requests.rerouteStuck();
+      if (n) this.log.log(`Rerouted ${n} time-off request(s) to an approver who can decide them`);
+    });
+  }
+
   /** 10:00 IST daily: remind approvers of stale requests; escalate past `escalateAfterDays`. */
   @Cron('0 10 * * *', { timeZone: 'Asia/Kolkata' })
   async reminders() {

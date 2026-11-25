@@ -15,6 +15,9 @@ import { AttendanceService } from './attendance.service';
 import { PeriodLockService } from './period-lock.service';
 import { PolicyService } from './policy.service';
 
+/** Permissions that let someone decide an attendance correction routed to them (see RegularizationsController). */
+export const CORRECTION_DECIDER_PERMS = ['attendance.regularize.approve', 'attendance.manage'] as const;
+
 /** Attendance regularization (spec-time F). */
 @Injectable()
 export class RegularizationService {
@@ -68,7 +71,9 @@ export class RegularizationService {
       if (span.outAt <= span.inAt) throw new AppError(422, 'REGULARIZATION_SPAN', 'The punch-out must be after the punch-in');
       if (span.outAt.getTime() - span.inAt.getTime() > 16 * 3600_000) throw new AppError(422, 'REGULARIZATION_SPAN', 'The corrected span can be at most 16 hours');
     }
-    const approver = emp.managerId && emp.managerId !== employeeId ? emp.managerId : null;
+    // First manager up the line who can approve corrections (a manager without that permission is
+    // skipped); nobody → null, and HR (attendance.manage) gets it, as before.
+    const approver = (await this.org.approverUpChain(employeeId, emp.managerId, CORRECTION_DECIDER_PERMS))?.id ?? null;
     const row = await this.prisma.attendanceRegularization.create({
       data: {
         employeeId,

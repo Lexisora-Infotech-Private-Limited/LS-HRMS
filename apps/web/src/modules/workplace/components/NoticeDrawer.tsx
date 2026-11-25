@@ -64,7 +64,7 @@ export function NoticeDrawer({ id, onClose, onEdit }: { id: string; onClose: () 
   const draft = !!n && (n.status === 'DRAFT' || n.status === 'SCHEDULED');
 
   return (
-    <div className="wp-drawer-backdrop" onMouseDown={onClose}>
+    <div className="wp-drawer-backdrop">
       <aside className="wp-drawer" role="dialog" aria-modal aria-label="Notice" onMouseDown={(e) => e.stopPropagation()} data-screen-label="Notice detail">
         {isLoading && <Loading />}
         {error && <ErrorBlock error={error} retry={() => void refetch()} />}

@@ -13,6 +13,7 @@ import type {
   TeamRequestRow,
   UpcomingItem,
 } from '@lexisora/shared';
+import { LEAVE_ATTACHMENT_ACCEPT, LEAVE_ATTACHMENT_MAX_BYTES } from '@lexisora/shared';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { requireContext } from '../../../core/context/request-context';
 import { hasPerm } from '../../../core/auth/decorators';
@@ -29,6 +30,7 @@ import { consumeCompOff, expandLeaveDays, fmtDays, markLop, round2, sessionsConf
 import { LeaveLedgerService } from './leave-ledger.service';
 import {
   ACTIVE_STATUSES,
+  canViewLeaveAttachment,
   DEFAULT_LEAVE_SETTINGS,
   LATE_ARRIVAL,
   LEAVE_SETTINGS_KEY,
@@ -40,6 +42,9 @@ import {
 } from './leave.common';
 
 export type ApplyCore = Omit<LeaveApplyInput, 'notifyEmployeeIds'> & { notifyEmployeeIds?: string[] };
+
+/** Permissions that let someone decide a time-off request routed to them. */
+export const LEAVE_DECIDER_PERMS = ['leave.approve', 'leave.manage'] as const;
 
 const LATE_HALF_DAY_LOCKED = 'This half day was booked for a late arrival · ask your manager to excuse the late mark (My attendance → Fix) and it is removed automatically';
 
@@ -88,19 +93,48 @@ export class LeaveRequestsService {
     return reqs.map((r) => toRequestRow(r, r.approverEmployeeId ? (names.get(r.approverEmployeeId) ?? null) : null, v));
   }
 
-  /** RM, or the fallback approver (first HR/admin employee) when the RM is missing or the employee themself. */
+  /**
+   * Who decides this employee's time off: the first person up the reporting line who can approve
+   * leave (source RM when it's the direct manager, UPLINE when a manager without leave.approve, such
+   * as a Team Lead, was skipped), else the first HR/admin employee (FALLBACK).
+   */
   async resolveApprover(emp: { id: string; managerId: string | null }): Promise<{ id: string; name: string; source: string } | null> {
-    if (emp.managerId && emp.managerId !== emp.id) {
-      const m = await this.prisma.employee.findUnique({ where: { id: emp.managerId }, select: { id: true, fullName: true, status: true } });
-      if (m && m.status !== 'EXITED') return { id: m.id, name: m.fullName, source: 'RM' };
-    }
-    const roles = await this.prisma.role.findMany({ where: { permissions: { has: 'leave.manage' } }, select: { id: true } });
+    const up = await this.org.approverUpChain(emp.id, emp.managerId, LEAVE_DECIDER_PERMS);
+    if (up) return { id: up.id, name: up.name, source: up.direct ? 'RM' : 'UPLINE' };
+    const roles = await this.prisma.role.findMany({ where: { OR: [{ permissions: { has: 'leave.manage' } }, { permissions: { has: '*' } }] }, select: { id: true } });
     const hr = await this.prisma.employee.findFirst({
-      where: { id: { not: emp.id }, status: { in: ['ACTIVE', 'NOTICE_PERIOD'] }, user: { roleId: { in: roles.map((r) => r.id) } } },
+      where: { id: { not: emp.id }, status: { in: ['ACTIVE', 'NOTICE_PERIOD'] }, user: { roleId: { in: roles.map((r) => r.id) }, status: { not: 'DISABLED' } } },
       orderBy: { empCode: 'asc' },
       select: { id: true, fullName: true },
     });
     return hr ? { id: hr.id, name: hr.fullName, source: 'FALLBACK' } : null;
+  }
+
+  /**
+   * Pending requests (and pending cancellations) whose approver can no longer decide them (left,
+   * account disabled, or their role lost leave approval) move to whoever can now. Runs from the
+   * leave jobs; safe to run any time. Returns how many were moved.
+   */
+  async rerouteStuck(): Promise<number> {
+    const open = await this.prisma.leaveRequest.findMany({
+      where: { status: { in: ['PENDING', 'CANCELLATION_PENDING'] }, approverEmployeeId: { not: null }, autoReason: null },
+      select: { id: true, requestNo: true, employeeId: true, approverEmployeeId: true, employee: { select: { fullName: true, managerId: true } }, leaveType: { select: { name: true } } },
+    });
+    const canAct = new Map<string, boolean>();
+    let moved = 0;
+    for (const r of open) {
+      const current = r.approverEmployeeId!;
+      if (!canAct.has(current)) canAct.set(current, await this.org.canAct(current, LEAVE_DECIDER_PERMS));
+      if (canAct.get(current)) continue;
+      const next = await this.resolveApprover({ id: r.employeeId, managerId: r.employee.managerId });
+      if (!next || next.id === current || next.id === r.employeeId) continue;
+      await this.prisma.leaveRequest.update({ where: { id: r.id }, data: { approverEmployeeId: next.id, approverSource: 'REROUTED' } });
+      await this.audit.record({ action: 'leave.request.rerouted', entity: 'LeaveRequest', entityId: r.id, meta: { from: current, to: next.id, reason: 'approver can no longer approve' } });
+      const users = await this.notifications.usersForEmployees([next.id, r.employeeId]);
+      await this.notifications.notify({ userIds: users, type: 'leave.rerouted', title: `Time-off request moved to ${next.name}`, body: `${r.employee.fullName} · ${r.leaveType.name} ${r.requestNo}: the previous approver can no longer approve leave`, link: '/leave?tab=team' });
+      moved++;
+    }
+    return moved;
   }
 
   /** Available comp-off units usable on `onDate` (approved grants not yet expired) minus pending CO requests. */
@@ -287,7 +321,8 @@ export class LeaveRequestsService {
       }
     }
     if (type.maxConsecutiveDays && ex.totalDays > type.maxConsecutiveDays) blocks.push(`${type.name} allows at most ${fmtDays(type.maxConsecutiveDays)} consecutive days`);
-    if (type.documentRequiredAfterDays && ex.totalDays > type.documentRequiredAfterDays && !input.attachmentFileId) warnings.push(`Attach a supporting document for more than ${fmtDays(type.documentRequiredAfterDays)} days`);
+    const documentRequired = !!type.documentRequiredAfterDays && ex.totalDays > type.documentRequiredAfterDays;
+    if (documentRequired && !input.attachmentFileId) warnings.push(`Attach a supporting document for more than ${fmtDays(type.documentRequiredAfterDays!)} days`);
 
     // Team overlap (information only).
     if (emp.managerId) {
@@ -323,6 +358,7 @@ export class LeaveRequestsService {
         warnings,
         blocks: [...new Set(blocks)],
         approver: approver ? { id: approver.id, name: approver.name } : null,
+        documentRequired,
       },
       days,
       emp: { id: emp.id, fullName: emp.fullName, managerId: emp.managerId, userId: emp.userId, employmentType: emp.employmentType },
@@ -351,13 +387,25 @@ export class LeaveRequestsService {
     return req;
   }
 
+  /**
+   * The attached document must be a file the person applying uploaded themselves (a PDF or an
+   * image). Otherwise anyone could attach another user's private file and expose it to the approver.
+   */
+  private async checkAttachment(fileId: string, userId: string | null) {
+    const f = await this.prisma.fileObject.findFirst({ where: { id: fileId }, select: { ownerUserId: true, mime: true, size: true } });
+    if (!f || !userId || f.ownerUserId !== userId) throw new AppError(422, 'ATTACHMENT_INVALID', 'The attached document was not found · upload it again');
+    if (!LEAVE_ATTACHMENT_ACCEPT.split(',').includes(f.mime)) throw new AppError(422, 'ATTACHMENT_INVALID', 'Attach the document as a PDF or an image (PNG, JPG, WebP)');
+    if (f.size > LEAVE_ATTACHMENT_MAX_BYTES) throw new AppError(422, 'ATTACHMENT_INVALID', 'The document is larger than 10 MB');
+  }
+
   private async create(employeeId: string, input: ApplyCore, opts: { onBehalf: boolean; system?: { autoReason: string } }): Promise<LeaveRequestRow> {
     const c = await this.compute(employeeId, input, { ...opts, system: !!opts.system });
     if (c.preview.blocks.length) throw new AppError(422, 'LEAVE_BLOCKED', c.preview.blocks[0]!, { blocks: c.preview.blocks });
-    if (c.type.documentRequiredAfterDays && c.preview.totalDays > c.type.documentRequiredAfterDays && !input.attachmentFileId && !opts.onBehalf) {
-      throw new AppError(422, 'LEAVE_BLOCKED', `Attach a supporting document for more than ${fmtDays(c.type.documentRequiredAfterDays)} days`);
+    if (c.preview.documentRequired && !input.attachmentFileId && !opts.onBehalf) {
+      throw new AppError(422, 'LEAVE_BLOCKED', `Attach a supporting document for more than ${fmtDays(c.type.documentRequiredAfterDays!)} days`);
     }
     const ctx = requireContext();
+    if (input.attachmentFileId) await this.checkAttachment(input.attachmentFileId, ctx.userId ?? null);
     const year = yearOf(input.fromDate);
     const requestNo = await this.seq.next('leave.request', { prefix: `LV-${year}-`, pad: 5, period: String(year) });
     const single = input.fromDate === input.toDate;
@@ -438,12 +486,14 @@ export class LeaveRequestsService {
     if (r.cancelledAt) timeline.push({ at: r.cancelledAt.toISOString(), text: 'Cancelled' });
     let balanceAfter: number | null = null;
     if (r.leaveType.isPaid) balanceAfter = r.leaveType.isCompOff ? (await this.compOffAvailable(r.employeeId, todayKey(), r.leaveTypeId)).available : await this.balanceAvailable(r.employeeId, r.leaveTypeId, yearOf(dk(r.fromDate)));
+    const doc = r.attachmentFileId ? await this.prisma.fileObject.findFirst({ where: { id: r.attachmentFileId }, select: { filename: true } }) : null;
     return {
       ...row!,
       breakdown: ((r.dayBreakdown as BreakdownDay[]) ?? []).map((d) => ({ ...d })),
       notify: r.notifyEmployeeIds.map((nid) => ({ id: nid, name: names.get(nid) ?? '—' })),
       timeline,
-      attachmentFileId: r.attachmentFileId,
+      // row.attachmentFileId is already limited to viewers who may open the file (toRequestRow).
+      attachment: r.attachmentFileId ? { name: doc?.filename ?? 'Supporting document', canView: !!row!.attachmentFileId } : null,
       balanceAfter,
       teamOverlap: await this.teamOverlap(r.employeeId, dk(r.fromDate), dk(r.toDate)),
     };
@@ -694,6 +744,8 @@ export class LeaveRequestsService {
           decidedAt: null,
           decisionNote: null,
           autoReason: null,
+          hasAttachment: false,
+          attachmentFileId: null,
           can: { withdraw: false, cancel: false, requestCancel: false, approve: true, reject: true, decideCancellation: false },
           kind: 'COMP_OFF',
           balanceAfter: null,
