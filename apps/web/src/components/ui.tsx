@@ -178,6 +178,11 @@ export function ErrorBlock({ error, retry }: { error: unknown; retry?: () => voi
   );
 }
 
+/**
+ * Every popup (dialogs and side drawers) closes only from its own ×/Cancel/Close buttons or the
+ * Escape key, never from a click on the dimmed area outside it, so a stray click can't throw
+ * away a half-filled form. Keep new popups on this rule: no onMouseDown/onClick on the backdrop.
+ */
 export function Modal({ title, onClose, children, actions, wide }: { title: ReactNode; onClose: () => void; children: ReactNode; actions?: ReactNode; wide?: boolean }) {
   useEffect(() => {
     const k = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -185,7 +190,7 @@ export function Modal({ title, onClose, children, actions, wide }: { title: Reac
     return () => window.removeEventListener('keydown', k);
   }, [onClose]);
   return (
-    <div className="dialog-backdrop" onMouseDown={onClose}>
+    <div className="dialog-backdrop">
       <div className={`dialog${wide ? ' dialog-wide' : ''}`} role="dialog" aria-modal onMouseDown={(e) => e.stopPropagation()}>
         <div className="dialog-head">
           <div className="dialog-title">{title}</div>

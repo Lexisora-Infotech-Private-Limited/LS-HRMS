@@ -11,6 +11,7 @@ import { LeaveLedgerService } from './leave/leave-ledger.service';
 import { LeaveRequestsService } from './leave/leave-requests.service';
 import { LeaveAdminService } from './leave/leave-admin.service';
 import { LeaveLateArrivalService, type DayComputed } from './leave/leave-late-arrival.service';
+import { canViewLeaveAttachment } from './leave/leave.common';
 import { LeaveController } from './leave/leave.controller';
 import { LeaveJobs } from './leave/leave.jobs';
 import { SalaryService } from './payroll/salary.service';
@@ -75,7 +76,7 @@ export class LeavepayModule implements OnModuleInit {
       if (slip) return payroll || (slip.employeeId === ctx.employeeId && slip.status === 'PUBLISHED');
       if (payroll && (await this.prisma.bankTransferFile.count({ where: { fileId } }))) return true;
       const req = await this.prisma.leaveRequest.findFirst({ where: { attachmentFileId: fileId }, select: { employeeId: true, approverEmployeeId: true } });
-      if (req) return ctx.permissions.has('leave.manage') || req.employeeId === ctx.employeeId || req.approverEmployeeId === ctx.employeeId;
+      if (req) return canViewLeaveAttachment({ employeeId: ctx.employeeId ?? null, canManage: ctx.permissions.has('leave.manage') }, req);
       return false;
     });
 

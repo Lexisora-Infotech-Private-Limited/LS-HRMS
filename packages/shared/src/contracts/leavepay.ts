@@ -135,7 +135,13 @@ export type LeavePreview = {
   warnings: string[];
   blocks: string[];
   approver: { id: string; name: string } | null;
+  /** This leave type needs a supporting document for this many days (LeaveType.documentRequiredAfterDays). */
+  documentRequired: boolean;
 };
+
+/** Files accepted as a leave supporting document (medical certificate etc.). */
+export const LEAVE_ATTACHMENT_ACCEPT = 'application/pdf,image/png,image/jpeg,image/webp';
+export const LEAVE_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 
 export type LeaveRequestRow = {
   id: string;
@@ -163,6 +169,10 @@ export type LeaveRequestRow = {
   decisionNote: string | null;
   /** Created by the system: LATE_ARRIVAL = late by the shift's half-day threshold. */
   autoReason: string | null;
+  /** A supporting document is attached. */
+  hasAttachment: boolean;
+  /** The document's file id, only for viewers allowed to open it (employee, approver, HR); null otherwise. */
+  attachmentFileId: string | null;
   /** Actions the viewer may take. */
   can: { withdraw: boolean; cancel: boolean; requestCancel: boolean; approve: boolean; reject: boolean; decideCancellation: boolean };
 };
@@ -171,7 +181,8 @@ export type LeaveRequestDetail = LeaveRequestRow & {
   breakdown: LeaveDayView[];
   notify: { id: string; name: string }[];
   timeline: { at: string; text: string }[];
-  attachmentFileId: string | null;
+  /** Attached document, if any; canView false = shown as "attached (private)". */
+  attachment: { name: string; canView: boolean } | null;
   balanceAfter: number | null;
   teamOverlap: number;
 };

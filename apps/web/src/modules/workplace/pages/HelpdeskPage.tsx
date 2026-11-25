@@ -281,7 +281,7 @@ function TicketDrawer({ id, onClose }: { id: string; onClose: () => void }) {
   const slaPct = t ? Math.min(100, Math.round((t.elapsedMins / Math.max(1, t.resolutionMins)) * 100)) : 0;
 
   return (
-    <div className="wp-drawer-backdrop" onMouseDown={onClose}>
+    <div className="wp-drawer-backdrop">
       <aside className="wp-drawer wp-drawer-wide" role="dialog" aria-modal aria-label="Ticket" onMouseDown={(e) => e.stopPropagation()} data-screen-label="Ticket detail">
         {isLoading && <Loading />}
         {error && <ErrorBlock error={error} retry={() => void refetch()} />}

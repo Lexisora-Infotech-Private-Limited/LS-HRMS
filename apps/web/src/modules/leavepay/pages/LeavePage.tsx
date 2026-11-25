@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { HALF_DAY_OPTIONS, LEAVE_STATUS_TONE, type CompOffRow, type LeaveApplyInput, type LeaveRequestRow, type TeamRequestRow } from '@lexisora/shared';
+import { HALF_DAY_OPTIONS, LEAVE_ATTACHMENT_ACCEPT, LEAVE_ATTACHMENT_MAX_BYTES, LEAVE_STATUS_TONE, type CompOffRow, type LeaveApplyInput, type LeaveRequestRow, type TeamRequestRow } from '@lexisora/shared';
+import { uploadFile } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { useAction } from '@/lib/query';
+import { FileDrop } from '@/components/form';
 import { useLookups, opts } from '@/components/lookups';
 import { DataTable, type Column } from '@/components/table';
 import { Check, Empty, ErrorBlock, Loading, Modal, PageHeader, Seg, Tabs, Tag } from '@/components/ui';
 import { LEAVE_ALL, fmtDays, lpApi, lpKeys } from '../api';
-import { RejectModal } from '../components';
+import { LeaveDocument, RejectModal } from '../components';
 import '../leavepay.css';
 
 type Tab = 'mine' | 'team';
@@ -42,7 +44,7 @@ export default function LeavePage() {
     <div data-screen-label="Time off" className="stack" style={{ gap: 20 }}>
       <PageHeader
         title="Time off"
-        sub="Requests route to your Reporting Manager; approved leave flows into payroll."
+        sub="Requests route to your Reporting Manager, or the next manager up who can approve leave; approved leave flows into payroll."
         actions={<button className="btn btn-primary" onClick={() => setApplyOpen(true)}>Apply time off</button>}
       />
       {canApprove && (
@@ -69,7 +71,17 @@ function MyTimeOff({ onOpen }: { onOpen: (id: string) => void }) {
   const history = useQuery({ queryKey: lpKeys.myRequests, queryFn: () => lpApi.myRequests({ pageSize: 50 }) });
   const upcoming = useQuery({ queryKey: lpKeys.upcoming, queryFn: lpApi.upcoming });
   const cols: Column<LeaveRequestRow>[] = [
-    { key: 't', header: 'Type', render: (r) => (r.autoReason === 'LATE_ARRIVAL' ? <span>{r.typeName} <Tag tone="outline" title="Booked by attendance: you were very late, or late more times this month than allowed. Excusing the late mark removes it.">Late arrival</Tag></span> : r.typeName) },
+    {
+      key: 't',
+      header: 'Type',
+      render: (r) => (
+        <span>
+          {r.typeName}
+          {r.autoReason === 'LATE_ARRIVAL' && <> <Tag tone="outline" title="Booked by attendance: you were very late, or late more times this month than allowed. Excusing the late mark removes it.">Late arrival</Tag></>}
+          {r.hasAttachment && <> <LeaveDocument row={r} /></>}
+        </span>
+      ),
+    },
     { key: 'd', header: 'Dates', render: (r) => r.dates },
     { key: 'n', header: 'Days', render: (r) => fmtDays(r.days) },
     { key: 'r', header: 'Reason', render: (r) => r.reason ?? <span className="faint">—</span> },
@@ -161,7 +173,7 @@ function TeamRequests({ onOpen }: { onOpen: (id: string) => void }) {
   });
   const cols: Column<TeamRequestRow>[] = [
     { key: 'e', header: 'Employee', render: (r) => <div><div>{r.employeeName}</div><div className="faint" style={{ fontSize: 11.5 }}>{r.employeeCode}{r.department ? ` · ${r.department}` : ''}</div></div> },
-    { key: 't', header: 'Type', render: (r) => r.typeName },
+    { key: 't', header: 'Type', render: (r) => <span>{r.typeName}{r.hasAttachment && <> <LeaveDocument row={r} /></>}</span> },
     { key: 'd', header: 'Dates', render: (r) => r.dates },
     { key: 'n', header: 'Days', num: true, render: (r) => fmtDays(r.days) },
     { key: 'r', header: 'Reason', render: (r) => r.reason ?? r.evidence ?? <span className="faint">—</span> },
@@ -195,6 +207,10 @@ function TeamRequests({ onOpen }: { onOpen: (id: string) => void }) {
 
 // ── Apply ────────────────────────────────────────────────────────────────
 
+const LEAVE_DOC_TYPES = LEAVE_ATTACHMENT_ACCEPT.split(',');
+/** The picked supporting document: uploaded as soon as it is chosen, so the preview and Submit know it's there. */
+type PickedDoc = { file: File; id: string | null; uploading: boolean; error: string | null };
+
 const istToday = () => new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10);
 const addDaysKey = (key: string, n: number) => new Date(new Date(`${key}T00:00:00Z`).getTime() + n * 86_400_000).toISOString().slice(0, 10);
 
@@ -205,6 +221,17 @@ function ApplyModal({ onClose }: { onClose: () => void }) {
   const balances = useQuery({ queryKey: lpKeys.balances, queryFn: lpApi.balances });
   const [v, setV] = useState({ leaveTypeId: '', fromDate: '', toDate: '', halfDay: 'NONE' as LeaveApplyInput['halfDay'], notify: '', reason: '', acceptLop: false });
   const set = (k: keyof typeof v, val: any) => setV((s) => ({ ...s, [k]: val }));
+  const [doc, setDoc] = useState<PickedDoc | null>(null);
+  const pickDoc = (file: File | null) => {
+    if (!file) return setDoc(null);
+    if (!LEAVE_DOC_TYPES.includes(file.type)) return setDoc({ file, id: null, uploading: false, error: 'Attach the document as a PDF or an image (PNG, JPG, WebP)' });
+    if (file.size > LEAVE_ATTACHMENT_MAX_BYTES) return setDoc({ file, id: null, uploading: false, error: 'The document is larger than 10 MB' });
+    setDoc({ file, id: null, uploading: true, error: null });
+    // Ignore the result if another file was picked (or this one removed) while it uploaded.
+    uploadFile(file, 'leave')
+      .then((f) => setDoc((d) => (d?.file === file ? { ...d, id: f.id, uploading: false } : d)))
+      .catch((e: Error) => setDoc((d) => (d?.file === file ? { ...d, uploading: false, error: e.message || 'Upload failed · try again' } : d)));
+  };
   useEffect(() => {
     if (!v.leaveTypeId && types.length) set('leaveTypeId', types[0]!.value);
   }, [types, v.leaveTypeId]);
@@ -219,8 +246,8 @@ function ApplyModal({ onClose }: { onClose: () => void }) {
     if (!v.leaveTypeId || !v.fromDate) return null;
     const to = v.toDate || v.fromDate;
     if (to < v.fromDate) return null;
-    return { leaveTypeId: v.leaveTypeId, fromDate: v.fromDate, toDate: to, halfDay: single ? v.halfDay : 'NONE', fromSession: 'FULL', toSession: 'FULL', notifyEmployeeIds: v.notify ? [v.notify] : [], reason: v.reason.trim(), acceptLop: v.acceptLop, attachmentFileId: null };
-  }, [v, single]);
+    return { leaveTypeId: v.leaveTypeId, fromDate: v.fromDate, toDate: to, halfDay: single ? v.halfDay : 'NONE', fromSession: 'FULL', toSession: 'FULL', notifyEmployeeIds: v.notify ? [v.notify] : [], reason: v.reason.trim(), acceptLop: v.acceptLop, attachmentFileId: doc?.id ?? null };
+  }, [v, single, doc?.id]);
   const preview = useQuery({
     queryKey: ['leavepay', 'preview', body && { ...body, reason: '' }],
     queryFn: () => lpApi.preview(body!),
@@ -237,7 +264,9 @@ function ApplyModal({ onClose }: { onClose: () => void }) {
   });
   const bal = balances.data?.find((b) => b.leaveTypeId === v.leaveTypeId);
   const people = opts(look.data, 'employees').filter((o) => o.value !== p?.approver?.id);
-  const blocked = !body || !p || p.blocks.length > 0 || (p.lopDays > 0 && !v.acceptLop) || preview.isFetching;
+  // The leave type decides when a document is needed (Leave setup → "Document required after N days").
+  const docMissing = !!p?.documentRequired && !doc?.id;
+  const blocked = !body || !p || p.blocks.length > 0 || (p.lopDays > 0 && !v.acceptLop) || preview.isFetching || !!doc?.uploading || docMissing;
   return (
     <Modal
       title={
@@ -288,15 +317,26 @@ function ApplyModal({ onClose }: { onClose: () => void }) {
         <div className="field">
           <label htmlFor="lv-notify">Notify</label>
           <select id="lv-notify" className="input" value={v.notify} onChange={(e) => set('notify', e.target.value)}>
-            <option value="">{approverName ? `${approverName} (RM)` : 'Reporting Manager'}</option>
+            <option value="">{approverName ? `${approverName} (approver)` : 'Reporting Manager'}</option>
             {people.map((o) => (
-              <option key={o.value} value={o.value}>{approverName ? `${approverName} (RM) + ${o.label}` : o.label}</option>
+              <option key={o.value} value={o.value}>{approverName ? `${approverName} (approver) + ${o.label}` : o.label}</option>
             ))}
           </select>
         </div>
         <div className="field span-2">
           <label htmlFor="lv-reason">Reason</label>
           <textarea id="lv-reason" className="input" value={v.reason} maxLength={500} onChange={(e) => set('reason', e.target.value)} />
+        </div>
+        <div className="field span-2">
+          <label>
+            Supporting document{' '}
+            {p?.documentRequired ? <Tag tone="outline">Required</Tag> : <span className="faint">(optional)</span>}
+          </label>
+          <FileDrop file={doc?.file ?? null} onFile={pickDoc} accept={LEAVE_ATTACHMENT_ACCEPT} label="Drop a medical certificate or other proof here, or browse · PDF or image, up to 10 MB" />
+          {doc?.uploading && <div className="field-hint">Uploading…</div>}
+          {doc?.error && <div className="field-error">{doc.error}</div>}
+          {docMissing && !doc && <div className="field-error">{bal?.name ?? 'This leave'} for {fmtDays(p!.totalDays)} days needs a supporting document</div>}
+          {!doc?.error && <div className="field-hint">Only you, your approver and HR can open it.</div>}
         </div>
       </form>
       {body && (
@@ -343,7 +383,7 @@ function RequestModal({ id, onClose }: { id: string; onClose: () => void }) {
   const [rejecting, setRejecting] = useState(false);
   const inv = { invalidate: [LEAVE_ALL, ['approvals']] };
   const withdraw = useAction(() => lpApi.withdraw(id), { success: 'Request withdrawn', ...inv, onSuccess: onClose });
-  const cancel = useAction(() => lpApi.cancel(id), { success: (r) => (r.status === 'CANCELLATION_PENDING' ? 'Cancellation sent to your Reporting Manager' : 'Leave cancelled'), ...inv, onSuccess: onClose });
+  const cancel = useAction(() => lpApi.cancel(id), { success: (r) => (r.status === 'CANCELLATION_PENDING' ? 'Cancellation sent to your approver' : 'Leave cancelled'), ...inv, onSuccess: onClose });
   const approve = useAction(() => lpApi.approve(id), { success: 'Request approved', ...inv, onSuccess: onClose });
   const decideCancel = useAction((ok: boolean) => lpApi.decideCancellation(id, ok), { success: (_r, ok) => (ok ? 'Cancellation approved' : 'Cancellation declined'), ...inv, onSuccess: onClose });
   const r = q.data;
@@ -381,7 +421,8 @@ function RequestModal({ id, onClose }: { id: string; onClose: () => void }) {
             <span>Days</span><span>{fmtDays(r.days)}{r.lopDays ? ` (${fmtDays(r.lopDays)} unpaid)` : ''}</span>
             <span>Approver</span><span>{r.approverName ?? '—'}</span>
             <span>Reason</span><span>{r.reason ?? '—'}</span>
-            {r.decisionNote && (<><span>Comment</span><span>{r.decisionNote}</span></>)}
+            {r.attachment && (<><span>Document</span><span><LeaveDocument row={r} name={r.attachment.name} /></span></>)}
+            {r.decisionNote &&(<><span>Comment</span><span>{r.decisionNote}</span></>)}
             {r.balanceAfter !== null && (<><span>Balance after</span><span>{fmtDays(r.balanceAfter)}</span></>)}
             {r.teamOverlap > 0 && (<><span>Team off</span><span>{r.teamOverlap} teammate(s) off on these dates</span></>)}
             {r.notify.length > 0 && (<><span>Notified</span><span>{r.notify.map((n) => n.name).join(', ')}</span></>)}

@@ -174,7 +174,7 @@ function PolicyReader({ id, onClose }: { id: string; onClose: () => void }) {
   const restore = useAction(() => wpApi.restorePolicy(id), { success: 'Policy restored', invalidate: inv });
 
   return (
-    <div className="wp-drawer-backdrop" onMouseDown={onClose}>
+    <div className="wp-drawer-backdrop">
       <aside className="wp-drawer wp-drawer-wide" role="dialog" aria-modal aria-label="Policy" onMouseDown={(e) => e.stopPropagation()} data-screen-label="Policy reader">
         {isLoading && <Loading />}
         {error && <ErrorBlock error={error} retry={() => void refetch()} />}
@@ -434,7 +434,7 @@ function ComplianceDrawer({ row, onClose, onOpen }: { row: PolicyComplianceRow; 
   });
   const people = useMemo(() => data ?? [], [data]);
   return (
-    <div className="wp-drawer-backdrop" onMouseDown={onClose}>
+    <div className="wp-drawer-backdrop">
       <aside className="wp-drawer" role="dialog" aria-modal aria-label="Compliance" onMouseDown={(e) => e.stopPropagation()}>
         <div className="wp-drawer-head">
           <div className="stack" style={{ gap: 4 }}>

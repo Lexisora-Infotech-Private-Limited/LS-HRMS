@@ -49,11 +49,22 @@ export type RequestWithRefs = {
   decidedAt: Date | null;
   decisionNote: string | null;
   autoReason?: string | null;
+  attachmentFileId?: string | null;
   employee: { fullName: string; empCode: string; department: { name: string } | null };
   leaveType: { code: string; name: string };
 };
 
 export type Viewer = { employeeId: string | null; isHr: boolean; today: string };
+
+/**
+ * Who may open a leave request's supporting document (often a medical certificate): the employee,
+ * the request's approver, and HR (leave.manage). Notified colleagues and skip-level managers can
+ * see the request but not the document. Used by the request detail and the file download check.
+ */
+export function canViewLeaveAttachment(viewer: { employeeId: string | null; canManage: boolean }, r: { employeeId: string; approverEmployeeId: string | null }): boolean {
+  if (viewer.canManage) return true;
+  return !!viewer.employeeId && (viewer.employeeId === r.employeeId || viewer.employeeId === r.approverEmployeeId);
+}
 
 export function toRequestRow(r: RequestWithRefs, approverName: string | null, viewer: Viewer): LeaveRequestRow {
   const status = r.status as LeaveRequestStatusKey;
@@ -87,6 +98,8 @@ export function toRequestRow(r: RequestWithRefs, approverName: string | null, vi
     decidedAt: r.decidedAt?.toISOString() ?? null,
     decisionNote: r.decisionNote,
     autoReason: r.autoReason ?? null,
+    hasAttachment: !!r.attachmentFileId,
+    attachmentFileId: r.attachmentFileId && canViewLeaveAttachment({ employeeId: viewer.employeeId, canManage: viewer.isHr }, r) ? r.attachmentFileId : null,
     can: {
       withdraw: ownCanChange && status === 'PENDING',
       cancel: (ownCanChange || viewer.isHr) && status === 'APPROVED' && (from > viewer.today || viewer.isHr),
