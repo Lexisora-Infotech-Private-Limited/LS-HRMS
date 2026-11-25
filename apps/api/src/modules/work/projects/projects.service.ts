@@ -10,7 +10,7 @@ import type {
   ProjectStatusKey,
   ProjectHealthKey,
 } from '@lexisora/shared';
-import { istDateKey, PROJECT_STATUS_LABELS } from '@lexisora/shared';
+import { BILLING_VIEW_PERMS, istDateKey, OPEN_TASK_STATUSES, PROJECT_CANCEL_REASON_MIN, PROJECT_STATUS_LABELS } from '@lexisora/shared';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { AuditService } from '../../../core/audit/audit.service';
 import { NotificationsService } from '../../../core/notifications/notifications.service';
@@ -83,6 +83,12 @@ export class ProjectsService {
     };
   }
 
+  /** Rates and billed ₹ are for people who manage clients or projects (BILLING_VIEW_PERMS). */
+  private canSeeBilling(): boolean {
+    const ctx = requireContext();
+    return BILLING_VIEW_PERMS.some((perm) => hasPerm(ctx, perm));
+  }
+
   // ── List & KPIs ─────────────────────────────────────────────────────────
   async list(q: { page: number; pageSize: number; q?: string; status?: string; clientId?: string; leadEmployeeId?: string; includeClosed?: boolean; tab?: string }) {
     await this.metrics.recomputeTenantIfStale();
@@ -119,6 +125,7 @@ export class ProjectsService {
     const active = projects.filter((p) => p.status === 'ACTIVE');
     const billable = projects.filter((p) => p.billable && !p.isInternal && ['ACTIVE', 'ON_HOLD', 'COMPLETED'].includes(p.status));
     const { byProject, source } = await this.metrics.billableMinutes(billable.map((p) => p.id), start, end);
+    const seeMoney = this.canSeeBilling();
     let minutes = 0;
     let paise = 0;
     const rateMissing: string[] = [];
@@ -138,9 +145,9 @@ export class ProjectsService {
       active: active.length,
       dueThisMonth: active.filter((p) => p.deadline && p.deadline >= start && p.deadline < end).length,
       billableMinutes: minutes,
-      billablePaise: paise,
+      billablePaise: seeMoney ? paise : null,
       billableSource: source,
-      rateMissing,
+      rateMissing: seeMoney ? rateMissing : [],
       onTrack: active.filter((p) => p.health === 'ON_TRACK').length,
       atRisk: active.filter((p) => p.health === 'AT_RISK' || p.health === 'OFF_TRACK').length,
     };
@@ -191,13 +198,16 @@ export class ProjectsService {
     for (const t of tasks) if (!t.isStanding) tasksByStatus[t.status] = (tasksByStatus[t.status] ?? 0) + 1;
     const ctx = requireContext();
     const canManage = this.access.canManageProject(v, p);
+    const seeMoney = this.canSeeBilling();
     const clientDocs = p.clientId ? await this.prisma.projectDocument.findMany({ where: { clientId: p.clientId, projectId: null }, orderBy: { createdAt: 'desc' } }) : [];
     return {
       ...this.row(p, names),
       description: p.description,
       startDate: dateKey(p.startDate),
-      ratePerHourPaise: p.ratePerHourPaise,
-      effectiveRatePaise: p.ratePerHourPaise ?? p.client?.defaultRatePerHourPaise ?? null,
+      // Editors always have projects.manage, so the edit form never loses a rate it couldn't see.
+      canSeeBilling: seeMoney,
+      ratePerHourPaise: seeMoney ? p.ratePerHourPaise : null,
+      effectiveRatePaise: seeMoney ? (p.ratePerHourPaise ?? p.client?.defaultRatePerHourPaise ?? null) : null,
       techStack: p.techStack,
       openingLoggedMinutes: p.openingLoggedMinutes,
       taskEstimateMinutes: tasks.filter((t) => !t.isStanding && t.status !== 'CANCELLED').reduce((s, t) => s + (t.estimatedMinutes ?? 0), 0),
@@ -373,12 +383,15 @@ export class ProjectsService {
     if (from === to) return this.detail(id);
     if (!STATUS_FLOW[from].includes(to)) throw new AppError(422, 'BAD_TRANSITION', `A ${PROJECT_STATUS_LABELS[from].toLowerCase()} project cannot move to ${PROJECT_STATUS_LABELS[to].toLowerCase()}`);
     if (from === 'COMPLETED' && to === 'ACTIVE' && !v.viewAll) throw forbidden('Only a manager can reopen a completed project');
-    const openTasks = await this.prisma.task.findMany({ where: { projectId: id, isStanding: false, status: { in: ['OPEN', 'ALLOTTED', 'WIP', 'DEV_COMPLETED', 'QA'] } }, select: { id: true, status: true } });
+    const openTasks = await this.prisma.task.findMany({ where: { projectId: id, isStanding: false, status: { in: [...OPEN_TASK_STATUSES] } }, select: { id: true, status: true } });
     if ((to === 'COMPLETED' || to === 'CANCELLED') && openTasks.length) {
       if (to === 'COMPLETED' && !cancelRemaining) {
         throw conflict(`${openTasks.length} task${openTasks.length === 1 ? ' is' : 's are'} still open — close them or cancel the remaining tasks`, 'OPEN_TASKS');
       }
-      if (cancelRemaining && !reason) throw new AppError(422, 'REASON_REQUIRED', 'Give a reason for cancelling the remaining tasks');
+      reason = reason?.trim();
+      if (cancelRemaining && (reason?.length ?? 0) < PROJECT_CANCEL_REASON_MIN) {
+        throw new AppError(422, 'REASON_REQUIRED', `Give a reason (at least ${PROJECT_CANCEL_REASON_MIN} characters) for cancelling the ${openTasks.length} open task${openTasks.length === 1 ? '' : 's'}`);
+      }
       await this.prisma.task.updateMany({ where: { id: { in: openTasks.map((t) => t.id) } }, data: { status: 'CANCELLED', statusChangedAt: new Date(), version: { increment: 1 } } });
       await this.prisma.taskTransition.createMany({
         data: openTasks.map((t) => ({ tenantId: currentTenantId(), taskId: t.id, fromStatus: t.status, toStatus: 'CANCELLED' as const, kind: 'MOVE', note: reason ?? `Project ${to.toLowerCase()}`, byEmployeeId: v.employeeId, byName: v.name })),

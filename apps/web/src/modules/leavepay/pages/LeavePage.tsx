@@ -401,7 +401,7 @@ function RequestModal({ id, onClose }: { id: string; onClose: () => void }) {
             {r.can.decideCancellation && (
               <>
                 <button className="btn btn-secondary" onClick={() => decideCancel.mutate(false)}>Keep leave</button>
-                <button className="btn btn-primary" onClick={() => decideCancel.mutate(true)}>Approve cancellation</button>
+                {!r.payrollClosed && <button className="btn btn-primary" onClick={() => decideCancel.mutate(true)}>Approve cancellation</button>}
               </>
             )}
             {r.can.reject && <button className="btn btn-secondary" onClick={() => setRejecting(true)}>Reject</button>}
@@ -427,6 +427,7 @@ function RequestModal({ id, onClose }: { id: string; onClose: () => void }) {
             {r.teamOverlap > 0 && (<><span>Team off</span><span>{r.teamOverlap} teammate(s) off on these dates</span></>)}
             {r.notify.length > 0 && (<><span>Notified</span><span>{r.notify.map((n) => n.name).join(', ')}</span></>)}
           </div>
+          {r.payrollClosed && <div className="field-hint">{r.payrollClosed} for these dates, so this leave can't be cancelled any more. Ask payroll to correct it in the next run.</div>}
           {r.breakdown.length > 0 && (
             <div className="lp-days">
               {r.breakdown.map((d) => (

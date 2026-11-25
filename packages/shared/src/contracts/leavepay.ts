@@ -173,6 +173,11 @@ export type LeaveRequestRow = {
   hasAttachment: boolean;
   /** The document's file id, only for viewers allowed to open it (employee, approver, HR); null otherwise. */
   attachmentFileId: string | null;
+  /**
+   * Set when a payroll run that covers these dates is finalized or paid ("September 2026 payroll
+   * is paid"): the leave was settled in salary, so it can no longer be cancelled.
+   */
+  payrollClosed: string | null;
   /** Actions the viewer may take. */
   can: { withdraw: boolean; cancel: boolean; requestCancel: boolean; approve: boolean; reject: boolean; decideCancellation: boolean };
 };

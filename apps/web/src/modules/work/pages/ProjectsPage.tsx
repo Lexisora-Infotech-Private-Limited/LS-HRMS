@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { formatINRCompact, type ProjectRow } from '@lexisora/shared';
+import { formatINRCompact, type ProjectKpis, type ProjectRow } from '@lexisora/shared';
 import { useCan } from '@/lib/auth';
 import { DataTable, Pager, type Column } from '@/components/table';
 import { ErrorBlock, Kpis, PageHeader, Tabs, Tag, type Tone } from '@/components/ui';
@@ -14,6 +14,13 @@ const toneOf = (r: ProjectRow): Tone => {
   if (r.status === 'COMPLETED') return 'accent';
   if (r.status === 'CANCELLED') return 'danger';
   return 'neutral';
+};
+
+const BILLABLE_SOURCE_HINT: Record<ProjectKpis['billableSource'], string> = {
+  timesheets: 'From timesheets',
+  tracker: 'From the desktop tracker',
+  mixed: 'From timesheets and the desktop tracker',
+  none: 'No billable work logged',
 };
 
 type Tab = 'live' | 'active' | 'planning' | 'closed';
@@ -71,8 +78,8 @@ export default function ProjectsPage() {
               label: `Billable hours (${k ? k.monthLabel.split(' ')[0] : '…'})`,
               value: k ? Math.round(k.billableMinutes / 60).toLocaleString('en-IN') : '…',
               sub: k ? (
-                <span title={k.rateMissing.length ? `No rate set: ${k.rateMissing.join(', ')}` : `Source: ${k.billableSource}`}>
-                  {formatINRCompact(k.billablePaise)} billable{k.rateMissing.length ? ' · rate missing' : ''}
+                <span title={k.rateMissing.length ? `No rate set: ${k.rateMissing.join(', ')}` : BILLABLE_SOURCE_HINT[k.billableSource]}>
+                  {k.billablePaise != null ? `${formatINRCompact(k.billablePaise)} billable${k.rateMissing.length ? ' · rate missing' : ''}` : BILLABLE_SOURCE_HINT[k.billableSource]}
                 </span>
               ) : '',
             },

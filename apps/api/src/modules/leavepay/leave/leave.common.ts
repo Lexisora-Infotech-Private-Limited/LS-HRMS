@@ -66,7 +66,21 @@ export function canViewLeaveAttachment(viewer: { employeeId: string | null; canM
   return !!viewer.employeeId && (viewer.employeeId === r.employeeId || viewer.employeeId === r.approverEmployeeId);
 }
 
-export function toRequestRow(r: RequestWithRefs, approverName: string | null, viewer: Viewer): LeaveRequestRow {
+/** "September 2026 payroll is paid" / "... is finalized". */
+export function payrollClosedLabel(run: { periodStart: Date; status: string }): string {
+  const month = run.periodStart.toLocaleString('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  return `${month} payroll is ${run.status === 'PAID' ? 'paid' : 'finalized'}`;
+}
+
+/**
+ * Who may cancel an approved leave, and how:
+ *  - nobody, once a finalized/paid payroll covers its dates (`payrollClosed`): salary already
+ *    counted it as leave, so refunding the balance would pay the days twice;
+ *  - HR cancels someone else's leave directly;
+ *  - the employee (HR included, for their own leave) cancels a future leave directly and asks
+ *    their approver to cancel one that has started.
+ */
+export function toRequestRow(r: RequestWithRefs, approverName: string | null, viewer: Viewer, payrollClosed: string | null = null): LeaveRequestRow {
   const status = r.status as LeaveRequestStatusKey;
   const own = viewer.employeeId === r.employeeId;
   const isApprover = !!viewer.employeeId && viewer.employeeId === r.approverEmployeeId && !own;
@@ -74,6 +88,7 @@ export function toRequestRow(r: RequestWithRefs, approverName: string | null, vi
   const from = dk(r.fromDate);
   // A late-arrival half day is undone by excusing the late mark (or by HR), not by the employee.
   const ownCanChange = own && !r.autoReason;
+  const cancellable = status === 'APPROVED' && !payrollClosed;
   return {
     id: r.id,
     requestNo: r.requestNo,
@@ -100,10 +115,11 @@ export function toRequestRow(r: RequestWithRefs, approverName: string | null, vi
     autoReason: r.autoReason ?? null,
     hasAttachment: !!r.attachmentFileId,
     attachmentFileId: r.attachmentFileId && canViewLeaveAttachment({ employeeId: viewer.employeeId, canManage: viewer.isHr }, r) ? r.attachmentFileId : null,
+    payrollClosed,
     can: {
       withdraw: ownCanChange && status === 'PENDING',
-      cancel: (ownCanChange || viewer.isHr) && status === 'APPROVED' && (from > viewer.today || viewer.isHr),
-      requestCancel: ownCanChange && !viewer.isHr && status === 'APPROVED' && from <= viewer.today,
+      cancel: cancellable && ((ownCanChange && from > viewer.today) || (viewer.isHr && !own)),
+      requestCancel: cancellable && ownCanChange && from <= viewer.today,
       approve: canDecide && status === 'PENDING',
       reject: canDecide && status === 'PENDING',
       decideCancellation: canDecide && status === 'CANCELLATION_PENDING',

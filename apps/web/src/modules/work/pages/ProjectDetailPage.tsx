@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { PROJECT_MEMBER_ROLES, PROJECT_STATUS_LABELS, TASK_STATUS_LABELS, formatDate, formatINR, type ProjectDetail, type TaskStatusKey } from '@lexisora/shared';
+import { OPEN_TASK_STATUSES, PROJECT_CANCEL_REASON_MIN, PROJECT_MEMBER_ROLES, PROJECT_STATUS_LABELS, TASK_STATUS_LABELS, formatDate, formatINR, type ProjectDetail, type TaskStatusKey } from '@lexisora/shared';
 import { useCan } from '@/lib/auth';
 import { useAction } from '@/lib/query';
 import { FormModal, type FieldDef } from '@/components/form';
 import { useLookups, opts } from '@/components/lookups';
 import { DataTable } from '@/components/table';
-import { Card, ConfirmDialog, Empty, ErrorBlock, Kpis, Loading, PageHeader, Tabs, Tag, humanize } from '@/components/ui';
+import { Card, ConfirmDialog, Empty, ErrorBlock, Kpis, Loading, Modal, PageHeader, Tabs, Tag, humanize } from '@/components/ui';
 import { hours, workApi, workKeys } from '../api';
 import { DocumentsList, Progress } from '../components';
 import { GitIntegrationCard } from './GitIntegrationCard';
@@ -23,7 +23,7 @@ export default function ProjectDetailPage() {
   const [confirm, setConfirm] = useState<null | { status: string; title: string; body: string }>(null);
   const q = useQuery({ queryKey: workKeys.project(id), queryFn: () => workApi.project(id), enabled: !!id });
   const inv = [workKeys.project(id), workKeys.projects];
-  const setStatus = useAction((b: { status: string; cancelRemaining?: boolean }) => workApi.setProjectStatus(id, b), {
+  const setStatus = useAction((b: { status: string; cancelRemaining?: boolean; reason?: string }) => workApi.setProjectStatus(id, b), {
     success: (_r, b) => `Project ${PROJECT_STATUS_LABELS[b.status as keyof typeof PROJECT_STATUS_LABELS]?.toLowerCase() ?? 'updated'}`,
     invalidate: inv,
     onSuccess: () => setConfirm(null),
@@ -32,6 +32,7 @@ export default function ProjectDetailPage() {
   if (q.isLoading) return <Loading />;
   if (q.error || !q.data) return <ErrorBlock error={q.error} retry={() => void q.refetch()} />;
   const p = q.data;
+  const openTasks = OPEN_TASK_STATUSES.reduce((s, st) => s + (p.tasksByStatus[st] ?? 0), 0);
   const firstBoard = p.boards.find((b) => !b.locked) ?? p.boards[0];
   const statusActions: { status: string; label: string; body: string }[] = [];
   if (p.canManage) {
@@ -69,7 +70,9 @@ export default function ProjectDetailPage() {
           { label: 'Progress', value: `${p.progressPct}%`, sub: `${Object.entries(p.tasksByStatus).reduce((s, [, n]) => s + n, 0)} tasks` },
           { label: 'Estimated vs logged', value: `${hours(p.estimatedMinutes, '0h')} / ${hours(p.loggedMinutes, '0h')}`, sub: `${hours(p.taskEstimateMinutes, '0h')} broken down into tasks` },
           { label: 'Deadline', value: p.deadline ? formatDate(p.deadline) : '—', sub: p.startDate ? `Started ${formatDate(p.startDate)}` : '' },
-          { label: 'Billing', value: p.billable ? (p.effectiveRatePaise != null ? `${formatINR(p.effectiveRatePaise)}/h` : 'Rate missing') : 'Non-billable', sub: p.billable ? (p.ratePerHourPaise == null && p.effectiveRatePaise != null ? 'Client default rate' : 'Project rate') : 'Internal' },
+          !p.canSeeBilling
+            ? { label: 'Billing', value: p.billable ? 'Billable' : 'Non-billable', sub: p.billable ? 'Client project' : 'Internal' }
+            : { label: 'Billing', value: p.billable ? (p.effectiveRatePaise != null ? `${formatINR(p.effectiveRatePaise)}/h` : 'Rate missing') : 'Non-billable', sub: p.billable ? (p.ratePerHourPaise == null && p.effectiveRatePaise != null ? 'Client default rate' : 'Project rate') : 'Internal' },
         ]}
       />
       <Tabs<Tab>
@@ -91,17 +94,55 @@ export default function ProjectDetailPage() {
       {tab === 'boards' && <Boards p={p} />}
       {tab === 'git' && <GitTab p={p} />}
       {editing && <EditProject p={p} onClose={() => setEditing(false)} />}
-      {confirm && (
-        <ConfirmDialog
+      {confirm && confirm.status === 'COMPLETED' && openTasks > 0 ? (
+        <CancelTasksDialog
           title={confirm.title}
-          body={confirm.body}
-          confirmLabel="Confirm"
+          openTasks={openTasks}
           busy={setStatus.isPending}
           onClose={() => setConfirm(null)}
-          onConfirm={() => setStatus.mutate({ status: confirm.status, cancelRemaining: confirm.status === 'COMPLETED' ? true : undefined })}
+          onConfirm={(reason) => setStatus.mutate({ status: 'COMPLETED', cancelRemaining: true, reason })}
         />
+      ) : (
+        confirm && (
+          <ConfirmDialog
+            title={confirm.title}
+            body={confirm.status === 'COMPLETED' ? 'All tasks are closed. The project can then be archived to the client vault.' : confirm.body}
+            confirmLabel="Confirm"
+            busy={setStatus.isPending}
+            onClose={() => setConfirm(null)}
+            onConfirm={() => setStatus.mutate({ status: confirm.status })}
+          />
+        )
       )}
     </div>
+  );
+}
+
+/** "Mark completed" with open tasks: they get cancelled, so ask why (the reason goes on each task's history). */
+function CancelTasksDialog({ title, openTasks, busy, onClose, onConfirm }: { title: string; openTasks: number; busy: boolean; onClose: () => void; onConfirm: (reason: string) => void }) {
+  const [reason, setReason] = useState('');
+  const ok = reason.trim().length >= PROJECT_CANCEL_REASON_MIN;
+  const label = `${openTasks} open task${openTasks === 1 ? '' : 's'}`;
+  return (
+    <Modal
+      title={title}
+      onClose={onClose}
+      actions={
+        <>
+          <button className="btn btn-secondary" onClick={onClose}>Back</button>
+          <button className="btn btn-danger" disabled={!ok || busy} onClick={() => onConfirm(reason.trim())}>Cancel {label} &amp; complete</button>
+        </>
+      }
+    >
+      <div className="dialog-body stack" style={{ gap: 10 }}>
+        <div>This project still has <strong>{label}</strong>. Completing it cancels them; this can't be undone.</div>
+        <label className="stack" style={{ gap: 4 }}>
+          <span className="faint">Reason for cancelling the open tasks</span>
+          <textarea className="input" rows={3} maxLength={500} autoFocus value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Client closed the engagement" />
+        </label>
+        {!ok && <div className="field-hint">At least {PROJECT_CANCEL_REASON_MIN} characters.</div>}
+      </div>
+    </Modal>
   );
 }
 
@@ -352,7 +393,8 @@ function EditProject({ p, onClose }: { p: ProjectDetail; onClose: () => void }) 
           startDate: v.startDate,
           deadline: v.deadline,
           billable: v.billable === 'yes',
-          ratePerHourPaise: v.ratePerHour ?? null,
+          // A rate hidden from this viewer comes back null; never send that back as "clear the rate".
+          ratePerHourPaise: p.canSeeBilling ? (v.ratePerHour ?? null) : undefined,
           estimatedHours: v.estimatedHours ?? null,
           gitRepoUrl: v.gitRepoUrl || null,
           gitTargetBranch: v.gitTargetBranch,

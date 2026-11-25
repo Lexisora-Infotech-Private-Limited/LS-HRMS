@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
+import type { ProjectKpis } from '@lexisora/shared';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { NotificationsService } from '../../../core/notifications/notifications.service';
 import { currentTenantId, runAsTenant } from '../../../core/context/request-context';
@@ -7,6 +8,7 @@ import { computeHealth, computeProgress, crossedEstimate, type ProjectStatus, ty
 import { todayDate } from '../work.util';
 
 type Delegate = { findMany: (args: any) => Promise<any[]> } | undefined;
+type BillableSource = ProjectKpis['billableSource'];
 
 /**
  * Logged minutes, progress and health.
@@ -199,26 +201,51 @@ export class WorkMetricsService {
   }
 
   /**
-   * Billable minutes per project for a month. Source preference: approved/submitted timesheet cells on
-   * billable lines → tracker segments → task logged minutes of tasks active that month.
+   * Billable minutes per project, counting only work done on dates inside [start, end).
+   *
+   * Decided per employee and day:
+   *  - a day inside one of the employee's timesheet weeks → that timesheet's cells on billable lines
+   *    (finalMinutes: tracker time plus accepted claims and edits; a line marked non-billable or a
+   *    day edited down to 0 counts 0);
+   *  - any other day (timesheet not generated yet) → tracker WORK segments on the project's tasks.
+   * Task logged totals are never used: they are all-time and would bill earlier months again.
    */
-  async billableMinutes(projectIds: string[], start: Date, end: Date): Promise<{ byProject: Map<string, number>; source: 'timesheets' | 'tracker' | 'tasks' }> {
+  async billableMinutes(projectIds: string[], start: Date, end: Date): Promise<{ byProject: Map<string, number>; source: BillableSource }> {
     const byProject = new Map<string, number>();
-    if (!projectIds.length) return { byProject, source: 'timesheets' };
+    if (!projectIds.length) return { byProject, source: 'none' };
+    const add = (pid: string, min: number) => {
+      if (min) byProject.set(pid, (byProject.get(pid) ?? 0) + min);
+    };
+    const tasks = await this.prisma.task.findMany({ where: { projectId: { in: projectIds } }, select: { id: true, projectId: true } });
+    const projectOfTask = new Map(tasks.map((t) => [t.id, t.projectId]));
+    const projectOf = (projectId: string | null, taskId: string | null) => (projectId && projectIds.includes(projectId) ? projectId : taskId ? projectOfTask.get(taskId) : undefined);
+    const day = (d: Date) => d.toISOString().slice(0, 10);
+    const inProjects = [{ projectId: { in: projectIds } }, ...(tasks.length ? [{ taskId: { in: tasks.map((t) => t.id) } }] : [])];
+
+    let fromSheets = 0;
+    let fromTracker = 0;
+    // Employee-days a timesheet already speaks for (its whole week, even days with no billable cell).
+    const sheetDays = new Set<string>();
     try {
+      const sheetD = this.delegate('timesheet');
       const lineD = this.delegate('timesheetLine');
       const cellD = this.delegate('timesheetCell');
-      if (lineD && cellD) {
-        const anyCells = await cellD.findMany({ where: { date: { gte: start, lt: end } }, select: { lineId: true }, take: 1 });
-        if (anyCells.length) {
-          const lines = await lineD.findMany({ where: { projectId: { in: projectIds }, billable: true }, select: { id: true, projectId: true } });
-          const pOf = new Map(lines.map((l) => [l.id, l.projectId as string]));
-          const cells = lines.length ? await cellD.findMany({ where: { lineId: { in: lines.map((l) => l.id) }, date: { gte: start, lt: end } }, select: { lineId: true, finalMinutes: true } }) : [];
-          for (const c of cells) {
-            const pid = pOf.get(c.lineId);
-            if (pid) byProject.set(pid, (byProject.get(pid) ?? 0) + (c.finalMinutes ?? 0));
+      if (sheetD && lineD && cellD) {
+        const sheets = await sheetD.findMany({ where: { weekStart: { lt: end }, weekEnd: { gte: start } }, select: { id: true, employeeId: true, weekStart: true, weekEnd: true } });
+        for (const s of sheets) {
+          for (let d = new Date(s.weekStart); d <= s.weekEnd; d = new Date(d.getTime() + 86_400_000)) sheetDays.add(`${s.employeeId}|${day(d)}`);
+        }
+        const lines = sheets.length
+          ? await lineD.findMany({ where: { timesheetId: { in: sheets.map((s) => s.id) }, billable: true, OR: inProjects }, select: { id: true, projectId: true, taskId: true } })
+          : [];
+        const lineProject = new Map(lines.map((l) => [l.id, projectOf(l.projectId, l.taskId)]));
+        const cells = lines.length ? await cellD.findMany({ where: { lineId: { in: lines.map((l) => l.id) }, date: { gte: start, lt: end } }, select: { lineId: true, finalMinutes: true } }) : [];
+        for (const c of cells) {
+          const pid = lineProject.get(c.lineId);
+          if (pid && c.finalMinutes) {
+            add(pid, c.finalMinutes);
+            fromSheets += c.finalMinutes;
           }
-          return { byProject, source: 'timesheets' };
         }
       }
     } catch (e) {
@@ -227,20 +254,23 @@ export class WorkMetricsService {
     try {
       const segD = this.delegate('activitySegment');
       if (segD) {
-        const segs = await segD.findMany({ where: { projectId: { in: projectIds }, workDate: { gte: start, lt: end }, kind: { in: ['WORK', 'IDLE_WORK'] } }, select: { projectId: true, durationSec: true } });
-        if (segs.length) {
-          for (const s of segs) byProject.set(s.projectId, (byProject.get(s.projectId) ?? 0) + Math.round((s.durationSec ?? 0) / 60));
-          return { byProject, source: 'tracker' };
+        const segs = await segD.findMany({ where: { kind: 'WORK', workDate: { gte: start, lt: end }, OR: inProjects }, select: { employeeId: true, workDate: true, projectId: true, taskId: true, durationSec: true } });
+        const secs = new Map<string, number>();
+        for (const s of segs) {
+          if (sheetDays.has(`${s.employeeId}|${day(s.workDate)}`)) continue;
+          const pid = projectOf(s.projectId, s.taskId);
+          if (pid) secs.set(pid, (secs.get(pid) ?? 0) + (s.durationSec ?? 0));
+        }
+        for (const [pid, sec] of secs) {
+          const min = Math.round(sec / 60);
+          add(pid, min);
+          fromTracker += min;
         }
       }
     } catch (e) {
       this.log.debug(`billable tracker read skipped: ${(e as Error).message}`);
     }
-    const tasks = await this.prisma.task.findMany({
-      where: { projectId: { in: projectIds }, isStanding: false, OR: [{ doneAt: { gte: start, lt: end } }, { status: { in: ['WIP', 'DEV_COMPLETED', 'QA'] } }] },
-      select: { projectId: true, loggedMinutes: true },
-    });
-    for (const t of tasks) byProject.set(t.projectId, (byProject.get(t.projectId) ?? 0) + t.loggedMinutes);
-    return { byProject, source: 'tasks' };
+    const source: BillableSource = fromSheets && fromTracker ? 'mixed' : fromSheets ? 'timesheets' : fromTracker ? 'tracker' : 'none';
+    return { byProject, source };
   }
 }

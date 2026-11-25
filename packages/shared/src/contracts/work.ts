@@ -12,6 +12,10 @@ export const TASK_STATUSES = ['OPEN', 'ALLOTTED', 'WIP', 'DEV_COMPLETED', 'QA', 
 export type TaskStatusKey = (typeof TASK_STATUSES)[number];
 /** Kanban columns in order (DONE is shown only with "Show done"). */
 export const BOARD_COLUMNS = ['OPEN', 'ALLOTTED', 'WIP', 'DEV_COMPLETED', 'QA'] as const;
+/** Task statuses that still count as open work (a project can't complete while any remain, unless they're cancelled). */
+export const OPEN_TASK_STATUSES: readonly TaskStatusKey[] = BOARD_COLUMNS;
+/** Shortest reason accepted when completing a project cancels its open tasks. */
+export const PROJECT_CANCEL_REASON_MIN = 5;
 /** Every column a card moves through, in order (← / → move one step along this). */
 export const BOARD_FLOW = ['OPEN', 'ALLOTTED', 'WIP', 'DEV_COMPLETED', 'QA', 'DONE'] as const satisfies readonly TaskStatusKey[];
 /** The WIP status is shown as "In progress" (the stored value stays WIP). */
@@ -236,14 +240,23 @@ export type ProjectRow = {
   billable: boolean;
   category: string;
 };
+/**
+ * Who may see project money (hourly rates, billable ₹): people who manage clients or projects.
+ * Everyone else sees hours only; the API leaves the ₹ fields null for them.
+ */
+export const BILLING_VIEW_PERMS = ['clients.manage', 'projects.manage'] as const;
+
 export type ProjectKpis = {
   month: string;
   monthLabel: string;
   active: number;
   dueThisMonth: number;
   billableMinutes: number;
-  billablePaise: number;
-  billableSource: 'timesheets' | 'tracker' | 'tasks';
+  /** null when the viewer may not see billing (BILLING_VIEW_PERMS). */
+  billablePaise: number | null;
+  /** Where the month's hours came from: timesheets, tracker (weeks without a timesheet yet), both, or no work logged. */
+  billableSource: 'timesheets' | 'tracker' | 'mixed' | 'none';
+  /** Billable projects with hours this month but no rate; empty when billing is hidden. */
   rateMissing: string[];
   onTrack: number;
   atRisk: number;
@@ -260,6 +273,8 @@ export type BoardInfo = {
 export type ProjectDetail = ProjectRow & {
   description: string | null;
   startDate: string | null;
+  /** The viewer may see rates (BILLING_VIEW_PERMS); when false both rates below are null. */
+  canSeeBilling: boolean;
   ratePerHourPaise: number | null;
   effectiveRatePaise: number | null;
   techStack: string[];
