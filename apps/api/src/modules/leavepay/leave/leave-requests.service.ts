@@ -34,6 +34,7 @@ import {
   DEFAULT_LEAVE_SETTINGS,
   LATE_ARRIVAL,
   LEAVE_SETTINGS_KEY,
+  payrollClosedLabel,
   requestDatesLabel,
   requestInclude,
   toRequestRow,
@@ -88,9 +89,37 @@ export class LeaveRequestsService {
   }
 
   private async rows(reqs: Prisma.LeaveRequestGetPayload<{ include: typeof requestInclude }>[]): Promise<LeaveRequestRow[]> {
-    const names = await this.names(reqs.map((r) => r.approverEmployeeId));
+    const [names, closed] = await Promise.all([this.names(reqs.map((r) => r.approverEmployeeId)), this.payrollClosed(reqs)]);
     const v = this.viewer();
-    return reqs.map((r) => toRequestRow(r, r.approverEmployeeId ? (names.get(r.approverEmployeeId) ?? null) : null, v));
+    return reqs.map((r) => toRequestRow(r, r.approverEmployeeId ? (names.get(r.approverEmployeeId) ?? null) : null, v, closed.get(r.id) ?? null));
+  }
+
+  /**
+   * For approved leave (and pending cancellations): the finalized/paid payroll run of that employee
+   * whose period overlaps the leave dates, as a label. Such leave is settled in salary and stays.
+   * Cancelling the run (payroll → Cancel run) reopens it, so this is read live, never stored.
+   */
+  private async payrollClosed(reqs: { id: string; employeeId: string; status: string; fromDate: Date; toDate: Date }[]): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    const live = reqs.filter((r) => r.status === 'APPROVED' || r.status === 'CANCELLATION_PENDING');
+    if (!live.length) return out;
+    const minFrom = new Date(Math.min(...live.map((r) => r.fromDate.getTime())));
+    const maxTo = new Date(Math.max(...live.map((r) => r.toDate.getTime())));
+    const items = await this.prisma.payrollItem.findMany({
+      where: { employeeId: { in: [...new Set(live.map((r) => r.employeeId))] }, run: { status: { in: ['FINALIZED', 'PAID'] }, periodStart: { lte: maxTo }, periodEnd: { gte: minFrom } } },
+      select: { employeeId: true, run: { select: { periodStart: true, periodEnd: true, status: true } } },
+      orderBy: { run: { periodStart: 'asc' } },
+    });
+    for (const r of live) {
+      const hit = items.find((i) => i.employeeId === r.employeeId && i.run.periodStart <= r.toDate && i.run.periodEnd >= r.fromDate);
+      if (hit) out.set(r.id, payrollClosedLabel(hit.run));
+    }
+    return out;
+  }
+
+  private async assertPayrollOpen(r: { id: string; employeeId: string; status: string; fromDate: Date; toDate: Date }) {
+    const closed = (await this.payrollClosed([r])).get(r.id);
+    if (closed) throw new AppError(409, 'PAYROLL_CLOSED', `${closed} for these dates, so this leave can no longer be cancelled. Ask payroll to correct it in the next run.`);
   }
 
   /**
@@ -621,17 +650,22 @@ export class LeaveRequestsService {
     return (await this.rows([await this.prisma.leaveRequest.findUniqueOrThrow({ where: { id }, include: requestInclude })]))[0]!;
   }
 
-  /** Owner cancel: pending → withdraw; approved future → cancel; approved started → cancellation request. HR cancels directly. */
+  /**
+   * Owner cancel: pending → withdraw; approved future → cancel; approved started → cancellation
+   * request. HR cancels someone else's leave directly; their own follows the owner rules. Leave in a
+   * finalized/paid payroll period can't be cancelled at all (see toRequestRow).
+   */
   async cancel(id: string, reason?: string): Promise<LeaveRequestRow> {
     const r = await this.load(id);
     const ctx = requireContext();
-    const isHr = hasPerm(ctx, 'leave.manage');
     const own = r.employeeId === ctx.employeeId;
-    if (!own && !isHr) throw forbidden();
-    if (r.autoReason && !isHr) throw forbidden(LATE_HALF_DAY_LOCKED);
+    const hrForOther = hasPerm(ctx, 'leave.manage') && !own;
+    if (!own && !hrForOther) throw forbidden();
+    if (r.autoReason && !hrForOther) throw forbidden(LATE_HALF_DAY_LOCKED);
     if (r.status === 'PENDING' && own) return this.withdraw(id);
     if (r.status !== 'APPROVED') throw new AppError(409, 'LEAVE_STATE', 'Only approved requests can be cancelled');
-    if (isHr || dk(r.fromDate) > todayKey()) return this.doCancel(r, reason);
+    await this.assertPayrollOpen(r);
+    if (hrForOther || dk(r.fromDate) > todayKey()) return this.doCancel(r, reason);
     await this.prisma.leaveRequest.update({ where: { id }, data: { status: 'CANCELLATION_PENDING', cancelReason: reason || null, cancelRequestedAt: new Date(), version: { increment: 1 } } });
     await this.audit.record({ action: 'leave.request.cancel_requested', entity: 'LeaveRequest', entityId: r.id, meta: { reason: reason ?? null } });
     const users = await this.notifications.usersForEmployees([r.approverEmployeeId]);
@@ -643,7 +677,11 @@ export class LeaveRequestsService {
     const r = await this.load(id);
     if (r.status !== 'CANCELLATION_PENDING') throw new AppError(409, 'LEAVE_STATE', 'No cancellation is pending on this request');
     this.assertDecider(r);
-    if (approve) return this.doCancel(r, r.cancelReason ?? undefined);
+    if (approve) {
+      // The request may have been raised before that month's payroll was finalized.
+      await this.assertPayrollOpen(r);
+      return this.doCancel(r, r.cancelReason ?? undefined);
+    }
     await this.prisma.leaveRequest.update({ where: { id }, data: { status: 'APPROVED', version: { increment: 1 } } });
     await this.audit.record({ action: 'leave.request.cancel_rejected', entity: 'LeaveRequest', entityId: r.id });
     const users = await this.notifications.usersForEmployees([r.employeeId]);
@@ -746,6 +784,7 @@ export class LeaveRequestsService {
           autoReason: null,
           hasAttachment: false,
           attachmentFileId: null,
+          payrollClosed: null,
           can: { withdraw: false, cancel: false, requestCancel: false, approve: true, reject: true, decideCancellation: false },
           kind: 'COMP_OFF',
           balanceAfter: null,
