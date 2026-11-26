@@ -399,6 +399,8 @@ export class NoticesService {
           excerpt: excerptOf(bodyHtml, 300),
           expiresAt,
           ...(live ? { editedAt: new Date(), ...(n.status === 'EXPIRED' && (!expiresAt || expiresAt > new Date()) ? { status: 'PUBLISHED' as const } : {}) } : { visibility: dto.visibility, audiences: audiences as Prisma.InputJsonValue, publishAt }),
+          // "Save draft" means draft: a scheduled notice comes off the schedule (Schedule / Publish puts it back).
+          ...(!live && dto.action === 'draft' && n.status === 'SCHEDULED' ? { status: 'DRAFT' as const } : {}),
           ...(v.moderator ? { pinned: dto.pinned } : {}),
           ...(dto.emailRecipients !== undefined && !live ? { emailRecipients: dto.emailRecipients } : {}),
         },
@@ -406,7 +408,7 @@ export class NoticesService {
       this.prisma.noticeAttachment.deleteMany({ where: { noticeId: id } }),
       this.prisma.noticeAttachment.createMany({ data: files.map((f) => ({ tenantId, noticeId: id, fileId: f.id, name: f.filename, sizeBytes: f.size, mime: f.mime })) }),
     ]);
-    await this.audit.record({ action: 'notice.update', entity: 'Notice', entityId: id, meta: { changed } as Prisma.InputJsonValue });
+    await this.audit.record({ action: 'notice.update', entity: 'Notice', entityId: id, meta: { changed, ...(!live && dto.action === 'draft' && n.status === 'SCHEDULED' ? { unscheduled: true } : {}) } as Prisma.InputJsonValue });
     if (!live && dto.action === 'publish') return this.publish(id, true);
     return this.detail(id);
   }
@@ -525,6 +527,8 @@ export class NoticesService {
 
   /** Every minute: SCHEDULED notices whose publishAt has passed go live. */
   async publishDue(): Promise<number> {
+    // A "scheduled" notice with no date can never go live: put it back in Drafts (older data before "Save draft" unscheduled).
+    await this.prisma.notice.updateMany({ where: { status: 'SCHEDULED', deletedAt: null, publishAt: null }, data: { status: 'DRAFT' } });
     const due = await this.prisma.notice.findMany({ where: { status: 'SCHEDULED', deletedAt: null, publishAt: { lte: new Date() } }, take: 50 });
     let n = 0;
     for (const row of due) if (await this.goLive(row)) n++;

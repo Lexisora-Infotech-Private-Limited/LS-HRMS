@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Prisma, type ChatCall, type ChatChannel, type ChatMember, type ChatMessage } from '@prisma/client';
 import {
   CALLS_NEED_LIVEKIT,
+  CALLS_NOT_SET_UP,
   initialsOf,
   type CallJoin,
   type ChannelCreateInput,
@@ -199,14 +200,26 @@ export class ChatService {
     const { ctx, userId } = this.me();
     await this.ensureCompanyChannels(ctx.tenantId);
     await this.syncFor(userId).catch((e) => this.log.warn(`sync ${userId}: ${(e as Error).message}`));
-    const memberships = await this.prisma.chatMember.findMany({ where: { userId, channel: { archivedAt: null } }, include: { channel: { include: { members: true } } } });
+    // Archived channels come too (shown apart, read-only) so their history stays reachable.
+    const memberships = await this.prisma.chatMember.findMany({ where: { userId }, include: { channel: { include: { members: true } } } });
     const rows = await this.rowsFor(memberships.map((m) => ({ ...m.channel, me: m })), ctx, userId);
-    const channels = rows.filter((r) => r.kind === 'PUBLIC' || r.kind === 'PRIVATE');
-    const dms = rows.filter((r) => r.kind === 'DM' || r.kind === 'GROUP_DM');
+    const live = rows.filter((r) => !r.archived);
+    const channels = live.filter((r) => r.kind === 'PUBLIC' || r.kind === 'PRIVATE');
+    const dms = live.filter((r) => r.kind === 'DM' || r.kind === 'GROUP_DM');
+    const archived = rows.filter((r) => r.archived && (r.kind === 'PUBLIC' || r.kind === 'PRIVATE')).sort((a, b) => a.name.localeCompare(b.name));
     const order = new Map(memberships.map((m) => [m.channelId, m.channel.sortOrder]));
     channels.sort((a, b) => (order.get(a.id) ?? 100) - (order.get(b.id) ?? 100) || a.name.localeCompare(b.name));
     dms.sort((a, b) => (b.lastMessageAt ?? '').localeCompare(a.lastMessageAt ?? '') || a.label.localeCompare(b.label));
-    return { channels, dms, canCreate: this.canCreate(ctx), userId };
+    return { channels, dms, archived, canCreate: this.canCreate(ctx), userId, callsEnabled: this.callsEnabled };
+  }
+
+  /** Calls need a real media server (LiveKit). Without it nobody is rung and the buttons are off. */
+  private get callsEnabled(): boolean {
+    return this.rtc.name === 'livekit';
+  }
+
+  private assertCallsEnabled() {
+    if (!this.callsEnabled) throw new AppError(503, 'CALLS_NOT_CONFIGURED', CALLS_NOT_SET_UP);
   }
 
   private async rowsFor(list: (ChannelWithMembers & { me: ChatMember })[], ctx: RequestContext, userId: string): Promise<ChatChannelRow[]> {
@@ -235,7 +248,7 @@ export class ChatService {
         unread: unread[i]!,
         muted: c.me.muted,
         canPost,
-        postingNote: deactivated ? 'User deactivated' : canPost ? null : c.postingPolicy === 'ADMINS_ONLY' ? 'Only HR/Admin can post here' : 'This channel is read-only',
+        postingNote: deactivated ? 'User deactivated' : canPost ? null : c.archivedAt ? 'This channel is archived · history is read-only' : c.postingPolicy === 'ADMINS_ONLY' ? 'Only HR/Admin can post here' : 'This channel is read-only',
         memberCount: c.members.length,
         lastMessageAt: c.lastMessageAt?.toISOString() ?? null,
         dmUserId: c.kind === 'DM' ? (others[0]?.userId ?? userId) : null,
@@ -244,7 +257,8 @@ export class ChatService {
         online: dm && others.length === 1 ? online.has(others[0]!.userId) : dm && !others.length ? true : null,
         lastSeq: c.lastMessageSeq,
         lastReadSeq: c.me.lastReadSeq,
-        liveCall: call ? { callId: call.id, kind: call.kind } : null,
+        liveCall: call && this.callsEnabled ? { callId: call.id, kind: call.kind } : null,
+        archived: !!c.archivedAt,
       };
     });
   }
@@ -654,6 +668,7 @@ export class ChatService {
   async startCall(channelId: string, kind: 'AUDIO' | 'VIDEO' | 'SCREEN'): Promise<CallJoin> {
     const { ctx, userId } = this.me();
     await this.assertMember(channelId);
+    this.assertCallsEnabled(); // before anything is saved or anyone is rung
     const row = await this.channelRow(channelId);
     if (!row.canPost) throw forbidden(row.postingNote ?? 'You cannot start a call here');
     const live = await this.prisma.chatCall.findFirst({ where: { channelId, endedAt: null } });
@@ -671,6 +686,7 @@ export class ChatService {
     const call = await this.prisma.chatCall.findFirst({ where: { id: callId } });
     if (!call) throw notFound('Call');
     await this.assertMember(call.channelId);
+    this.assertCallsEnabled();
     if (call.endedAt) throw new AppError(409, 'CALL_ENDED', 'This call has ended');
     const participants = [...new Set([...call.participantIds, userId])];
     const updated = await this.prisma.chatCall.update({ where: { id: callId }, data: { participantIds: participants, maxParticipants: Math.max(call.maxParticipants, participants.length) } });

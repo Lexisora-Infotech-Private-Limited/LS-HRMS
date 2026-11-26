@@ -39,11 +39,15 @@ export const DAY_MS = 86_400_000;
  * If the project budget is larger than the tasks broken down so far, the un-broken-down budget counts
  * as not started (denominator = max(Σ estimates, budget)). With no estimates at all, a count-based
  * fraction with the same weights is used. Rounded half-up to an integer.
+ * A finished project (Completed, or Archived — which is only reachable from Completed) is 100 %:
+ * budget that was never broken into tasks is no longer "not started" once the project is closed (M14).
  */
 export function computeProgress(
   tasks: { status: TaskStatus; estimatedMinutes: number | null; isStanding?: boolean }[],
   budgetMinutes = 0,
+  projectStatus?: ProjectStatus,
 ): number {
+  if (projectStatus === 'COMPLETED' || projectStatus === 'ARCHIVED') return 100;
   const live = tasks.filter((t) => t.status !== 'CANCELLED' && !t.isStanding);
   if (!live.length) return 0;
   const sumEst = live.reduce((s, t) => s + (t.estimatedMinutes ?? 0), 0);

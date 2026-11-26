@@ -156,10 +156,12 @@ export function NoticeFormModal({ notice, onClose, onSaved }: { notice?: NoticeD
                   <div key={g}>
                     <div className="eyebrow">{g}</div>
                     {list.map((t) => (
-                      <label key={t.key} className="wp-team-opt">
+                      // A <div>, not a <label>: a label would pass the name's click on to the tick box too,
+                      // so one click toggled twice and nothing changed (M7).
+                      <div key={t.key} className="wp-team-opt">
                         <Check checked={teams.includes(t.key)} onChange={(on) => toggleTeam(t.key, on)} label={t.label} />
                         <span onClick={() => toggleTeam(t.key, !teams.includes(t.key))}>{t.label}</span>
-                      </label>
+                      </div>
                     ))}
                     {g === 'Departments' &&
                       extra.filter((a) => a.type === 'DEPARTMENT').map((a) => (
