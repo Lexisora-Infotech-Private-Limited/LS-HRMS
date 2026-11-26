@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { CLIENT_VAULT_PERMS } from '@lexisora/shared';
 import { PrismaService } from '../../core/prisma/prisma.service';
 import { LookupsService } from '../../core/lookups/lookups';
 import { SearchService } from '../../core/registry/registries';
@@ -100,7 +101,7 @@ export class WorkRegistry implements OnModuleInit {
           } else if (await this.access.canSeeProject(v, d.projectId)) return true;
         } else if (d.clientId) {
           const ctx = requireContext();
-          if (hasPerm(ctx, 'clients.manage') || hasPerm(ctx, 'archive.view')) return true;
+          if (CLIENT_VAULT_PERMS.some((perm) => hasPerm(ctx, perm))) return true;
         }
       }
       return false;

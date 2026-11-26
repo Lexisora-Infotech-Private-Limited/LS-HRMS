@@ -245,6 +245,12 @@ export type ProjectRow = {
  * Everyone else sees hours only; the API leaves the ₹ fields null for them.
  */
 export const BILLING_VIEW_PERMS = ['clients.manage', 'projects.manage'] as const;
+/**
+ * Who may open client-vault documents (contracts, NDAs) — Lead, Manager, Admin by default.
+ * The file download check and the project page's Documents list both use it, so nobody sees a
+ * Download button that answers 403.
+ */
+export const CLIENT_VAULT_PERMS = ['clients.manage', 'archive.view'] as const;
 
 export type ProjectKpis = {
   month: string;

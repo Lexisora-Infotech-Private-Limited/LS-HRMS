@@ -127,7 +127,7 @@ export class WorkMetricsService {
         await this.notifyOverEstimate(project, t, m).catch((e) => this.log.warn(`over-estimate notice ${t.key}: ${(e as Error).message}`));
       }
     }
-    const progressPct = project.isSystem ? 0 : computeProgress(tasks.map((t) => ({ status: t.status as TaskStatus, estimatedMinutes: t.estimatedMinutes, isStanding: t.isStanding })), project.estimatedMinutes);
+    const progressPct = project.isSystem ? 0 : computeProgress(tasks.map((t) => ({ status: t.status as TaskStatus, estimatedMinutes: t.estimatedMinutes, isStanding: t.isStanding })), project.estimatedMinutes, project.status as ProjectStatus);
     const { health, reason } = project.isSystem
       ? { health: 'NA' as const, reason: null }
       : computeHealth({ status: project.status as ProjectStatus, estimatedMinutes: project.estimatedMinutes, loggedMinutes: logged, progressPct, startDate: project.startDate, deadline: project.deadline }, todayDate());
@@ -172,9 +172,12 @@ export class WorkMetricsService {
     await this.recomputeProject(projectId);
   }
 
-  /** All live projects of the current tenant. */
+  /** All live projects of the current tenant, plus archived ones still holding an old (< 100 %) progress figure. */
   async recomputeTenant(): Promise<void> {
-    const projects = await this.prisma.project.findMany({ where: { status: { in: ['PLANNING', 'ACTIVE', 'ON_HOLD', 'COMPLETED'] } }, select: { id: true } });
+    const projects = await this.prisma.project.findMany({
+      where: { OR: [{ status: { in: ['PLANNING', 'ACTIVE', 'ON_HOLD', 'COMPLETED'] } }, { status: 'ARCHIVED', progressPct: { lt: 100 } }] },
+      select: { id: true },
+    });
     for (const p of projects) await this.recomputeProject(p.id);
     this.lastTenantRun.set(currentTenantId(), Date.now());
   }

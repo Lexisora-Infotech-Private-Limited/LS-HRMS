@@ -10,7 +10,7 @@ import type {
   ProjectStatusKey,
   ProjectHealthKey,
 } from '@lexisora/shared';
-import { BILLING_VIEW_PERMS, istDateKey, OPEN_TASK_STATUSES, PROJECT_CANCEL_REASON_MIN, PROJECT_STATUS_LABELS } from '@lexisora/shared';
+import { BILLING_VIEW_PERMS, CLIENT_VAULT_PERMS, istDateKey, OPEN_TASK_STATUSES, PROJECT_CANCEL_REASON_MIN, PROJECT_STATUS_LABELS } from '@lexisora/shared';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { AuditService } from '../../../core/audit/audit.service';
 import { NotificationsService } from '../../../core/notifications/notifications.service';
@@ -199,7 +199,9 @@ export class ProjectsService {
     const ctx = requireContext();
     const canManage = this.access.canManageProject(v, p);
     const seeMoney = this.canSeeBilling();
-    const clientDocs = p.clientId ? await this.prisma.projectDocument.findMany({ where: { clientId: p.clientId, projectId: null }, orderBy: { createdAt: 'desc' } }) : [];
+    // Client-vault files (contracts, NDAs) only for people who can open them (M13: no Download → 403).
+    const seeClientVault = CLIENT_VAULT_PERMS.some((perm) => hasPerm(ctx, perm));
+    const clientDocs = p.clientId && seeClientVault ? await this.prisma.projectDocument.findMany({ where: { clientId: p.clientId, projectId: null }, orderBy: { createdAt: 'desc' } }) : [];
     return {
       ...this.row(p, names),
       description: p.description,

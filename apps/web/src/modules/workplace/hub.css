@@ -5,6 +5,9 @@
 .wp-chat-rail { border-right: 1px solid var(--color-divider); padding: 12px; display: flex; flex-direction: column; gap: 2px; overflow: auto; }
 .wp-rail-head { display: flex; justify-content: space-between; align-items: center; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--color-neutral-600); padding: 4px 6px; }
 .wp-rail-head .btn { padding: 0 6px; min-height: 0; line-height: 1.4; font-size: 15px; }
+.wp-rail-toggle { width: 100%; margin-top: 10px; border: 0; background: transparent; font-family: inherit; cursor: pointer; }
+.wp-rail-toggle:hover { color: var(--color-text); }
+.wp-archived-banner { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 6px 16px; background: var(--color-neutral-100, var(--color-divider)); font-size: 13px; color: var(--color-neutral-700); }
 .wp-rail-item { font: inherit; font-size: 13px; text-align: left; border: 0; border-radius: 4px; padding: 5px 8px; cursor: pointer; background: transparent; color: inherit; display: flex; justify-content: space-between; gap: 6px; align-items: center; }
 .wp-rail-item:hover { background: color-mix(in srgb, var(--color-text) 5%, transparent); }
 .wp-rail-item.is-active { background: var(--color-accent-100); }

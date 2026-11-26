@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import { CHAT_EDIT_WINDOW_MIN, type CallJoin, type ChatChannelRow, type ChatChannelsResponse, type ChatMessageRow, type ChatPerson } from '@lexisora/shared';
+import { CALLS_NOT_SET_UP, CHAT_EDIT_WINDOW_MIN, type CallJoin, type ChatChannelRow, type ChatChannelsResponse, type ChatMessageRow, type ChatPerson } from '@lexisora/shared';
 import { fileUrl, uploadFile } from '@/lib/api';
 import { useMe } from '@/lib/auth';
 import { useAction } from '@/lib/query';
@@ -45,8 +45,9 @@ export default function ChatPage() {
   const [newDm, setNewDm] = useState(false);
   const [call, setCall] = useState<CallJoin | null>(null);
   const [ring, setRing] = useState<{ callId: string; channelId: string; channelLabel: string; kind: string; from: string } | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
   const myUserId = list.data?.userId ?? '';
-  const all = useMemo(() => [...(list.data?.channels ?? []), ...(list.data?.dms ?? [])], [list.data]);
+  const all = useMemo(() => [...(list.data?.channels ?? []), ...(list.data?.dms ?? []), ...(list.data?.archived ?? [])], [list.data]);
   const activeId = params.get('c') ?? list.data?.channels[0]?.id ?? null;
   const active = all.find((c) => c.id === activeId) ?? null;
   const activeRef = useRef<string | null>(activeId);
@@ -59,7 +60,7 @@ export default function ChatPage() {
   }), [setParams]);
 
   const patchChannel = useCallback((id: string, fn: (c: ChatChannelRow) => ChatChannelRow) => {
-    qc.setQueryData<ChatChannelsResponse>(hubKeys.channels, (d) => (d ? { ...d, channels: d.channels.map((c) => (c.id === id ? fn(c) : c)), dms: d.dms.map((c) => (c.id === id ? fn(c) : c)) } : d));
+    qc.setQueryData<ChatChannelsResponse>(hubKeys.channels, (d) => (d ? { ...d, channels: d.channels.map((c) => (c.id === id ? fn(c) : c)), dms: d.dms.map((c) => (c.id === id ? fn(c) : c)), archived: d.archived.map((c) => (c.id === id ? fn(c) : c)) } : d));
   }, [qc]);
 
   // Unread badges and channel list updates for the channels not on screen.
@@ -73,6 +74,8 @@ export default function ChatPage() {
       }),
       onRealtime<{ channelId: string; seq: number }>('chat:read', (p) => patchChannel(p.channelId, (c) => ({ ...c, lastReadSeq: Math.max(c.lastReadSeq, p.seq), unread: 0 }))),
       onRealtime('chat:channels', () => void qc.invalidateQueries({ queryKey: hubKeys.channels })),
+      // Back online after a drop: unread counts and the channel list may have moved on meanwhile.
+      onRealtime('connect', () => void qc.invalidateQueries({ queryKey: hubKeys.channels })),
       onRealtime<{ callId: string; channelId: string; channelLabel: string; kind: string; from: string; fromUserId: string }>('call:ring', (p) => {
         patchChannel(p.channelId, (c) => ({ ...c, liveCall: { callId: p.callId, kind: p.kind } }));
         if (p.fromUserId !== myUserId) {
@@ -89,11 +92,11 @@ export default function ChatPage() {
   }, [qc, patchChannel, myUserId]);
 
   async function startCall(kind: 'AUDIO' | 'VIDEO' | 'SCREEN') {
-    if (!active) return;
+    if (!active || !list.data?.callsEnabled) return;
     try {
       const c = active.liveCall ? await hubApi.joinCall(active.liveCall.callId) : await hubApi.startCall(active.id, kind);
       setCall(c);
-      toast(c.provider === 'livekit' ? (active.liveCall ? 'Joined the call' : 'Starting call') : 'Starting call · Calls need LiveKit configured');
+      toast(active.liveCall ? 'Joined the call' : 'Starting call');
     } catch (e) {
       toastError(e);
     }
@@ -127,9 +130,18 @@ export default function ChatPage() {
         </div>
         {data.dms.map((c) => <RailItem key={c.id} c={c} active={c.id === activeId} onPick={() => open(c.id)} />)}
         <button className="wp-rail-item wp-rail-new" onClick={() => setNewDm(true)}>+ New message</button>
+        {data.archived.length > 0 && (
+          <>
+            <button className="wp-rail-head wp-rail-toggle" aria-expanded={showArchived || data.archived.some((c) => c.id === activeId)} onClick={() => setShowArchived((v) => !v)}>
+              <span>Archived · {data.archived.length}</span>
+              <span aria-hidden>{showArchived ? '▾' : '▸'}</span>
+            </button>
+            {(showArchived || data.archived.some((c) => c.id === activeId)) && data.archived.map((c) => <RailItem key={c.id} c={c} active={c.id === activeId} onPick={() => open(c.id)} />)}
+          </>
+        )}
       </aside>
       {active ? (
-        <ChannelPane key={active.id} channel={active} myUserId={myUserId} onStartCall={startCall} onLeft={() => setParams({})} onOpenChannel={open} channels={data.channels} />
+        <ChannelPane key={active.id} channel={active} myUserId={myUserId} callsEnabled={data.callsEnabled} onStartCall={startCall} onLeft={() => setParams({})} onOpenChannel={open} channels={data.channels} />
       ) : (
         <div className="wp-chat-empty"><Empty>Pick a channel or start a conversation.</Empty></div>
       )}
@@ -205,7 +217,7 @@ function renderBody(text: string, onChannel: (name: string) => void): ReactNode[
 
 type PageState = { items: ChatMessageRow[]; hasMore: boolean };
 
-function ChannelPane({ channel, myUserId, onStartCall, onLeft, onOpenChannel, channels }: { channel: ChatChannelRow; myUserId: string; onStartCall: (k: 'AUDIO' | 'VIDEO' | 'SCREEN') => void; onLeft: () => void; onOpenChannel: (id: string) => void; channels: ChatChannelRow[] }) {
+function ChannelPane({ channel, myUserId, callsEnabled, onStartCall, onLeft, onOpenChannel, channels }: { channel: ChatChannelRow; myUserId: string; callsEnabled: boolean; onStartCall: (k: 'AUDIO' | 'VIDEO' | 'SCREEN') => void; onLeft: () => void; onOpenChannel: (id: string) => void; channels: ChatChannelRow[] }) {
   const qc = useQueryClient();
   const me = useMe();
   const { toast, toastError } = useToast();
@@ -221,7 +233,7 @@ function ChannelPane({ channel, myUserId, onStartCall, onLeft, onOpenChannel, ch
   const [typing, setTyping] = useState<Record<string, { name: string; at: number }>>({});
   const [menu, setMenu] = useState(false);
   const [panel, setPanel] = useState<'members' | 'search' | null>(null);
-  const [confirm, setConfirm] = useState<{ kind: 'leave' | 'archive' | 'delete'; id?: string } | null>(null);
+  const [confirm, setConfirm] = useState<{ kind: 'leave' | 'archive' | 'unarchive' | 'delete'; id?: string } | null>(null);
   const [mentionQ, setMentionQ] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -238,7 +250,8 @@ function ChannelPane({ channel, myUserId, onStartCall, onLeft, onOpenChannel, ch
     const s = getSocket();
     if (s?.connected) emitRealtime('chat:read', { channelId: channel.id, seq });
     else void hubApi.read(channel.id, seq).catch(() => undefined);
-    qc.setQueryData<ChatChannelsResponse>(hubKeys.channels, (d) => (d ? { ...d, channels: d.channels.map((c) => (c.id === channel.id ? { ...c, unread: 0, lastReadSeq: seq } : c)), dms: d.dms.map((c) => (c.id === channel.id ? { ...c, unread: 0, lastReadSeq: seq } : c)) } : d));
+    const clear = (c: ChatChannelRow) => (c.id === channel.id ? { ...c, unread: 0, lastReadSeq: seq } : c);
+    qc.setQueryData<ChatChannelsResponse>(hubKeys.channels, (d) => (d ? { ...d, channels: d.channels.map(clear), dms: d.dms.map(clear), archived: d.archived.map(clear) } : d));
   }, [channel.id, qc]);
 
   // Initial page + join the socket room.
@@ -256,6 +269,34 @@ function ChannelPane({ channel, myUserId, onStartCall, onLeft, onOpenChannel, ch
     return () => {
       alive = false;
     };
+  }, [channel.id, markRead]);
+
+  // Back online after a drop (Wi-Fi blip, laptop sleep): fetch what was posted meanwhile (M8).
+  // The server puts the socket back in its channel rooms on every connect; only the missed messages need fetching.
+  const pageRef = useRef(page);
+  pageRef.current = page;
+  useEffect(() => {
+    return onRealtime('connect', () => {
+      const p = pageRef.current;
+      if (!p) return; // first load still running; it brings everything
+      const lastSeq = p.items.length ? p.items[p.items.length - 1]!.seq : 0;
+      const LIMIT = 100;
+      void (async () => {
+        try {
+          const missed = await hubApi.messages(channel.id, { afterSeq: lastSeq, limit: LIMIT });
+          if (missed.items.length >= LIMIT) {
+            // A long time away: start again from the latest page instead of stitching a huge gap.
+            const fresh = await hubApi.messages(channel.id, { limit: 50 });
+            setPage({ items: fresh.items, hasMore: fresh.hasMore });
+          } else if (missed.items.length) {
+            setPage((cur) => (cur ? { ...cur, items: [...cur.items, ...missed.items.filter((m) => !cur.items.some((x) => x.id === m.id))] } : cur));
+          }
+          if (missed.items.length && document.visibilityState === 'visible') markRead(missed.lastSeq);
+        } catch {
+          /* still offline: the next reconnect tries again */
+        }
+      })();
+    });
   }, [channel.id, markRead]);
 
   // Live updates for this channel.
@@ -402,9 +443,12 @@ function ChannelPane({ channel, myUserId, onStartCall, onLeft, onOpenChannel, ch
         onLeft();
       } else if (confirm.kind === 'archive') {
         await hubApi.archiveChannel(channel.id, true);
-        toast(`${channel.label} archived`);
+        toast(`${channel.label} archived · find it under Archived`);
         await qc.invalidateQueries({ queryKey: hubKeys.channels });
-        onLeft();
+      } else if (confirm.kind === 'unarchive') {
+        await hubApi.archiveChannel(channel.id, false);
+        toast(`${channel.label} is back · members can post again`);
+        await qc.invalidateQueries({ queryKey: hubKeys.channels });
       } else if (confirm.id) {
         await hubApi.deleteMessage(confirm.id);
         setPage((p) => (p ? { ...p, items: p.items.map((x) => (x.id === confirm.id ? { ...x, deleted: true, body: null, attachments: [] } : x)) } : p));
@@ -436,9 +480,17 @@ function ChannelPane({ channel, myUserId, onStartCall, onLeft, onOpenChannel, ch
           <div className="wp-chat-title">{channel.label}</div>
           {meta && <div className="wp-chat-meta">{meta}</div>}
         </div>
-        <button className="btn btn-secondary" disabled={!channel.canPost} title={channel.canPost ? undefined : (channel.postingNote ?? undefined)} onClick={() => onStartCall('AUDIO')}>Audio</button>
-        <button className="btn btn-secondary" disabled={!channel.canPost} title={channel.canPost ? undefined : (channel.postingNote ?? undefined)} onClick={() => onStartCall('VIDEO')}>Video</button>
-        <button className="btn btn-secondary" disabled={!channel.canPost} title={channel.canPost ? undefined : (channel.postingNote ?? undefined)} onClick={() => onStartCall('SCREEN')}>Share screen</button>
+        {(['AUDIO', 'VIDEO', 'SCREEN'] as const).map((k) => (
+          <button
+            key={k}
+            className="btn btn-secondary"
+            disabled={!channel.canPost || !callsEnabled}
+            title={!callsEnabled ? CALLS_NOT_SET_UP : channel.canPost ? undefined : (channel.postingNote ?? undefined)}
+            onClick={() => onStartCall(k)}
+          >
+            {k === 'AUDIO' ? 'Audio' : k === 'VIDEO' ? 'Video' : 'Share screen'}
+          </button>
+        ))}
         <div className="wp-menu-anchor">
           <button className="btn btn-ghost" aria-haspopup="menu" aria-expanded={menu} aria-label="More" onClick={() => setMenu((v) => !v)}>⋯</button>
           {menu && (
@@ -447,11 +499,18 @@ function ChannelPane({ channel, myUserId, onStartCall, onLeft, onOpenChannel, ch
               <button role="menuitem" onClick={() => { setPanel('search'); setMenu(false); }}>Search</button>
               <button role="menuitem" onClick={() => { mute.mutate(undefined); setMenu(false); }}>{channel.muted ? 'Unmute' : 'Mute'}</button>
               {!dm && !channel.managed && <button role="menuitem" onClick={() => { setConfirm({ kind: 'leave' }); setMenu(false); }}>Leave</button>}
-              {!dm && channel.canManage && <button role="menuitem" onClick={() => { setConfirm({ kind: 'archive' }); setMenu(false); }}>Archive</button>}
+              {!dm && channel.canManage && !channel.archived && <button role="menuitem" onClick={() => { setConfirm({ kind: 'archive' }); setMenu(false); }}>Archive</button>}
+              {!dm && channel.canManage && channel.archived && <button role="menuitem" onClick={() => { setConfirm({ kind: 'unarchive' }); setMenu(false); }}>Unarchive</button>}
             </div>
           )}
         </div>
       </header>
+      {channel.archived && (
+        <div className="wp-archived-banner" role="status">
+          <span>This channel is archived. You can read the history; nobody can post.</span>
+          {channel.canManage && <button className="btn btn-secondary btn-sm" onClick={() => setConfirm({ kind: 'unarchive' })}>Unarchive</button>}
+        </div>
+      )}
       {channel.liveCall && (
         <div className="wp-live-banner">
           <span>A {channel.liveCall.kind === 'AUDIO' ? 'call' : channel.liveCall.kind === 'SCREEN' ? 'screen share' : 'video call'} is in progress</span>
@@ -563,10 +622,18 @@ function ChannelPane({ channel, myUserId, onStartCall, onLeft, onOpenChannel, ch
       {panel === 'search' && <SearchModal channel={channel} onClose={() => setPanel(null)} onOpen={(id) => { setPanel(null); onOpenChannel(id); }} />}
       {confirm && (
         <ConfirmDialog
-          title={confirm.kind === 'leave' ? `Leave ${channel.label}?` : confirm.kind === 'archive' ? `Archive ${channel.label}?` : 'Delete this message?'}
-          body={confirm.kind === 'leave' ? 'You can join public channels again from Browse.' : confirm.kind === 'archive' ? 'Members keep the history; nobody can post until it is unarchived.' : 'Everyone in the channel will see “Message deleted”.'}
-          confirmLabel={confirm.kind === 'leave' ? 'Leave' : confirm.kind === 'archive' ? 'Archive' : 'Delete'}
-          danger
+          title={confirm.kind === 'leave' ? `Leave ${channel.label}?` : confirm.kind === 'archive' ? `Archive ${channel.label}?` : confirm.kind === 'unarchive' ? `Unarchive ${channel.label}?` : 'Delete this message?'}
+          body={
+            confirm.kind === 'leave'
+              ? 'You can join public channels again from Browse.'
+              : confirm.kind === 'archive'
+                ? 'Members keep the history under “Archived” in the channel list; nobody can post until it is unarchived.'
+                : confirm.kind === 'unarchive'
+                  ? 'The channel goes back to the channel list and members can post again.'
+                  : 'Everyone in the channel will see “Message deleted”.'
+          }
+          confirmLabel={confirm.kind === 'leave' ? 'Leave' : confirm.kind === 'archive' ? 'Archive' : confirm.kind === 'unarchive' ? 'Unarchive' : 'Delete'}
+          danger={confirm.kind !== 'unarchive'}
           onConfirm={() => void confirmAction()}
           onClose={() => setConfirm(null)}
         />

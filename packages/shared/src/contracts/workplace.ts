@@ -374,6 +374,8 @@ export type ChatChannelRow = {
   lastSeq: number;
   lastReadSeq: number;
   liveCall: { callId: string; kind: string } | null;
+  /** Archived channel: history stays readable, nobody can post; channel managers can unarchive. */
+  archived: boolean;
 };
 export type ChatAttachment = { fileId: string; name: string; mime: string; size: number };
 export type ChatMessageRow = {
@@ -398,7 +400,16 @@ export type ChatMessageRow = {
 };
 export type CallJoin = { callId: string; roomName: string; kind: string; provider: 'livekit' | 'local'; url: string | null; token: string | null; recording: boolean; notice: string | null; channelId: string; channelLabel: string; startedAt: string; participants: { userId: string; name: string; initials: string }[]; canRecord: boolean };
 export type ChatPerson = { userId: string; employeeId: string | null; name: string; initials: string; title: string | null; online: boolean };
-export type ChatChannelsResponse = { channels: ChatChannelRow[]; dms: ChatChannelRow[]; canCreate: boolean; userId: string };
+export type ChatChannelsResponse = {
+  channels: ChatChannelRow[];
+  dms: ChatChannelRow[];
+  /** Archived channels I'm a member of (read-only history). */
+  archived: ChatChannelRow[];
+  canCreate: boolean;
+  userId: string;
+  /** False until LiveKit is configured: call buttons are off and nobody is rung. */
+  callsEnabled: boolean;
+};
 export type ChatBrowseRow = { id: string; name: string; label: string; topic: string | null; memberCount: number; joined: boolean; kind: string };
 export type ChatMessagesPage = { items: ChatMessageRow[]; hasMore: boolean; lastReadSeq: number; lastSeq: number };
 export type ChatMemberRow = { userId: string; name: string; initials: string; title: string | null; role: string; managed: boolean; online: boolean };
@@ -410,6 +421,7 @@ export const chatSearchQuery = z.object({ q: z.string().trim().min(2, 'Type at l
 export const callRecordingSchema = z.object({ on: z.boolean() });
 export const CHAT_EDIT_WINDOW_MIN = 15;
 export const CALLS_NEED_LIVEKIT = 'Calls need LiveKit configured';
+export const CALLS_NOT_SET_UP = 'Calls are not set up yet. Ask your admin to configure LiveKit.';
 
 // ── Helpdesk ───────────────────────────────────────────────────────────────
 export const HELPDESK_PRIORITIES = ['HIGH', 'MEDIUM', 'LOW'] as const;

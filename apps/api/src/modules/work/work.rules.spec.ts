@@ -358,3 +358,24 @@ describe('canCancelTask (M17: the Cancel button shows only when the click works)
     expect(canCancelTask({ ...base, canManage: true, status: 'CANCELLED' })).toBe(false);
   });
 });
+
+describe('computeProgress for finished projects (M14)', () => {
+  // Nimbus: 160h budget, only 64h broken into tasks, 3/3 done.
+  const nimbus = [
+    { status: 'DONE' as TaskStatus, estimatedMinutes: H(24) },
+    { status: 'DONE' as TaskStatus, estimatedMinutes: H(24) },
+    { status: 'DONE' as TaskStatus, estimatedMinutes: H(16) },
+  ];
+  it('a Completed project is 100 %, even when its tasks cover only part of the budget', () => {
+    expect(computeProgress(nimbus, H(160))).toBe(40); // still active: un-broken-down budget counts as not started
+    expect(computeProgress(nimbus, H(160), 'COMPLETED')).toBe(100);
+  });
+  it('Archived (reached only from Completed) is 100 %, and so is a Completed project with no tasks', () => {
+    expect(computeProgress(nimbus, H(160), 'ARCHIVED')).toBe(100);
+    expect(computeProgress([], 0, 'COMPLETED')).toBe(100);
+  });
+  it('reopening (back to Active) and Cancelled keep the real figure', () => {
+    expect(computeProgress(nimbus, H(160), 'ACTIVE')).toBe(40);
+    expect(computeProgress(nimbus, H(160), 'CANCELLED')).toBe(40);
+  });
+});
