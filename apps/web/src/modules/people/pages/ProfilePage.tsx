@@ -65,7 +65,11 @@ export default function ProfilePage({ self }: { self?: boolean }) {
           <div className="pp-tags">
             <Tag tone="accent">{WORK_MODE_SHORT[p.workMode]}</Tag>
             {joined && <Tag tone="neutral">{p.status === 'ONBOARDING' ? `Joins ${joined}` : `Joined ${joined}`}</Tag>}
-            {p.status !== 'ACTIVE' && <Tag tone={statusTone(p.status)}>{p.statusLabel}</Tag>}
+            {p.status !== 'ACTIVE' && (
+              <Tag tone={p.exitCase?.overdue ? 'danger' : statusTone(p.status)}>
+                {p.exitCase?.overdue ? `${p.statusLabel} · overdue` : p.statusLabel}
+              </Tag>
+            )}
             {p.badges.map((b) => <Tag key={b} tone="outline">{b}</Tag>)}
             {p.moreBadges > 0 && <Tag tone="outline">+{p.moreBadges} more</Tag>}
           </div>
@@ -143,6 +147,7 @@ function ExitPanel({ p, ec }: { p: ProfileDto; ec: ExitCaseDto }) {
             Resigned {formatDate(ec.resignationDate)} · last working day <b>{formatDate(ec.lastWorkingDay)}</b>
             {ec.noticeShortfallDays > 0 && <span className="faint"> · notice shortfall {ec.noticeShortfallDays} day{ec.noticeShortfallDays === 1 ? '' : 's'}</span>}
           </div>
+          {ec.overdue && <div style={{ fontSize: 12.5, color: 'var(--color-danger)' }}>The last working day has passed — complete the exit below.</div>}
           {ec.reason && <div className="faint" style={{ fontSize: 12.5 }}>{ec.reason}</div>}
         </div>
         {p.canLifecycle && !closed && (

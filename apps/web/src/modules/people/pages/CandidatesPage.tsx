@@ -20,7 +20,7 @@ import {
 import { fileUrl } from '@/lib/api';
 import { useAction } from '@/lib/query';
 import { FormModal, type FieldDef } from '@/components/form';
-import { DataTable, type Column } from '@/components/table';
+import { DataTable, Pager, type Column } from '@/components/table';
 import { ConfirmDialog, ErrorBlock, Loading, Modal, PageHeader, StatusTag, Tabs, Tag, type Tone } from '@/components/ui';
 import { lookupsFor, peopleApi, peopleKeys, type CandidateTab } from '../api';
 import { HireModal, OfferModal, RejectModal, ScheduleInterviewModal } from '../recruitment';
@@ -36,11 +36,15 @@ export default function CandidatesPage() {
   const [params, setParams] = useSearchParams();
   const [tab, setTab] = useState<CandidateTab>('all');
   const [q, setQ] = useState('');
+  const [page, setPage] = useState(1);
   const [adding, setAdding] = useState(false);
   const [scheduling, setScheduling] = useState(false);
   const jobId = params.get('job') ?? undefined;
   const openId = params.get('candidate');
   const list = useQuery({ queryKey: [...peopleKeys.candidates, tab, q, jobId ?? ''], queryFn: () => peopleApi.candidates({ tab, q: q || undefined, jobId }), placeholderData: (p) => p });
+  const pageSize = 20;
+  useEffect(() => setPage(1), [tab, q, jobId]);
+  const pageItems = list.data?.items.slice((page - 1) * pageSize, page * pageSize);
   const jobs = useQuery({ queryKey: ['lookups', 'people', 'jobs'], queryFn: () => lookupsFor(['jobs']), enabled: !!jobId });
   const c = list.data?.counts;
   const canManage = list.data?.canManage ?? false;
@@ -97,8 +101,9 @@ export default function CandidatesPage() {
       {list.error ? (
         <ErrorBlock error={list.error} retry={() => void list.refetch()} />
       ) : (
-        <DataTable columns={columns} rows={list.data?.items} loading={list.isLoading} rowKey={(r) => r.applicationId} onRowClick={(r) => setOpen(r.candidateId)} empty={q ? `No candidates match “${q}”.` : 'No candidates in this tab.'} />
+        <DataTable columns={columns} rows={pageItems} loading={list.isLoading} rowKey={(r) => r.applicationId} onRowClick={(r) => setOpen(r.candidateId)} empty={q ? `No candidates match “${q}”.` : 'No candidates in this tab.'} />
       )}
+      {list.data && <Pager page={page} pageSize={pageSize} total={list.data.items.length} onPage={setPage} />}
       {adding && <AddCandidateModal onClose={() => setAdding(false)} onAdded={(id) => setOpen(id)} />}
       {scheduling && <ScheduleInterviewModal onClose={() => setScheduling(false)} />}
       {openId && <CandidateDrawer id={openId} onClose={() => setOpen(null)} />}
@@ -220,7 +225,7 @@ function CandidateDrawer({ id, onClose }: { id: string; onClose: () => void }) {
                       {moves.length > 0 && (
                         <select
                           className="input"
-                          style={{ width: 'auto', padding: '4px 8px', fontSize: 12.5 }}
+                          style={{ width: 'auto', padding: '4px 28px 4px 8px', fontSize: 12.5 }}
                           value=""
                           aria-label="Move stage"
                           onChange={(e) => e.target.value && move.mutate({ appId: a.id, to: e.target.value as ApplicationStage })}

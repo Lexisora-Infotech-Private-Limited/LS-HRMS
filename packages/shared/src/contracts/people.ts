@@ -169,6 +169,8 @@ export type ExitCaseDto = {
   items: ExitChecklistItemDto[];
   canComplete: boolean;
   blockers: string[];
+  /** The last working day has passed but the exit still isn't marked complete. */
+  overdue: boolean;
 };
 
 // ── CSV import ─────────────────────────────────────────────────────────────
@@ -239,7 +241,7 @@ export const assetCategorySchema = z.object({ name: z.string().trim().min(2).max
 export const kitItemSchema = z.object({
   name: z.string().trim().min(2).max(60),
   sizes: z.array(z.string().trim().min(1)).default([]),
-  stock: z.record(z.coerce.number().int()).default({}),
+  stock: z.record(z.coerce.number().int().min(0, 'Stock cannot be negative')).default({}),
   lowStockThreshold: z.coerce.number().int().min(0).default(5),
   isActive: z.boolean().default(true),
 });

@@ -217,14 +217,20 @@ export class InterviewsService {
     const startsAt = istDateTime(input.date, input.time);
     if (input.date < todayKey()) throw badRequest('Pick a date from today onwards');
     const panelIds = [...new Set([input.interviewerId, ...input.panelistIds])];
-    const emps = await this.prisma.employee.findMany({ where: { id: { in: panelIds }, status: { not: 'EXITED' } }, select: { id: true } });
+    const emps = await this.prisma.employee.findMany({ where: { id: { in: panelIds }, status: { not: 'EXITED' } }, select: { id: true, fullName: true } });
     if (emps.length !== panelIds.length) throw badRequest('Pick active interviewers', 'INTERVIEWER_INVALID');
-    // Double-booking guard for the lead interviewer.
+    // Double-booking guard for the lead interviewer AND every panelist, not just the lead.
     const end = new Date(startsAt.getTime() + input.durationMin * 60_000);
-    const clash = await this.prisma.interview.findFirst({
-      where: { status: 'SCHEDULED', panelists: { some: { employeeId: input.interviewerId } }, startsAt: { lt: end, gte: new Date(startsAt.getTime() - 8 * 3600_000) } },
+    const clashes = await this.prisma.interview.findMany({
+      where: { status: 'SCHEDULED', panelists: { some: { employeeId: { in: panelIds } } }, startsAt: { lt: end, gte: new Date(startsAt.getTime() - 8 * 3600_000) } },
+      include: { panelists: true },
     });
-    if (clash && new Date(clash.startsAt.getTime() + clash.durationMin * 60_000) > startsAt) throw new AppError(409, 'INTERVIEWER_BUSY', `The interviewer already has an interview at ${fmtWhen(clash.startsAt)}`);
+    for (const c of clashes) {
+      if (new Date(c.startsAt.getTime() + c.durationMin * 60_000) <= startsAt) continue;
+      const busyId = c.panelists.find((p) => panelIds.includes(p.employeeId))?.employeeId;
+      const busyName = emps.find((e) => e.id === busyId)?.fullName ?? 'An interviewer';
+      throw new AppError(409, 'INTERVIEWER_BUSY', `${busyName} already has an interview at ${fmtWhen(c.startsAt)}`);
+    }
     const seq = (await this.prisma.interview.count({ where: { applicationId: app.id } })) + 1;
     const tenantId = requireContext().tenantId;
     const created = await this.prisma.interview.create({

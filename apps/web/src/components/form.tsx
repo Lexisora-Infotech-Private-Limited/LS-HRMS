@@ -7,7 +7,7 @@ export type Option = { value: string; label: string };
 export type FieldDef = {
   name: string;
   label: string;
-  type: 'text' | 'phone' | 'email' | 'number' | 'money' | 'date' | 'time' | 'datetime' | 'select' | 'multiselect' | 'area' | 'file' | 'checkbox' | 'password' | 'color';
+  type: 'text' | 'phone' | 'email' | 'number' | 'money' | 'date' | 'time' | 'datetime' | 'select' | 'multiselect' | 'area' | 'file' | 'checkbox' | 'toggle' | 'password' | 'color';
   /** 2 = full row (wireframe "span 2"). */
   span?: 1 | 2;
   options?: Option[];
@@ -43,7 +43,7 @@ export function cleanPhone(v: string) {
 
 function initialValue(f: FieldDef, init?: FormValues) {
   if (init && init[f.name] !== undefined && init[f.name] !== null) return init[f.name];
-  if (f.type === 'checkbox') return false;
+  if (f.type === 'checkbox' || f.type === 'toggle') return false;
   if (f.type === 'multiselect') return [];
   if (f.type === 'select' && f.required && f.options?.length) return f.options[0]!.value;
   return '';
@@ -149,7 +149,7 @@ export function FormModal({
       >
         {visible.map((f) => (
           <div key={f.name} className={`field${f.span === 2 || f.type === 'area' || f.type === 'file' ? ' span-2' : ''}`}>
-            {f.type !== 'checkbox' && <label htmlFor={`f-${f.name}`}>{f.label}{f.required ? <span className="field-required"> *</span> : null}</label>}
+            {f.type !== 'checkbox' && f.type !== 'toggle' && <label htmlFor={`f-${f.name}`}>{f.label}{f.required ? <span className="field-required"> *</span> : null}</label>}
             <FieldInput f={f.optionsFor ? { ...f, options: f.optionsFor(values) } : f} value={values[f.name]} onChange={(v) => set(f.name, v)} file={files[f.name] ?? null} onFile={(file) => setFiles((s) => ({ ...s, [f.name]: file }))} invalid={!!errors[f.name]} />
             {errors[f.name] ? <div className="field-error">{errors[f.name]}</div> : f.hint ? <div className="field-hint">{f.hint}</div> : null}
           </div>
@@ -183,6 +183,14 @@ export function FieldInput({ f, value, onChange, file, onFile, invalid }: { f: F
         <label className="radio">
           <input type="checkbox" checked={!!value} onChange={(e) => onChange(e.target.checked)} />
           <span className="dot" style={{ borderRadius: 3 }} />
+          {f.label}
+        </label>
+      );
+    case 'toggle':
+      return (
+        <label className="switch">
+          <input type="checkbox" role="switch" checked={!!value} disabled={f.disabled} onChange={(e) => onChange(e.target.checked)} />
+          <span className="switch-track"><span className="switch-thumb" /></span>
           {f.label}
         </label>
       );

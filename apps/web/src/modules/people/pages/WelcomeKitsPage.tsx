@@ -52,12 +52,13 @@ export default function WelcomeKitsPage() {
     ...items.map(
       (it): Column<KitRow> => ({
         key: it.id,
-        header: it.name,
+        header: <span style={{ display: 'block', textAlign: 'center' }}>{it.name}</span>,
+        width: '100px',
         render: (r) => {
           const l = r.lines.find((x) => x.itemId === it.id);
           const size = it.sizes.length ? (l?.size ?? r.tshirtSize) : null;
           return (
-            <span className="row" style={{ gap: 6 }} title={size ? `Size ${size}` : undefined}>
+            <span className="row" style={{ gap: 6, justifyContent: 'center' }} title={size ? `Size ${size}` : undefined}>
               <Check checked={!!l?.issued} label={`${it.name} for ${r.name}`} onChange={(v) => void toggle({ row: r, item: it, issued: v })} />
               {size && <span className="faint" style={{ fontSize: 12 }}>{size}</span>}
             </span>
@@ -170,6 +171,10 @@ function IssueKitModal({ items, onClose }: { items: KitItemDto[]; onClose: () =>
 function StockModal({ onClose }: { onClose: () => void }) {
   const q = useQuery({ queryKey: [...peopleKeys.kits, 'items'], queryFn: () => peopleApi.kitItems() });
   const [editing, setEditing] = useState<KitItemDto | 'new' | null>(null);
+  const toggleActive = useAction(
+    (it: KitItemDto) => peopleApi.saveKitItem(it.id, { name: it.name, sizes: it.sizes, stock: it.stock, lowStockThreshold: it.lowStockThreshold, isActive: !it.isActive }),
+    { success: (_r, it) => (it.isActive ? `${it.name} deactivated` : `${it.name} activated`), invalidate: [peopleKeys.kits, ['lookups']] },
+  );
   return (
     <Modal title="Kit items & stock" wide onClose={onClose} actions={<><button className="btn btn-secondary" onClick={() => setEditing('new')}>Add item</button><button className="btn btn-primary" onClick={onClose}>Done</button></>}>
       {q.isLoading ? (
@@ -189,7 +194,13 @@ function StockModal({ onClose }: { onClose: () => void }) {
                     : <span className={(it.stock._ ?? 0) < it.lowStockThreshold ? 'pp-err' : undefined}>{it.stock._ ?? 0}</span>}
                 </td>
                 <td className="tnum">{it.lowStockThreshold}</td>
-                <td>{it.isActive ? 'Active' : <span className="faint">Inactive</span>}</td>
+                <td>
+                  <label className="switch" style={{ opacity: toggleActive.isPending ? 0.6 : undefined }}>
+                    <input type="checkbox" role="switch" checked={it.isActive} disabled={toggleActive.isPending} onChange={() => toggleActive.mutate(it)} />
+                    <span className="switch-track"><span className="switch-thumb" /></span>
+                    {it.isActive ? 'Active' : <span className="faint">Inactive</span>}
+                  </label>
+                </td>
                 <td><button className="btn btn-ghost btn-sm" onClick={() => setEditing(it)}>Edit</button></td>
               </tr>
             ))}
@@ -208,9 +219,9 @@ function KitItemForm({ item, onClose }: { item: KitItemDto | null; onClose: () =
   const fields: FieldDef[] = [
     { name: 'name', label: 'Item', type: 'text', span: 2, required: true },
     ...(item ? [] : [{ name: 'sized', label: 'Comes in T-shirt sizes (S–XXL)', type: 'checkbox', span: 2 } as FieldDef]),
-    ...(sized ? sizes.map((s): FieldDef => ({ name: `s_${s}`, label: `Stock · ${s}`, type: 'number' })) : [{ name: 'qty', label: 'Stock', type: 'number', showIf: (v: Record<string, unknown>) => !v.sized } as FieldDef]),
-    { name: 'lowStockThreshold', label: 'Alert when stock falls below', type: 'number' },
-    { name: 'isActive', label: 'Active (shown as a column)', type: 'checkbox' },
+    ...(sized ? sizes.map((s): FieldDef => ({ name: `s_${s}`, label: `Stock · ${s}`, type: 'number', min: 0 })) : [{ name: 'qty', label: 'Stock', type: 'number', min: 0, showIf: (v: Record<string, unknown>) => !v.sized } as FieldDef]),
+    { name: 'lowStockThreshold', label: 'Alert when stock falls below', type: 'number', min: 0 },
+    { name: 'isActive', label: 'Active (shown as a column)', type: 'toggle' },
   ];
   const initial: Record<string, unknown> = { name: item?.name ?? '', lowStockThreshold: item?.lowStockThreshold ?? 5, isActive: item?.isActive ?? true, qty: item?.stock._ ?? 0 };
   for (const s of sizes) initial[`s_${s}`] = item?.stock[s] ?? 0;
@@ -223,8 +234,9 @@ function KitItemForm({ item, onClose }: { item: KitItemDto | null; onClose: () =
       onSubmit={(v) => {
         const isSized = item ? sized : !!v.sized;
         const sz = item ? sizes : isSized ? [...TSHIRT_SIZES] : [];
-        const stock: Record<string, number> = isSized ? Object.fromEntries(sz.map((s) => [s, Number(v[`s_${s}`] ?? 0) || 0])) : { _: Number(v.qty ?? 0) || 0 };
-        return save.mutateAsync({ name: String(v.name), sizes: sz, stock, lowStockThreshold: Number(v.lowStockThreshold ?? 5) || 0, isActive: !!v.isActive });
+        const nonNeg = (n: unknown) => Math.max(0, Number(n ?? 0) || 0);
+        const stock: Record<string, number> = isSized ? Object.fromEntries(sz.map((s) => [s, nonNeg(v[`s_${s}`])])) : { _: nonNeg(v.qty) };
+        return save.mutateAsync({ name: String(v.name), sizes: sz, stock, lowStockThreshold: nonNeg(v.lowStockThreshold), isActive: !!v.isActive });
       }}
     />
   );

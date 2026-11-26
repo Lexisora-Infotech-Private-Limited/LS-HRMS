@@ -57,7 +57,7 @@ function Body({ t, onClose }: { t: TaskDetail; onClose: () => void }) {
         {t.isStanding && <Tag>Standing task</Tag>}
         {/* Same steps as the board's ← / → links: one column at a time, and only the QA team passes QA. */}
         {!t.isStanding && t.allowedMoves.length > 0 && (
-          <select className="input" style={{ width: 'auto', padding: '4px 8px' }} value="" onChange={(e) => e.target.value && move.mutate(e.target.value as TaskStatusKey)} aria-label="Move to">
+          <select className="input" style={{ width: 'auto', padding: '4px 28px 4px 8px' }} value="" onChange={(e) => e.target.value && move.mutate(e.target.value as TaskStatusKey)} aria-label="Move to">
             <option value="">Move to…</option>
             {t.allowedMoves.map((s) => <option key={s} value={s}>{TASK_STATUS_LABELS[s]}</option>)}
           </select>

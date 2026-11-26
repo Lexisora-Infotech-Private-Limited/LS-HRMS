@@ -472,6 +472,7 @@ export class EmployeesService {
       })),
       canComplete: c.status === 'OPEN' && blockers.length === 0,
       blockers,
+      overdue: c.status === 'OPEN' && dbDateKey(c.lastWorkingDay)! < todayKey(),
     };
   }
 
@@ -544,7 +545,11 @@ export class EmployeesService {
     return { empCode: newCode, previousCode: e.empCode };
   }
 
-  /** Daily 00:05 IST: joiners become ACTIVE on their joining date; HR is told if onboarding is incomplete. */
+  /**
+   * Daily 00:05 IST: joiners become ACTIVE on their joining date; HR is told if onboarding is incomplete.
+   * Also nudges HR once a day about exits whose last working day has passed but are still open —
+   * the status stays NOTICE_PERIOD until HR completes the checklist, so this is the only signal HR gets.
+   */
   async dailyLifecycle() {
     const today = toDbDate(todayKey());
     const due = await this.prisma.employee.findMany({ where: { status: 'ONBOARDING', joiningDate: { lte: today } } });
@@ -554,6 +559,23 @@ export class EmployeesService {
       const ob = await this.prisma.onboarding.findUnique({ where: { employeeId: e.id } });
       if (ob && ob.status !== 'COMPLETED' && ob.status !== 'SUBMITTED') {
         await this.notify.notify({ userIds: hr, type: 'people.onboardingIncomplete', title: `Onboarding incomplete for ${e.fullName}`, body: `${e.empCode} joined today with onboarding still open.`, link: `/onboarding?employee=${e.id}`, from: 'System', email: true });
+      }
+    }
+    const overdueExits = await this.prisma.exitCase.findMany({ where: { status: 'OPEN', lastWorkingDay: { lt: today } } });
+    if (overdueExits.length) {
+      const emps = await this.prisma.employee.findMany({ where: { id: { in: overdueExits.map((c) => c.employeeId) } }, select: { id: true, fullName: true, empCode: true } });
+      const byId = new Map(emps.map((e) => [e.id, e]));
+      for (const c of overdueExits) {
+        const e = byId.get(c.employeeId);
+        if (!e) continue;
+        await this.notify.notify({
+          userIds: hr,
+          type: 'people.exitOverdue',
+          title: `${e.fullName}'s exit is overdue`,
+          body: `${e.empCode}'s last working day (${fmt(dbDateKey(c.lastWorkingDay)!)}) has passed — complete the exit checklist.`,
+          link: `/employees/${e.id}`,
+          from: 'System',
+        });
       }
     }
     return due.length;

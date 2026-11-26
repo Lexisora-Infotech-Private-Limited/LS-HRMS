@@ -204,8 +204,14 @@ export class AssetsService {
     if (a.status === 'ASSIGNED') throw conflict(`${a.name} is already assigned`, 'ALREADY_ASSIGNED');
     await this.move(a, 'ASSIGNED');
     const e = await this.assertAssignee(employeeId, assignedOn, dbDateKey(a.purchaseDate));
-    const asg = await this.prisma.assetAssignment.create({ data: { assetId: id, employeeId, assignedOn: toDbDate(assignedOn), assignedByName: ctx.userName ?? null } as Prisma.AssetAssignmentUncheckedCreateInput });
-    await this.prisma.asset.update({ where: { id }, data: { status: 'ASSIGNED', currentAssigneeId: employeeId, currentAssignmentId: asg.id, statusBeforeRepair: null } });
+    await this.prisma.$transaction(async (tx) => {
+      // Compare-and-swap on the status read above: if another request assigned this asset in the
+      // meantime, the status has moved on and this update matches zero rows — race-safe without locking.
+      const claimed = await tx.asset.updateMany({ where: { id, status: a.status }, data: { status: 'ASSIGNED', currentAssigneeId: employeeId, statusBeforeRepair: null } });
+      if (claimed.count === 0) throw conflict(`${a.name} is already assigned`, 'ALREADY_ASSIGNED');
+      const asg = await tx.assetAssignment.create({ data: { assetId: id, employeeId, assignedOn: toDbDate(assignedOn), assignedByName: ctx.userName ?? null } as Prisma.AssetAssignmentUncheckedCreateInput });
+      await tx.asset.update({ where: { id }, data: { currentAssignmentId: asg.id } });
+    });
     await this.notify.notify({
       userIds: await this.notify.usersForEmployees([employeeId]),
       type: 'people.assetAssigned',
