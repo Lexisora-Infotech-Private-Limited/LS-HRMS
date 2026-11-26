@@ -232,10 +232,13 @@ export function timerStopMessage(key: string, spent: string, estimate: string | 
 // ── Move links ─────────────────────────────────────────────────────────────
 
 /**
- * Columns one step back / forward this viewer may move a card to (the ← / → links):
+ * Columns this viewer may move a card to. This is the only move rule: the board's ← / → links, drag
+ * and drop, the task drawer's "Move to…" and the API all use it.
+ *  - one step at a time (Open → Allotted → In progress → Dev completed → QA → Done): nobody skips QA
  *  - nothing on a read-only board or for cards the viewer can't move
  *  - back to Open only for the board lead or the assignee
  *  - out of Open without an assignee only when the viewer is on the board (they become the assignee)
+ *  - QA → Done (passing QA) only for a QA reviewer, and never on a card assigned to yourself
  */
 export function allowedMoves(input: {
   status: TaskStatus;
@@ -246,21 +249,40 @@ export function allowedMoves(input: {
   me: string | null;
   /** Board members (department lead + allocated); undefined = not checked. */
   boardPeople?: ReadonlySet<string>;
+  /** May pass or fail QA on this project (see WorkAccessService.qaTeam). */
+  qaReviewer?: boolean;
 }): TaskStatus[] {
   const { status, assigneeEmployeeId, me } = input;
   if (input.locked || !canMoveTask(input)) return [];
+  // A cancelled task is restored to Open by the board lead, then walks the columns again.
+  if (status === 'CANCELLED') return input.canManage ? ['OPEN'] : [];
   const i = COLUMN_ORDER.indexOf(status);
   if (i < 0) return [];
   const out: TaskStatus[] = [];
   const back = COLUMN_ORDER[i - 1];
   const forward = COLUMN_ORDER[i + 1];
   if (back && !(back === 'OPEN' && assigneeEmployeeId && !input.canManage && assigneeEmployeeId !== me)) out.push(back);
-  if (forward) {
+  // Passing QA needs a second pair of eyes: a reviewer, and not the person the card is assigned to.
+  const canPassQa = !!input.qaReviewer && !(assigneeEmployeeId && assigneeEmployeeId === me);
+  if (forward && !(status === 'QA' && !canPassQa)) {
     const pickUp = !assigneeEmployeeId;
     const canPickUp = !!me && (!input.boardPeople || input.boardPeople.has(me));
     if (!pickUp || canPickUp) out.push(forward);
   }
   return out;
+}
+
+/**
+ * Who reviews QA on a project:
+ *  - the project has a QA board (the QA department's lead or anyone allocated to it) → that QA team,
+ *    plus managers who see every board;
+ *  - no QA board → the board lead (department lead / project lead) and managers.
+ * Nobody passes QA on their own card (allowedMoves), whatever their role.
+ */
+export function isQaReviewer(input: { viewAll: boolean; canManage: boolean; me: string | null; qaTeam: ReadonlySet<string> }): boolean {
+  if (input.viewAll) return true;
+  if (input.qaTeam.size) return !!input.me && input.qaTeam.has(input.me);
+  return input.canManage;
 }
 
 /** Toast copy for a move (wireframe: "AT-102 → Dev completed · pushed to GitLab (feature/at-102)", "AT-106 closed"). */
@@ -310,12 +332,25 @@ export function boardAccess(a: BoardAccessInput): { canView: boolean; canManage:
   };
 }
 
-/** Members may move their own cards or pick up unassigned ones; board managers move anything. */
-export function canMoveTask(input: { canManage: boolean; canView: boolean; assigneeEmployeeId: string | null; me: string | null }): boolean {
+/** Members may move their own cards or pick up unassigned ones; board managers move anything; QA reviewers move cards in QA. */
+export function canMoveTask(input: { canManage: boolean; canView: boolean; assigneeEmployeeId: string | null; me: string | null; status?: TaskStatus; qaReviewer?: boolean }): boolean {
   if (!input.canView) return false;
   if (input.canManage) return true;
+  if (input.status === 'QA' && input.qaReviewer) return true;
   if (!input.me) return false;
   return input.assigneeEmployeeId === null || input.assigneeEmployeeId === input.me;
+}
+
+/**
+ * Who may cancel a card: board managers (department lead, project lead, manager/admin), or the person who
+ * raised it while it is still Open (a card added by mistake). The assignee alone cannot: they ask the lead.
+ * Standing tasks and already-cancelled cards have nothing to cancel. The drawer's button and the server
+ * check both use this, so the button only shows when the click will work.
+ */
+export function canCancelTask(input: { canManage: boolean; me: string | null; reporterEmployeeId: string | null; status: TaskStatus; isStanding: boolean }): boolean {
+  if (input.isStanding || input.status === 'CANCELLED') return false;
+  if (input.canManage) return true;
+  return !!input.me && input.reporterEmployeeId === input.me && input.status === 'OPEN';
 }
 
 // ── Formatting helpers ─────────────────────────────────────────────────────

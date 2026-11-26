@@ -49,6 +49,12 @@ export type ShiftLike = {
 export type SessionLike = { startedAt: Date; endedAt: Date | null; source: SourceKey; autoClosed?: boolean };
 export type TrackerDayLike = { workedSec: number; breakSec: number; idleSec: number; idleDeductedSec?: number | null };
 /**
+ * Web idle spans of the day (no input while punched in on the web), split by the reason picked on
+ * return, as the desktop tracker splits its idle: "Meeting" stays work, "Break" is break time, the
+ * rest is idle (off worked time, and what payroll's idle rule looks at).
+ */
+export type WebIdleLike = { idleMinutes: number; breakMinutes: number };
+/**
  * Leave on the day. `plannedFirstHalf` / `plannedSecondHalf`: a half day the employee applied for
  * (not the automatic late-arrival half day), which moves the expected start / end to mid-shift.
  */
@@ -64,6 +70,8 @@ export type DayInput = {
   leave: LeaveLike;
   sessions: SessionLike[];
   tracker: TrackerDayLike | null;
+  /** Used only when there is no tracker data for the day (the tracker already covers its own idle). */
+  webIdle?: WebIdleLike | null;
   lateExcused?: boolean;
   /** This day's place among the month's late arrivals if it is late (1 = first); see `lateOrdinal`. */
   lateOrdinal?: number;
@@ -216,12 +224,17 @@ export function computeDay(input: DayInput): DayResult {
     deductedIdle = Math.round((input.tracker.idleDeductedSec ?? input.tracker.idleSec) / 60);
     breakMinutes = tBreak + gapBreak;
     presence = Math.max(0, gross - tBreak);
-  } else if (sessions.length === 1 && gross > 300 && !hasOpen) {
-    breakMinutes = shift.breakMinutes; // "assume shift break when unrecorded"
-    presence = gross - breakMinutes;
   } else {
-    breakMinutes = gapBreak;
-    presence = gross;
+    const webBreak = Math.max(0, Math.round(input.webIdle?.breakMinutes ?? 0));
+    if (sessions.length === 1 && gross > 300 && !hasOpen) {
+      // "Assume shift break when unrecorded"; a longer break taken on the web replaces it (never both).
+      breakMinutes = Math.max(shift.breakMinutes, webBreak);
+      presence = gross - breakMinutes;
+    } else {
+      breakMinutes = gapBreak + webBreak;
+      presence = Math.max(0, gross - webBreak);
+    }
+    idle = deductedIdle = Math.min(presence, Math.max(0, Math.round(input.webIdle?.idleMinutes ?? 0)));
   }
   const worked = Math.max(0, presence - deductedIdle);
 

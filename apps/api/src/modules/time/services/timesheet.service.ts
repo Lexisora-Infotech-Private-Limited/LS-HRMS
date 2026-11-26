@@ -41,6 +41,7 @@ import {
   isActiveTask,
   isEditableStatus,
   isQuietLine,
+  NOT_EMPTY_DRAFT,
   leaveLabel,
   MAX_DAY_MINUTES,
   outsideHoursMinutes,
@@ -918,6 +919,8 @@ export class TimesheetService {
     if (q.employeeId) where.AND = [{ employeeId: q.employeeId }];
     if (q.status && q.status !== 'ALL') where.status = q.status as any;
     if (q.weekStart) where.weekStart = dateOf(mondayOf(q.weekStart));
+    // Reviewers' lists skip empty drafts (an old week someone only opened): nothing to chase there.
+    if (!q.mine) Object.assign(where, NOT_EMPTY_DRAFT);
     const rows = await this.prisma.timesheet.findMany({ where, orderBy: [{ weekStart: 'desc' }], take: 200 });
     const names = new Map((await this.prisma.employee.findMany({ where: { id: { in: [...new Set(rows.map((r) => r.employeeId))] } }, select: { id: true, fullName: true } })).map((e) => [e.id, e.fullName]));
     return rows.map((r) => ({

@@ -241,6 +241,32 @@ describe('computeDay', () => {
   });
 });
 
+describe('web idle (no tracker)', () => {
+  it('idle spans count as idle and come off worked time', () => {
+    // Two sessions (09:30–13:30, 14:30–18:30) → 8h presence, 45 min of web idle.
+    const r = day('2026-09-23', [['09:30', '13:30'], ['14:30', '18:30']], { webIdle: { idleMinutes: 45, breakMinutes: 0 } });
+    expect(r.idleMinutes).toBe(45);
+    expect(r.workedMinutes).toBe(480 - 45);
+    expect(r.breakMinutes).toBe(60);
+  });
+  it('payroll idle rule applies to web idle like tracker idle', () => {
+    const r = day('2026-09-23', [['09:30', '13:30'], ['14:30', '18:30']], { webIdle: { idleMinutes: 45, breakMinutes: 0 } });
+    expect(r.idleDeductibleMinutes).toBe(45); // 435 worked < 480 required → the full 45 min shortfall
+  });
+  it('"Break" spans go to breaks, not idle', () => {
+    const r = day('2026-09-23', [['09:30', '13:30'], ['14:30', '18:30']], { webIdle: { idleMinutes: 0, breakMinutes: 20 } });
+    expect(r).toMatchObject({ idleMinutes: 0, breakMinutes: 80, workedMinutes: 460 });
+  });
+  it('one long session: a web break replaces the assumed shift break, never adds to it', () => {
+    expect(day('2026-09-23', [['09:30', '18:35']], { webIdle: { idleMinutes: 0, breakMinutes: 30 } }).breakMinutes).toBe(60);
+    expect(day('2026-09-23', [['09:30', '18:35']], { webIdle: { idleMinutes: 0, breakMinutes: 90 } }).breakMinutes).toBe(90);
+  });
+  it('tracker days ignore web idle (the tracker already measured it)', () => {
+    const r = day('2026-09-23', [['09:30', '18:30', 'DESKTOP']], { tracker: { workedSec: 0, breakSec: 3600, idleSec: 600 }, webIdle: { idleMinutes: 45, breakMinutes: 0 } });
+    expect(r.idleMinutes).toBe(10);
+  });
+});
+
 describe('idle deduction and month summary', () => {
   it('shortfall-only deducts idle only up to the shortfall', () => {
     expect(idleDeductible(30, 480, GENERAL, POLICY, 1)).toBe(0); // required = 9h shift − 60m break

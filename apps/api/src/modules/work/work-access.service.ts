@@ -4,7 +4,7 @@ import { PrismaService } from '../../core/prisma/prisma.service';
 import { requireContext } from '../../core/context/request-context';
 import { hasPerm } from '../../core/auth/decorators';
 import { AppError, notFound } from '../../core/http/errors';
-import { boardAccess } from './work.rules';
+import { boardAccess, isQaReviewer } from './work.rules';
 
 export type Viewer = {
   employeeId: string | null;
@@ -16,7 +16,16 @@ export type Viewer = {
   leadsDepartments: string[];
 };
 
-export type BoardRights = { canView: boolean; canManage: boolean; canAllocate: boolean };
+export type BoardRights = {
+  canView: boolean;
+  canManage: boolean;
+  canAllocate: boolean;
+  /** May pass (QA → Done) or fail (QA → Dev completed) cards in QA on this project (work.rules isQaReviewer). */
+  qaReviewer: boolean;
+};
+
+/** The department whose board holds a project's testers (matched by name, like the "ready for QA" notice). */
+const QA_DEPARTMENT_NAME = 'QA';
 
 /**
  * Relationship scoping for the work domain:
@@ -73,18 +82,43 @@ export class WorkAccessService {
     return v.viewAll || (!!v.employeeId && p.leadEmployeeId === v.employeeId);
   }
 
+  /**
+   * A project's QA team: the QA department's lead and the people allocated to the project's QA board.
+   * Empty when the project has no QA board (then the board leads review QA). They get the "ready for
+   * QA" notice and may open every board of the project to test what lands in QA.
+   */
+  async qaTeam(projectId: string): Promise<Set<string>> {
+    const team = new Set<string>();
+    const qa = await this.prisma.department.findFirst({ where: { name: { equals: QA_DEPARTMENT_NAME, mode: 'insensitive' } }, select: { id: true, leadEmployeeId: true } });
+    if (!qa) return team;
+    const p = await this.prisma.project.findFirst({ where: { id: projectId }, select: { boardDepartmentIds: true } });
+    if (!p?.boardDepartmentIds.includes(qa.id)) return team;
+    if (qa.leadEmployeeId) team.add(qa.leadEmployeeId);
+    const rows = await this.prisma.boardMember.findMany({ where: { projectId, departmentId: qa.id }, select: { employeeId: true } });
+    for (const r of rows) team.add(r.employeeId);
+    return team;
+  }
+
+  /** QA team members see the project's boards (to test); QA review rights per work.rules isQaReviewer. */
+  private async withQa(v: Viewer, projectId: string, base: Omit<BoardRights, 'qaReviewer'>): Promise<BoardRights> {
+    const team = await this.qaTeam(projectId);
+    const inTeam = !!v.employeeId && team.has(v.employeeId);
+    return { ...base, canView: base.canView || inTeam, qaReviewer: isQaReviewer({ viewAll: v.viewAll, canManage: base.canManage, me: v.employeeId, qaTeam: team }) };
+  }
+
   /** Rights on one department board of a project. */
   async boardRights(v: Viewer, project: { id: string; leadEmployeeId: string | null; isSystem?: boolean }, departmentId: string): Promise<BoardRights> {
-    if (project.isSystem) return { canView: true, canManage: v.viewAll, canAllocate: false };
+    if (project.isSystem) return { canView: true, canManage: v.viewAll, canAllocate: false, qaReviewer: v.viewAll };
     const isAllocated = v.employeeId
       ? (await this.prisma.boardMember.count({ where: { projectId: project.id, departmentId, employeeId: v.employeeId } })) > 0
       : false;
-    return boardAccess({
+    const base = boardAccess({
       viewAll: v.viewAll,
       isDeptLead: v.leadsDepartments.includes(departmentId),
       isAllocated,
       isProjectLead: !!v.employeeId && project.leadEmployeeId === v.employeeId,
     });
+    return this.withQa(v, project.id, base);
   }
 
   /** Map of `${projectId}|${departmentId}` → rights for many boards at once (search, my tasks). */
@@ -118,10 +152,10 @@ export class WorkAccessService {
     if (!t) throw notFound('Task');
     if (!t.project.isSystem && !(await this.canSeeProject(v, t.projectId)) && !(v.employeeId && t.assigneeEmployeeId === v.employeeId)) throw notFound('Task');
     let rights: BoardRights;
-    if (t.project.isSystem) rights = { canView: true, canManage: v.viewAll, canAllocate: false };
+    if (t.project.isSystem) rights = { canView: true, canManage: v.viewAll, canAllocate: false, qaReviewer: v.viewAll };
     else if (!t.departmentId) {
       const lead = !!v.employeeId && t.project.leadEmployeeId === v.employeeId;
-      rights = { canView: true, canManage: v.viewAll || lead, canAllocate: false };
+      rights = await this.withQa(v, t.projectId, { canView: true, canManage: v.viewAll || lead, canAllocate: false });
     } else rights = await this.boardRights(v, t.project, t.departmentId);
     // The assignee always keeps access to their own card (e.g. after a board revoke).
     if (!rights.canView && v.employeeId && t.assigneeEmployeeId === v.employeeId) rights = { ...rights, canView: true };

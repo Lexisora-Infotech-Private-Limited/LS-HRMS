@@ -357,6 +357,15 @@ function DaysTable({
                 <span className="row" style={{ gap: 6 }}>
                   <Tag tone={label === 'Late' ? 'outline' : r.status === 'PRESENT' ? 'accent' : toneFor(label)}>{label}</Tag>
                   {r.pendingRegularization && <Tag tone="outline" title="Correction request pending">Correction pending</Tag>}
+                  {onLateReason && r.canAddLateReason && (
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => onLateReason(r)}
+                      title={r.lateReason ? `Your reason: ${r.lateReason}` : 'Tell your manager why you were late'}
+                    >
+                      {r.lateReason ? 'Edit reason' : 'Add reason'}
+                    </button>
+                  )}
                   {onRegularize && r.canRegularize && !r.pendingRegularization && (
                     <button className="btn btn-ghost btn-sm" onClick={() => onRegularize(r)} title="Request a correction for this day">Fix</button>
                   )}

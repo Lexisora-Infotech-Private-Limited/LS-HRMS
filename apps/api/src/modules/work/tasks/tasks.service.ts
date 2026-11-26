@@ -10,7 +10,7 @@ import { WorkAccessService, type BoardRights } from '../work-access.service';
 import { WorkEvents } from '../work-events.service';
 import { WorkMetricsService } from '../projects/work-metrics.service';
 import { GitService } from '../git/git.service';
-import { gitNote, moveMessage, planTransition, shortName, STATUS_LABEL, timerAction, timerStartMessage, timerStopMessage, type TaskStatus } from '../work.rules';
+import { allowedMoves, canCancelTask, canMoveTask, gitNote, moveMessage, planTransition, shortName, STATUS_LABEL, timerAction, timerStartMessage, timerStopMessage, type TaskStatus } from '../work.rules';
 import { dateKey, dateOnly, iso } from '../work.util';
 import { toCard, type CardExtras } from './task-mapper';
 import { TaskTimerService, type RunningTimer } from './task-timer.service';
@@ -183,7 +183,9 @@ export class TasksService {
     const people = await this.boardPeople(project.id, t.departmentId, project.isSystem);
     const names = await this.access.names([t.assigneeEmployeeId, t.reporterEmployeeId, ...people]);
     const card = await this.cardFor(t, rights, v.employeeId, project);
-    const canEdit = !LOCKED_PROJECT.includes(project.status) && (rights.canManage || (!!v.employeeId && t.assigneeEmployeeId === v.employeeId));
+    const writable = !LOCKED_PROJECT.includes(project.status);
+    const canEdit = writable && (rights.canManage || (!!v.employeeId && t.assigneeEmployeeId === v.employeeId));
+    const canCancel = writable && canCancelTask({ canManage: rights.canManage, me: v.employeeId, reporterEmployeeId: t.reporterEmployeeId, status: t.status as TaskStatus, isStanding: t.isStanding });
     return {
       ...card,
       canMove: card.canMove,
@@ -209,6 +211,7 @@ export class TasksService {
       assigneeOptions: people.map((p) => ({ value: p, label: names.get(p) ?? p })).sort((a, b) => a.label.localeCompare(b.label)),
       moduleOptions: modules.map((m) => m.name),
       canEdit,
+      canCancel,
     };
   }
 
@@ -292,13 +295,23 @@ export class TasksService {
     this.assertWritable(project);
     if (t.isStanding) throw new AppError(422, 'STANDING_TASK', `${t.key} is a standing task and has no board column`);
     const me = v.employeeId;
-    const canMove = rights.canManage || (!!me && (t.assigneeEmployeeId === null || t.assigneeEmployeeId === me));
-    if (!canMove) throw forbidden(`${t.key} is assigned to someone else — only the board lead can move it`);
-    if (input.version !== undefined && input.version !== t.version) throw conflict(`${t.key} was just changed by someone else — the board has been refreshed`, 'VERSION_CONFLICT');
     const from = t.status as TaskStatus;
     const to = input.toStatus as TaskStatus;
+    const canMove = canMoveTask({ canManage: rights.canManage, canView: rights.canView, assigneeEmployeeId: t.assigneeEmployeeId, me, status: from, qaReviewer: rights.qaReviewer });
+    if (!canMove) throw forbidden(`${t.key} is assigned to someone else — only the board lead can move it`);
+    if (input.version !== undefined && input.version !== t.version) throw conflict(`${t.key} was just changed by someone else — the board has been refreshed`, 'VERSION_CONFLICT');
     if (from === to) return { task: await this.cardFor(t, rights, me, project), message: '' };
     if (to === 'OPEN' && t.assigneeEmployeeId && !rights.canManage && t.assigneeEmployeeId !== me) throw forbidden('Only the board lead can return a task to Open');
+    // Same rule as the board's links and the drawer (work.rules allowedMoves): one column at a time,
+    // and only the QA team passes QA. Picking up an unassigned card is checked just below.
+    const moves = allowedMoves({ status: from, canManage: rights.canManage, canView: rights.canView, locked: false, assigneeEmployeeId: t.assigneeEmployeeId, me, qaReviewer: rights.qaReviewer });
+    if (!moves.includes(to)) {
+      if (from === 'QA' && to === 'DONE') {
+        throw new AppError(403, 'QA_REVIEW_REQUIRED', t.assigneeEmployeeId === me && rights.qaReviewer ? `You can't pass QA on your own task · ask someone else on the QA team to test ${t.key}` : `Only the QA team can pass ${t.key} · it moves to Done after QA tests it`);
+      }
+      const next = moves.map((s) => STATUS_LABEL[s]);
+      throw new AppError(422, 'MOVE_ONE_STEP', `${t.key} moves one column at a time${next.length ? ` · from ${STATUS_LABEL[from]} it can go to ${next.join(' or ')}` : ''}`);
+    }
     // Leaving Open without an assignee: the mover picks the card up, so they must be on the board.
     if (!t.assigneeEmployeeId && to !== 'OPEN') {
       if (!me) throw new AppError(422, 'ASSIGNEE_REQUIRED', `Assign ${t.key} to a board member before moving it`);
@@ -368,9 +381,16 @@ export class TasksService {
 
     // Notifications
     if (to === 'QA') {
-      const qa = await this.prisma.department.findFirst({ where: { name: { equals: 'QA', mode: 'insensitive' } }, select: { leadEmployeeId: true } });
-      if (qa?.leadEmployeeId && qa.leadEmployeeId !== me) {
-        await this.notifications.notify({ userIds: await this.userIds([qa.leadEmployeeId]), type: 'task.qa', title: `${t.key} is ready for QA: ${t.title}`, link: `/board?project=${project.id}&board=${t.departmentId ?? ''}&task=${id}`, from: v.name });
+      // The people who can open and pass it: the project's QA team, else the board's leads (work.rules isQaReviewer).
+      const team = await this.access.qaTeam(project.id);
+      let reviewers = [...team];
+      if (!reviewers.length) {
+        const dept = t.departmentId ? await this.prisma.department.findFirst({ where: { id: t.departmentId }, select: { leadEmployeeId: true } }) : null;
+        reviewers = [dept?.leadEmployeeId, project.leadEmployeeId].filter((x): x is string => !!x);
+      }
+      reviewers = [...new Set(reviewers)].filter((e) => e !== me && e !== t.assigneeEmployeeId);
+      if (reviewers.length) {
+        await this.notifications.notify({ userIds: await this.userIds(reviewers), type: 'task.qa', title: `${t.key} is ready for QA: ${t.title}`, link: `/board?project=${project.id}&board=${t.departmentId ?? ''}&task=${id}`, from: v.name });
       }
     }
     if (plan.backward && assignee && assignee !== me) {
@@ -451,7 +471,11 @@ export class TasksService {
     const v = await this.access.viewer();
     const { task: t, project, rights } = await this.access.requireTask(v, id);
     this.assertWritable(project);
-    if (!rights.canManage && !(t.reporterEmployeeId === v.employeeId && t.status === 'OPEN')) throw forbidden('Only the board lead can cancel this task');
+    if (t.isStanding) throw new AppError(422, 'STANDING_TASK', `${t.key} is a standing task and cannot be cancelled`);
+    if (t.status === 'CANCELLED') throw new AppError(422, 'ALREADY_CANCELLED', `${t.key} is already cancelled`);
+    if (!canCancelTask({ canManage: rights.canManage, me: v.employeeId, reporterEmployeeId: t.reporterEmployeeId, status: t.status as TaskStatus, isStanding: t.isStanding })) {
+      throw forbidden(`Only the board lead can cancel ${t.key} · ask your lead if it is no longer needed`);
+    }
     if ((t.status === 'OPEN' || t.status === 'ALLOTTED') && t.loggedMinutes === 0) {
       await this.prisma.task.delete({ where: { id } });
       await this.audit.record({ action: 'task.deleted', entity: 'Task', entityId: id, meta: { key: t.key, title: t.title } });

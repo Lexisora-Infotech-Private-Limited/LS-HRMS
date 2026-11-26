@@ -46,7 +46,7 @@
 .tb-toolbar-label { font-size: 13.5px; color: var(--color-neutral-800); margin: 0 2px 0 6px; }
 
 .tb-board { display: flex; gap: 20px; overflow-x: auto; padding-bottom: 14px; align-items: stretch; scrollbar-gutter: stable; }
-.tb-col { flex: 0 0 340px; min-height: 560px; border: 1px solid var(--color-divider); border-radius: var(--radius-md); background: var(--tb-panel); padding: 16px; display: flex; flex-direction: column; gap: 14px; transition: background 0.12s, border-color 0.12s; }
+.tb-col { flex: 1 0 340px; min-height: 560px; border: 1px solid var(--color-divider); border-radius: var(--radius-md); background: var(--tb-panel); padding: 16px; display: flex; flex-direction: column; gap: 14px; transition: background 0.12s, border-color 0.12s; }
 .tb-col.can-drop { border-style: dashed; border-color: var(--color-accent-400); }
 .tb-col.over { background: color-mix(in srgb, var(--color-accent) 8%, var(--tb-panel)); border-color: var(--color-accent); }
 .tb-col-head { display: flex; align-items: baseline; gap: 28px; font-size: 15.5px; color: var(--color-accent-600); padding: 2px 2px 0; }

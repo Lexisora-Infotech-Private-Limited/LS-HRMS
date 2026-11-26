@@ -144,6 +144,17 @@ export function isEditableStatus(status: string): boolean {
   return status === 'DRAFT' || status === 'RETURNED';
 }
 
+/**
+ * A draft with no time on it — e.g. made just by opening an old week on the Timesheet page.
+ * Nothing to submit or approve, so it counts the same as "no timesheet for that week".
+ */
+export function isEmptyDraft(t: { status: string; totalMinutes: number; pendingMinutes: number }): boolean {
+  return t.status === 'DRAFT' && t.totalMinutes === 0 && t.pendingMinutes === 0;
+}
+
+/** Prisma `where` part that leaves out empty drafts (see isEmptyDraft). */
+export const NOT_EMPTY_DRAFT = { NOT: { status: 'DRAFT', totalMinutes: 0, pendingMinutes: 0 } } as const;
+
 /** Outside-hours entry length rule (J5): 15 min – 12 h, same day. */
 export function outsideHoursMinutes(from: number, to: number): { minutes: number; error?: string } {
   const minutes = to - from;

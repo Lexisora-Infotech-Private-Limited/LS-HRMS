@@ -406,6 +406,8 @@ export type TaskDetail = TaskCard & {
   assigneeOptions: { value: string; label: string }[];
   moduleOptions: string[];
   canEdit: boolean;
+  /** Board lead / manager, or the reporter while Open (work.rules canCancelTask); assignees cannot. */
+  canCancel: boolean;
 };
 export type TaskMoveResult = { task: TaskCard; message: string; git?: { action: 'branch' | 'mr' | 'none'; branch?: string | null; mrUrl?: string | null; status: string; error?: string | null } };
 export type MyTask = { id: string; key: string; title: string; projectId: string; projectName: string; moduleName: string | null; status: TaskStatusKey; estimatedMinutes: number | null; loggedMinutes: number; dueDate: string | null; isStanding: boolean };
