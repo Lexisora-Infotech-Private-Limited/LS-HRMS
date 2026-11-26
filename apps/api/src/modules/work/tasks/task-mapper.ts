@@ -18,7 +18,7 @@ export type CardExtras = {
 export function toCard(
   t: Task,
   names: Map<string, string>,
-  rights: { canView: boolean; canManage: boolean },
+  rights: { canView: boolean; canManage: boolean; qaReviewer: boolean },
   me: string | null,
   extra: CardExtras = {},
 ): TaskCard {
@@ -45,7 +45,7 @@ export function toCard(
     gitMrState: t.gitMrState,
     gitSyncStatus: t.gitSyncStatus,
     version: t.version,
-    canMove: !extra.locked && canMoveTask({ canManage: rights.canManage, canView: rights.canView, assigneeEmployeeId: t.assigneeEmployeeId, me }),
+    canMove: !extra.locked && canMoveTask({ canManage: rights.canManage, canView: rights.canView, assigneeEmployeeId: t.assigneeEmployeeId, me, status, qaReviewer: rights.qaReviewer }),
     spentSeconds: Math.max(0, Math.round(extra.spentSeconds ?? t.loggedMinutes * 60)),
     timer: extra.timer
       ? {
@@ -64,6 +64,7 @@ export function toCard(
       assigneeEmployeeId: t.assigneeEmployeeId,
       me,
       boardPeople: extra.boardPeople,
+      qaReviewer: rights.qaReviewer,
     }),
   };
 }

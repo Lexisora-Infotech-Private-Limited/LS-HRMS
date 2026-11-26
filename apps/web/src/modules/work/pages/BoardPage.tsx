@@ -360,11 +360,13 @@ function Card({
               ←
             </button>
           )}
-          {canForward && (
+          {canForward ? (
             <button className="tb-link" onClick={() => onMove(k, forward!)}>
-              Move to {TASK_STATUS_LABELS[forward!]} →
+              {k.status === 'QA' ? 'Pass QA · move to Done →' : `Move to ${TASK_STATUS_LABELS[forward!]} →`}
             </button>
-          )}
+          ) : k.status === 'QA' ? (
+            <span className="faint" style={{ fontSize: 12 }}>Waiting for QA</span>
+          ) : null}
         </div>
       )}
     </div>

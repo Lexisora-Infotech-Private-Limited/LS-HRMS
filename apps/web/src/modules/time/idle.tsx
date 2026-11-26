@@ -259,6 +259,8 @@ function IdleReasonDialog({ emp, pending, systemWide }: { emp: string; pending: 
       });
       // Refresh the timeline first so the saved span replaces the live one without a flicker.
       await qc.invalidateQueries({ queryKey: ['time', 'timeline'] }).catch(() => undefined);
+      // The day's Idle / Breaks columns and the month card change too.
+      void qc.invalidateQueries({ queryKey: ['time', 'month'] });
       setPending(emp, null);
       toast(r.message);
     } catch (e) {

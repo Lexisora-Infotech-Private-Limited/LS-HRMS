@@ -6,7 +6,6 @@ import { ConfirmDialog, ErrorBlock, Loading, StatusTag, Tag } from '@/components
 import { hours, workApi, workKeys } from '../api';
 import { Drawer } from '../components';
 
-const MOVABLE: TaskStatusKey[] = ['OPEN', 'ALLOTTED', 'WIP', 'DEV_COMPLETED', 'QA', 'DONE'];
 const when = (iso: string) => new Date(iso).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
 /** Task drawer: details, assignee/estimate/due, git branch + MR, comments, history. */
@@ -56,12 +55,14 @@ function Body({ t, onClose }: { t: TaskDetail; onClose: () => void }) {
         <StatusTag status={t.status} label={TASK_STATUS_LABELS[t.status]} />
         {t.overdue && <Tag tone="danger">Overdue</Tag>}
         {t.isStanding && <Tag>Standing task</Tag>}
-        {t.canMove && !t.isStanding && (
+        {/* Same steps as the board's ← / → links: one column at a time, and only the QA team passes QA. */}
+        {!t.isStanding && t.allowedMoves.length > 0 && (
           <select className="input" style={{ width: 'auto', padding: '4px 8px' }} value="" onChange={(e) => e.target.value && move.mutate(e.target.value as TaskStatusKey)} aria-label="Move to">
             <option value="">Move to…</option>
-            {MOVABLE.filter((s) => s !== t.status).map((s) => <option key={s} value={s}>{TASK_STATUS_LABELS[s]}</option>)}
+            {t.allowedMoves.map((s) => <option key={s} value={s}>{TASK_STATUS_LABELS[s]}</option>)}
           </select>
         )}
+        {t.status === 'QA' && t.canMove && !t.allowedMoves.includes('DONE') && <span className="faint" style={{ fontSize: 12.5 }}>Waiting for the QA team to pass it</span>}
       </div>
 
       <div className="wk-kv">
@@ -174,10 +175,12 @@ function Body({ t, onClose }: { t: TaskDetail; onClose: () => void }) {
         </div>
       </div>
 
-      {t.canEdit && !t.isStanding && (
+      {t.canCancel ? (
         <div className="row">
           <button className="btn btn-ghost btn-sm" onClick={() => setCancelling(true)}>Cancel task</button>
         </div>
+      ) : (
+        t.canEdit && !t.isStanding && t.status !== 'CANCELLED' && <p className="faint" style={{ margin: 0, fontSize: 12.5 }}>Only the board lead can cancel this task. Ask them if it is no longer needed.</p>
       )}
       {cancelling && (
         <ConfirmDialog

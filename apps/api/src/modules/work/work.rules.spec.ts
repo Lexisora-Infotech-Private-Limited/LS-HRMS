@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
   allowedMoves,
   boardAccess,
+  canCancelTask,
   branchName,
   canMoveTask,
   computeHealth,
   computeProgress,
   crossedEstimate,
   gitNote,
+  isQaReviewer,
   meanScore,
   moveMessage,
   timerAction,
@@ -147,8 +149,27 @@ describe('move rules — allowed moves (← / → links)', () => {
   const base = { canManage: false, canView: true, locked: false, me: 'priya', boardPeople: new Set(['arjun', 'priya']) };
   it('my own card moves one step either way; the first column has no back step, Done no forward step', () => {
     expect(allowedMoves({ ...base, status: 'WIP', assigneeEmployeeId: 'priya' })).toEqual(['ALLOTTED', 'DEV_COMPLETED']);
-    expect(allowedMoves({ ...base, status: 'QA', assigneeEmployeeId: 'priya' })).toEqual(['DEV_COMPLETED', 'DONE']);
+    expect(allowedMoves({ ...base, status: 'QA', assigneeEmployeeId: 'rahul', qaReviewer: true })).toEqual(['DEV_COMPLETED', 'DONE']);
     expect(allowedMoves({ ...base, status: 'DONE', assigneeEmployeeId: 'priya' })).toEqual(['QA']);
+  });
+  it('never skips a column: In progress offers Dev completed, not QA or Done', () => {
+    const m = allowedMoves({ ...base, canManage: true, status: 'WIP', assigneeEmployeeId: 'priya', qaReviewer: true });
+    expect(m).toEqual(['ALLOTTED', 'DEV_COMPLETED']);
+    expect(m).not.toContain('DONE');
+  });
+  it('only a QA reviewer passes QA; the developer can only pull their card back', () => {
+    expect(allowedMoves({ ...base, status: 'QA', assigneeEmployeeId: 'priya' })).toEqual(['DEV_COMPLETED']);
+    expect(allowedMoves({ ...base, canManage: true, status: 'QA', assigneeEmployeeId: 'rahul' })).toEqual(['DEV_COMPLETED']);
+    // QA tester (not the assignee, not a board lead) passes or fails it
+    expect(allowedMoves({ ...base, me: 'sneha', status: 'QA', assigneeEmployeeId: 'rahul', qaReviewer: true })).toEqual(['DEV_COMPLETED', 'DONE']);
+    // nobody passes QA on their own card, even a reviewer or the board lead
+    expect(allowedMoves({ ...base, canManage: true, status: 'QA', assigneeEmployeeId: 'priya', qaReviewer: true })).toEqual(['DEV_COMPLETED']);
+    // ...and a tester can't move cards in other columns
+    expect(allowedMoves({ ...base, me: 'sneha', status: 'DEV_COMPLETED', assigneeEmployeeId: 'rahul', qaReviewer: true })).toEqual([]);
+  });
+  it('a cancelled card is restored to Open by the board lead only', () => {
+    expect(allowedMoves({ ...base, canManage: true, status: 'CANCELLED', assigneeEmployeeId: 'rahul' })).toEqual(['OPEN']);
+    expect(allowedMoves({ ...base, status: 'CANCELLED', assigneeEmployeeId: 'priya' })).toEqual([]);
   });
   it("someone else's card: no links for members, all links for the board lead", () => {
     expect(allowedMoves({ ...base, status: 'WIP', assigneeEmployeeId: 'rahul' })).toEqual([]);
@@ -163,6 +184,20 @@ describe('move rules — allowed moves (← / → links)', () => {
   it('a read-only (locked) project or board shows no links', () => {
     expect(allowedMoves({ ...base, locked: true, status: 'WIP', assigneeEmployeeId: 'priya' })).toEqual([]);
     expect(allowedMoves({ ...base, canView: false, status: 'WIP', assigneeEmployeeId: 'priya' })).toEqual([]);
+  });
+});
+
+describe('who reviews QA', () => {
+  const team = new Set(['sneha', 'karan']);
+  it('the project QA team (and managers) when the project has a QA board', () => {
+    expect(isQaReviewer({ viewAll: false, canManage: false, me: 'sneha', qaTeam: team })).toBe(true);
+    expect(isQaReviewer({ viewAll: false, canManage: true, me: 'arjun', qaTeam: team })).toBe(false);
+    expect(isQaReviewer({ viewAll: false, canManage: false, me: 'rahul', qaTeam: team })).toBe(false);
+    expect(isQaReviewer({ viewAll: true, canManage: true, me: 'neha', qaTeam: team })).toBe(true);
+  });
+  it('the board lead when there is no QA board; never the developer alone', () => {
+    expect(isQaReviewer({ viewAll: false, canManage: true, me: 'arjun', qaTeam: new Set() })).toBe(true);
+    expect(isQaReviewer({ viewAll: false, canManage: false, me: 'rahul', qaTeam: new Set() })).toBe(false);
   });
 });
 
@@ -305,5 +340,21 @@ describe('helpers', () => {
     expect(weekStartOf('2026-09-29')).toBe('2026-09-28');
     expect(nextWorkingDay('2026-10-03')).toBe('2026-10-05');
     expect(meanScore([4, 5, null, 4.5])).toBe(4.5);
+  });
+});
+
+describe('canCancelTask (M17: the Cancel button shows only when the click works)', () => {
+  const base = { canManage: false, me: 'rahul', reporterEmployeeId: 'arjun', status: 'WIP' as TaskStatus, isStanding: false };
+  it('the assignee alone cannot cancel; the board lead can', () => {
+    expect(canCancelTask(base)).toBe(false);
+    expect(canCancelTask({ ...base, canManage: true })).toBe(true);
+  });
+  it('the reporter may cancel their own card only while it is Open', () => {
+    expect(canCancelTask({ ...base, reporterEmployeeId: 'rahul', status: 'OPEN' })).toBe(true);
+    expect(canCancelTask({ ...base, reporterEmployeeId: 'rahul', status: 'ALLOTTED' })).toBe(false);
+  });
+  it('standing tasks and cancelled cards have nothing to cancel, even for the lead', () => {
+    expect(canCancelTask({ ...base, canManage: true, isStanding: true })).toBe(false);
+    expect(canCancelTask({ ...base, canManage: true, status: 'CANCELLED' })).toBe(false);
   });
 });

@@ -9,6 +9,7 @@ import {
   expectedMinutes,
   isActiveTask,
   isEditableStatus,
+  isEmptyDraft,
   isQuietLine,
   leaveLabel,
   outsideHoursMinutes,
@@ -17,6 +18,19 @@ import {
   reasonRequired,
   submitLabel,
 } from './timesheet-calc';
+
+describe('empty draft timesheets (an old week only opened)', () => {
+  it('a draft with no time is empty: payroll treats it as no timesheet', () => {
+    expect(isEmptyDraft({ status: 'DRAFT', totalMinutes: 0, pendingMinutes: 0 })).toBe(true);
+  });
+  it('a draft with hours, or with claimed time awaiting review, still has to be submitted', () => {
+    expect(isEmptyDraft({ status: 'DRAFT', totalMinutes: 30, pendingMinutes: 0 })).toBe(false);
+    expect(isEmptyDraft({ status: 'DRAFT', totalMinutes: 0, pendingMinutes: 60 })).toBe(false);
+  });
+  it('only drafts: a returned sheet is never ignored', () => {
+    expect(isEmptyDraft({ status: 'RETURNED', totalMinutes: 0, pendingMinutes: 0 })).toBe(false);
+  });
+});
 
 // ── Approval routing (spec-time K3 + audit G3) ────────────────────────────────
 const PROJECTS = new Map<string, ProjectInfo>([

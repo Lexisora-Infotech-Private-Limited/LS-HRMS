@@ -9,6 +9,7 @@ import { addDays, dd, dk, fyPriorPeriods, monthBounds, todayKey, type DateKey } 
 import { WorkCalendarService } from '../common/calendar.service';
 import { leaveSummaryLabel } from '../leave/leave-calc';
 import { countsAsLateMark } from '../../time/lib/day-calc';
+import { NOT_EMPTY_DRAFT } from '../../time/lib/timesheet-calc';
 import { calculateItem, type CalcAdjustment, type CalcResult } from './payroll-calc';
 import { classifyDays, GATE_OK, latePenaltyLabel, latePenaltySplit, NO_LATE_PENALTY, timesheetGate, type AttendanceOnDay, type DayClassResult, type LatePenalty, type LeaveOnDay } from './payroll-days';
 import { SalaryService, resolveProfile } from './salary.service';
@@ -104,7 +105,8 @@ export class PayrollEngineService {
       this.prisma.attendanceDay.findMany({ where: { employeeId: { in: ids }, date: { gte: dd(b.start), lte: dd(lock) } }, select: { employeeId: true, date: true, status: true, presentFraction: true, idleDeductibleMinutes: true, isLate: true, lateExcused: true, lateHalfDay: true } }),
       this.prisma.trackerDaySummary.findMany({ where: { employeeId: { in: ids }, workDate: { gte: dd(b.start), lte: dd(lock) } }, select: { employeeId: true, idleDeductedSec: true } }),
       this.prisma.attendancePolicy.findMany(),
-      this.prisma.timesheet.findMany({ where: { weekEnd: { gte: dd(b.start) }, weekStart: { lte: dd(lock) } }, select: { employeeId: true, status: true } }),
+      // Empty drafts (an old week only opened, never filled) don't count as "not submitted".
+      this.prisma.timesheet.findMany({ where: { weekEnd: { gte: dd(b.start) }, weekStart: { lte: dd(lock) }, ...NOT_EMPTY_DRAFT }, select: { employeeId: true, status: true } }),
       this.prisma.payrollAdjustment.findMany({ where: { employeeId: { in: ids }, status: 'PENDING', forPeriod: { lte: opts.period }, OR: [{ targetPeriod: null }, { targetPeriod: { lte: opts.period } }] } }),
     ]);
 

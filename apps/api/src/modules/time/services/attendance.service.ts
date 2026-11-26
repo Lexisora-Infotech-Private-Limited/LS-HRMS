@@ -40,6 +40,7 @@ import {
   type SourceKey,
 } from '../lib/day-calc';
 import { freePart, idleSpanLabel, splitByIdle } from '../lib/idle-spans';
+import { NOT_EMPTY_DRAFT } from '../lib/timesheet-calc';
 import { KeyedLock } from '../lib/keyed-lock';
 import { effectiveAudience, evaluatePunch, modeNote, trackerMode, webPunchAllowed, type GeoInput } from '../lib/policy';
 import { addDays, dateOf, dayLabel, daysBetween, fmtMinute, istHm, istInstant, istKeyOf, keyOf, monthOf, monthRange, prevMonth, shortDur } from '../lib/time-utils';
@@ -420,12 +421,17 @@ export class AttendanceService {
 
     const sessions = await this.prisma.workSession.findMany({ where: { employeeId, attendanceDate: dateOf(key) }, orderBy: { startedAt: 'asc' } });
     const r = await this.resolve(emp, key, { biometricToday: sessions.some((s) => s.source === 'BIOMETRIC') });
-    const [holidays, leaveRows, tracker, excuse] = await Promise.all([
+    const [holidays, leaveRows, tracker, excuse, idleSpans] = await Promise.all([
       this.policies.holidaysBetween(key, key),
       this.cross.leaveDays([employeeId], key, key),
       this.cross.daySummary(employeeId, key),
       this.prisma.attendanceRegularization.findFirst({ where: { employeeId, date: dateOf(key), type: 'LATE_EXCUSE', status: 'APPROVED' }, select: { id: true } }),
+      this.prisma.attendanceIdleSpan.findMany({ where: { employeeId, attendanceDate: dateOf(key) }, select: { startedAt: true, endedAt: true, reason: true } }),
     ]);
+    // Web idle by the reason picked on return: Meeting = work, Break = break, anything else = idle.
+    const spanMin = (reason: (r: string) => boolean) =>
+      idleSpans.filter((s) => reason(s.reason)).reduce((m, s) => m + (s.endedAt.getTime() - s.startedAt.getTime()) / 60_000, 0);
+    const webIdle = idleSpans.length ? { breakMinutes: spanMin((r) => r === 'BREAK'), idleMinutes: spanMin((r) => r !== 'BREAK' && r !== 'MEETING') } : null;
     const limited = (r.shift.lateMarksAllowed ?? 0) > 0;
     const now = new Date();
     const res = computeDay({
@@ -437,6 +443,7 @@ export class AttendanceService {
       leave: CrossReader.leaveOnDay(leaveRows),
       sessions: sessions.map((s) => ({ startedAt: s.startedAt, endedAt: s.endedAt, source: s.source as SourceKey, autoClosed: s.autoClosed })),
       tracker: tracker ? { workedSec: tracker.workedSec, breakSec: tracker.breakSec, idleSec: tracker.idleSec, idleDeductedSec: tracker.idleDeductedSec } : null,
+      webIdle,
       lateExcused: !!excuse,
       lateOrdinal: limited && sessions.length ? await this.lateOrdinal(employeeId, key) : 0,
       policy: r.policy,
@@ -655,6 +662,8 @@ export class AttendanceService {
     });
     const minutes = minutesOf(row);
     await this.audit.record({ action: 'attendance.idle.recorded', entity: 'AttendanceIdleSpan', entityId: row.id, meta: { date, reason: input.reason, minutes } });
+    // Put it into the day's figures now (Idle / Breaks columns, active hours, payroll idle rule).
+    await this.recomputeDay(employeeId, date);
     return { ok: true, saved: true, minutes, message: `${idleSpanLabel(row)} · saved to your timeline` };
   }
 
@@ -912,7 +921,10 @@ export class AttendanceService {
         else if (leaveUnits > 0) counts.onLeave++;
       } else {
         status = dayStatusLabel(d, key === today);
-        counts.present++;
+        // Punched in but the day closed as absent (too few hours) or missed punch: count it with
+        // the absentees so the KPI cards match the row's status tag.
+        if (d.status === 'ABSENT' || d.status === 'MISSED_PUNCH') counts.absent++;
+        else counts.present++;
         if (late) counts.late++;
       }
       return {
@@ -968,7 +980,7 @@ export class AttendanceService {
     const locked = await this.locks.isLocked(to);
     const holidays = await this.policies.holidaysBetween(from, to);
     const leaves = await this.cross.leaveDays(emps.map((e) => e.id), from, to);
-    const sheets = await this.prisma.timesheet.findMany({ where: { employeeId: { in: emps.map((e) => e.id) }, weekEnd: { gte: dateOf(from) }, weekStart: { lte: dateOf(to) } }, select: { employeeId: true, status: true, weekStart: true, weekEnd: true, idleMinutes: true } });
+    const sheets = await this.prisma.timesheet.findMany({ where: { employeeId: { in: emps.map((e) => e.id) }, weekEnd: { gte: dateOf(from) }, weekStart: { lte: dateOf(to) }, ...NOT_EMPTY_DRAFT }, select: { employeeId: true, status: true, weekStart: true, weekEnd: true, idleMinutes: true } });
     const out: PayrollInputRow[] = [];
     for (const e of emps) {
       const days = await this.prisma.attendanceDay.findMany({ where: { employeeId: e.id, date: { gte: dateOf(from), lte: dateOf(to) } } });
