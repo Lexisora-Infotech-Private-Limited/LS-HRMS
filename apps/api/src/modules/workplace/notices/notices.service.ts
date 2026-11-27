@@ -82,6 +82,8 @@ export class NoticesService {
       case 'global':
         return { AND: [this.visibleWhere(v), { visibility: 'GLOBAL' }] };
       case 'teams':
+        // HR / Admin: every live team notice (the tab reads "Team notices" for them); others: their teams' (L7).
+        if (v.moderator) return { deletedAt: null, status: { in: LIVE }, visibility: 'TEAM' };
         return {
           deletedAt: null,
           status: { in: LIVE },
@@ -145,8 +147,28 @@ export class NoticesService {
 
   // ── Reads ────────────────────────────────────────────────────────────────
 
+  /**
+   * Someone who joined a team after its notice went out has no receipt row, so the notice was invisible
+   * to them. Add the rows for live team notices whose audience matches them now (same rule markRead
+   * already uses), so list, "New" dot, badge and opening all work (L7).
+   */
+  private async syncLateTeamNotices(me: string): Promise<void> {
+    const pending = await this.prisma.notice.findMany({
+      where: { deletedAt: null, status: { in: LIVE }, visibility: 'TEAM', authorEmployeeId: { not: me }, recipients: { none: { employeeId: me } } },
+      select: { id: true, audiences: true },
+    });
+    if (!pending.length) return;
+    const userId = (await this.audience.briefs([me])).get(me)?.userId ?? null;
+    for (const n of pending) {
+      if (!(await this.audience.matches(me, (n.audiences ?? []) as WpAudienceRule[]))) continue;
+      const made = await this.prisma.noticeRecipient.createMany({ data: [{ tenantId: currentTenantId(), noticeId: n.id, employeeId: me, userId }], skipDuplicates: true });
+      if (made.count) await this.prisma.notice.update({ where: { id: n.id }, data: { recipientCount: { increment: 1 } } });
+    }
+  }
+
   async list(q: { tab: NoticeTab; q?: string; page: number; pageSize: number }): Promise<NoticeListResponse> {
     const v = this.viewer();
+    if (v.me) await this.syncLateTeamNotices(v.me).catch((e) => this.log.warn(`late team notices ${v.me}: ${(e as Error).message}`));
     const search: Prisma.NoticeWhereInput = q.q ? { title: { contains: q.q, mode: 'insensitive' } } : {};
     const where: Prisma.NoticeWhereInput = { AND: [this.tabWhere(q.tab, v), search] };
     const orderBy: Prisma.NoticeOrderByWithRelationInput[] = q.tab === 'drafts' ? [{ updatedAt: 'desc' }] : [{ pinned: 'desc' }, { publishedAt: 'desc' }, { createdAt: 'desc' }];
@@ -250,6 +272,7 @@ export class NoticesService {
   async unreadCount(): Promise<{ unread: number }> {
     const v = this.viewer();
     if (!v.me) return { unread: 0 };
+    await this.syncLateTeamNotices(v.me).catch((e) => this.log.warn(`late team notices ${v.me}: ${(e as Error).message}`));
     const [mine, lateJoiner] = await Promise.all([
       this.prisma.noticeRecipient.count({ where: { employeeId: v.me, readAt: null, notice: { status: 'PUBLISHED', deletedAt: null } } }),
       // Global notices published before I joined (no receipt row yet) — the list shows them as "New" too.

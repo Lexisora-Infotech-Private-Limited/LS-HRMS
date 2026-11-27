@@ -65,6 +65,11 @@ export default function ProjectDetailPage() {
           </>
         }
       />
+      {p.status === 'ARCHIVED' && (
+        <div className="note">
+          This project is archived · read-only. Restore it from <Link to="/archive">Project archive</Link> to change it.
+        </div>
+      )}
       <Kpis
         items={[
           { label: 'Progress', value: `${p.progressPct}%`, sub: `${Object.entries(p.tasksByStatus).reduce((s, [, n]) => s + n, 0)} tasks` },
@@ -240,16 +245,21 @@ function Members({ p }: { p: ProjectDetail }) {
             key: 'r',
             header: 'Role',
             render: (m) =>
-              p.canManage ? (
+              // One lead per project, changed from Edit → Project lead; the role list never offers "Lead" (L24).
+              m.employeeId === p.leadEmployeeId ? (
+                <span title={p.canManage ? 'Change the lead from Edit → Project lead' : undefined}>
+                  Lead{p.canManage && <span className="faint" style={{ fontSize: 12 }}> · change from Edit</span>}
+                </span>
+              ) : p.canManage ? (
                 <select className="input" style={{ padding: '3px 28px 3px 6px', width: 'auto' }} value={m.role} onChange={(e) => upd.mutate({ id: m.id, role: e.target.value })}>
-                  {PROJECT_MEMBER_ROLES.map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}
+                  {PROJECT_MEMBER_ROLES.filter((r) => r !== 'LEAD' || m.role === 'LEAD').map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}
                 </select>
               ) : (
                 roleLabel(m.role)
               ),
           },
           { key: 'j', header: 'Joined', render: (m) => formatDate(m.joinedAt) },
-          { key: 'a', header: '', render: (m) => p.canManage && m.role !== 'LEAD' && <button className="btn btn-ghost btn-sm" onClick={() => remove.mutate(m.id)}>Remove</button> },
+          { key: 'a', header: '', render: (m) => p.canManage && m.employeeId !== p.leadEmployeeId && <button className="btn btn-ghost btn-sm" onClick={() => remove.mutate(m.id)}>Remove</button> },
         ]}
       />
       <p className="faint" style={{ fontSize: 12.5, margin: 0 }}>Board access is separate: each department lead allocates people to their team board (Boards tab).</p>
@@ -347,7 +357,18 @@ function EditProject({ p, onClose }: { p: ProjectDetail; onClose: () => void }) 
   const fields: FieldDef[] = [
     { name: 'name', label: 'Project name', type: 'text', span: 2, required: true },
     { name: 'key', label: 'Task key', type: 'text', required: true, hint: 'Locked once tasks exist' },
-    { name: 'clientId', label: 'Client', type: 'select', options: opts(lk.data, 'clients'), required: true },
+    {
+      name: 'clientId',
+      label: 'Client',
+      type: 'select',
+      // The client list holds active clients only; keep this project's own client even if it was made
+      // inactive since, so the form can still be saved (L25).
+      options: [
+        ...(p.clientId && !opts(lk.data, 'clients').some((o) => o.value === p.clientId) ? [{ value: p.clientId, label: `${p.clientName} (inactive)` }] : []),
+        ...opts(lk.data, 'clients'),
+      ],
+      required: true,
+    },
     { name: 'leadEmployeeId', label: 'Project lead', type: 'select', options: opts(lk.data, 'employees'), required: true },
     { name: 'category', label: 'Category', type: 'select', options: [{ value: 'WEB', label: 'Web' }, { value: 'MOBILE', label: 'Mobile' }, { value: 'INTERNAL', label: 'Internal' }, { value: 'OTHER', label: 'Other' }], required: true },
     { name: 'startDate', label: 'Start', type: 'date', required: true },

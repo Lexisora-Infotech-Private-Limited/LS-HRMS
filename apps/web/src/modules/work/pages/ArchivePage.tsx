@@ -85,7 +85,7 @@ function ArchiveDialog({ options, onClose }: { options: { value: string; label: 
               {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
           </div>
-          <p className="faint" style={{ margin: 0, fontSize: 12.5 }}>The project becomes read-only; its documents move to the vault with “Leads only” access until you change it.</p>
+          <p className="faint" style={{ margin: 0, fontSize: 12.5 }}>The project becomes read-only. Its documents keep the project’s current vault access (Leads only unless someone changed it); you can change it on the archive page any time.</p>
         </div>
       ) : (
         <Empty>No completed projects to archive. Mark a project completed from its detail page first.</Empty>

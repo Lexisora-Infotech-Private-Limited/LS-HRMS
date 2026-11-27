@@ -46,3 +46,23 @@ export function projectIdsByEmployee(members: { projectId: string; employeeId: s
   for (const p of projects) if (p.leadEmployeeId) add(p.leadEmployeeId, p.id);
   return byEmp;
 }
+
+/**
+ * Departments whose every active member reports to `managerId` (directly or further down the chain) —
+ * apart from the manager themselves. Only departments where the manager has at least one report count.
+ * Used to scope team notices: managing one person in a department doesn't open the whole department (L10).
+ */
+export function departmentsFullyUnder(managerId: string, people: { id: string; managerId: string | null; departmentId: string | null }[]): string[] {
+  const reportsOf = new Map<string, string[]>();
+  for (const p of people) if (p.managerId) reportsOf.set(p.managerId, [...(reportsOf.get(p.managerId) ?? []), p.id]);
+  const tree = new Set<string>();
+  const queue = [...(reportsOf.get(managerId) ?? [])];
+  while (queue.length) {
+    const id = queue.shift()!;
+    if (tree.has(id) || id === managerId) continue;
+    tree.add(id);
+    queue.push(...(reportsOf.get(id) ?? []));
+  }
+  const candidates = new Set(people.filter((p) => tree.has(p.id) && p.departmentId).map((p) => p.departmentId!));
+  return [...candidates].filter((d) => people.filter((p) => p.departmentId === d).every((p) => p.id === managerId || tree.has(p.id)));
+}

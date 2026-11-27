@@ -95,7 +95,7 @@ export const lpApi = {
   team: (tab: 'PENDING' | 'HISTORY') => get<TeamRequestRow[]>('/leave/team/requests', { tab }),
   approve: (id: string, comment?: string) => post<LeaveRequestRow>(`/leave/requests/${id}/approve`, { comment }),
   reject: (id: string, comment: string) => post<LeaveRequestRow>(`/leave/requests/${id}/reject`, { comment }),
-  decideCancellation: (id: string, approve: boolean) => post<LeaveRequestRow>(`/leave/requests/${id}/cancellation/${approve ? 'approve' : 'reject'}`),
+  decideCancellation: (id: string, approve: boolean, comment?: string) => post<LeaveRequestRow>(`/leave/requests/${id}/cancellation/${approve ? 'approve' : 'reject'}`, approve ? undefined : { comment }),
   approveCompOff: (id: string) => post(`/leave/comp-off/requests/${id}/approve`, {}),
   rejectCompOff: (id: string, comment: string) => post(`/leave/comp-off/requests/${id}/reject`, { comment }),
   // comp-off — self

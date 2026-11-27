@@ -145,8 +145,8 @@ export class LeaveController {
 
   @Post('requests/:id/cancellation/reject')
   @RequirePerm('leave.approve', 'leave.manage')
-  rejectCancellation(@Param('id') id: string) {
-    return this.requests.decideCancellation(id, false);
+  rejectCancellation(@Param('id') id: string, @Body(new ZodPipe(leaveDecisionSchema)) body: { comment?: string }) {
+    return this.requests.decideCancellation(id, false, body.comment);
   }
 
   // ── team / admin ──

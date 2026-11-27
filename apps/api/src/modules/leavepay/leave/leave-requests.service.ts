@@ -673,7 +673,7 @@ export class LeaveRequestsService {
     return (await this.rows([await this.prisma.leaveRequest.findUniqueOrThrow({ where: { id }, include: requestInclude })]))[0]!;
   }
 
-  async decideCancellation(id: string, approve: boolean): Promise<LeaveRequestRow> {
+  async decideCancellation(id: string, approve: boolean, comment?: string | null): Promise<LeaveRequestRow> {
     const r = await this.load(id);
     if (r.status !== 'CANCELLATION_PENDING') throw new AppError(409, 'LEAVE_STATE', 'No cancellation is pending on this request');
     this.assertDecider(r);
@@ -682,10 +682,19 @@ export class LeaveRequestsService {
       await this.assertPayrollOpen(r);
       return this.doCancel(r, r.cancelReason ?? undefined);
     }
-    await this.prisma.leaveRequest.update({ where: { id }, data: { status: 'APPROVED', version: { increment: 1 } } });
-    await this.audit.record({ action: 'leave.request.cancel_rejected', entity: 'LeaveRequest', entityId: r.id });
+    // The comment typed in the Reject dialog is kept and sent to the employee (L21: it used to be dropped).
+    const note = comment?.trim() || null;
+    await this.prisma.leaveRequest.update({ where: { id }, data: { status: 'APPROVED', version: { increment: 1 }, ...(note ? { decisionNote: `Cancellation declined: ${note}` } : {}) } });
+    await this.audit.record({ action: 'leave.request.cancel_rejected', entity: 'LeaveRequest', entityId: r.id, meta: { comment: note } });
     const users = await this.notifications.usersForEmployees([r.employeeId]);
-    await this.notifications.notify({ userIds: users, type: 'leave.decided', title: 'Your cancellation request was declined', body: `${r.leaveType.name} · ${requestDatesLabel(r.fromDate, r.toDate, r.halfDay)} stays approved`, link: '/leave' });
+    await this.notifications.notify({
+      userIds: users,
+      type: 'leave.decided',
+      title: 'Your cancellation request was declined',
+      body: `${r.leaveType.name} · ${requestDatesLabel(r.fromDate, r.toDate, r.halfDay)} stays approved${note ? `\n“${note}”` : ''}`,
+      link: '/leave',
+      from: requireContext().userName ?? undefined,
+    });
     return (await this.rows([await this.prisma.leaveRequest.findUniqueOrThrow({ where: { id }, include: requestInclude })]))[0]!;
   }
 

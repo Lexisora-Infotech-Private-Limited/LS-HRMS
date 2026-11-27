@@ -76,6 +76,15 @@ export default function FeedPage() {
         {canPublish && <Composer drafts={feed.data?.pages[0]?.drafts ?? 0} />}
         {feed.error && <ErrorBlock error={feed.error} retry={() => void feed.refetch()} />}
         {feed.isLoading && <Loading />}
+        {/* A shared link to a post that was deleted or archived (or isn't visible to me): say so (L5). */}
+        {focusId && !focusLoaded && focus.isError && (
+          <div className="note row-between" role="status">
+            <span>This post was removed or isn’t available any more.</span>
+            <button className="wp-link" onClick={() => setParams({})}>
+              Back to the feed
+            </button>
+          </div>
+        )}
         {focusId && !focusLoaded && focus.data && (
           <div className="stack" style={{ gap: 6 }}>
             <div className="row-between">
@@ -189,9 +198,13 @@ function Composer({ drafts, editing, onDone }: { drafts: number; editing?: FeedP
     }
     setBusy(action);
     try {
+      const created = !d.id;
       const saved = d.id ? await wpApi.updatePost(d.id, payload(live ? 'publish' : action)) : await wpApi.createPost(payload(action));
       setDirty(false);
-      void qc.invalidateQueries({ queryKey: wpKeys.feed });
+      // The 10-second autosave of an existing draft changes nothing on the feed: don't reload every loaded
+      // page each time (L6). A new draft only moves the "Drafts" count, which the first page carries.
+      if (!silent) void qc.invalidateQueries({ queryKey: wpKeys.feed });
+      else if (created) void qc.invalidateQueries({ queryKey: [...wpKeys.feed, 'list'], refetchType: 'none' });
       if (live) {
         toast('Post updated');
         onDone?.();

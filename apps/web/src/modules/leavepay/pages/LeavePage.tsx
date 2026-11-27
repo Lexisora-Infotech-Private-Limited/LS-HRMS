@@ -216,9 +216,10 @@ const addDaysKey = (key: string, n: number) => new Date(new Date(`${key}T00:00:0
 
 function ApplyModal({ onClose }: { onClose: () => void }) {
   const look = useLookups(['leaveTypes', 'employees']);
-  const types = opts(look.data, 'leaveTypes');
   const typeRows = useQuery({ queryKey: lpKeys.types, queryFn: lpApi.types });
   const balances = useQuery({ queryKey: lpKeys.balances, queryFn: lpApi.balances });
+  // Only the types that apply to me (my balances list): an intern sees Sick leave, not Earned / Casual… (L20).
+  const types = opts(look.data, 'leaveTypes').filter((t) => !balances.data || balances.data.some((b) => b.leaveTypeId === t.value));
   const [v, setV] = useState({ leaveTypeId: '', fromDate: '', toDate: '', halfDay: 'NONE' as LeaveApplyInput['halfDay'], notify: '', reason: '', acceptLop: false });
   const set = (k: keyof typeof v, val: any) => setV((s) => ({ ...s, [k]: val }));
   const [doc, setDoc] = useState<PickedDoc | null>(null);
@@ -233,7 +234,8 @@ function ApplyModal({ onClose }: { onClose: () => void }) {
       .catch((e: Error) => setDoc((d) => (d?.file === file ? { ...d, uploading: false, error: e.message || 'Upload failed · try again' } : d)));
   };
   useEffect(() => {
-    if (!v.leaveTypeId && types.length) set('leaveTypeId', types[0]!.value);
+    // Pick the first type that applies (also when the list narrows once my balances arrive).
+    if (types.length && !types.some((t) => t.value === v.leaveTypeId)) set('leaveTypeId', types[0]!.value);
   }, [types, v.leaveTypeId]);
   const backdateLimitDays = typeRows.data?.find((t) => t.id === v.leaveTypeId)?.backdateLimitDays ?? 0;
   const minFromDate = addDaysKey(istToday(), -backdateLimitDays);
@@ -242,12 +244,15 @@ function ApplyModal({ onClose }: { onClose: () => void }) {
     if (v.fromDate && v.fromDate < minFromDate) set('fromDate', minFromDate);
   }, [minFromDate, v.fromDate]);
   const single = !!v.fromDate && (v.fromDate === v.toDate || !v.toDate);
+  // A type without half days (e.g. Comp-off) turns an earlier "First half" back into a full day (L19).
+  const halfAllowed = balances.data?.find((b) => b.leaveTypeId === v.leaveTypeId)?.allowHalfDay !== false;
+  const halfDay: LeaveApplyInput['halfDay'] = single && halfAllowed ? v.halfDay : 'NONE';
   const body: LeaveApplyInput | null = useMemo(() => {
     if (!v.leaveTypeId || !v.fromDate) return null;
     const to = v.toDate || v.fromDate;
     if (to < v.fromDate) return null;
-    return { leaveTypeId: v.leaveTypeId, fromDate: v.fromDate, toDate: to, halfDay: single ? v.halfDay : 'NONE', fromSession: 'FULL', toSession: 'FULL', notifyEmployeeIds: v.notify ? [v.notify] : [], reason: v.reason.trim(), acceptLop: v.acceptLop, attachmentFileId: doc?.id ?? null };
-  }, [v, single, doc?.id]);
+    return { leaveTypeId: v.leaveTypeId, fromDate: v.fromDate, toDate: to, halfDay, fromSession: 'FULL', toSession: 'FULL', notifyEmployeeIds: v.notify ? [v.notify] : [], reason: v.reason.trim(), acceptLop: v.acceptLop, attachmentFileId: doc?.id ?? null };
+  }, [v, halfDay, doc?.id]);
   const preview = useQuery({
     queryKey: ['leavepay', 'preview', body && { ...body, reason: '' }],
     queryFn: () => lpApi.preview(body!),
@@ -289,7 +294,16 @@ function ApplyModal({ onClose }: { onClose: () => void }) {
       <form className="form-grid" onSubmit={(e) => e.preventDefault()}>
         <div className="field span-2">
           <label htmlFor="lv-type">Leave type</label>
-          <select id="lv-type" className="input" value={v.leaveTypeId} onChange={(e) => set('leaveTypeId', e.target.value)}>
+          <select
+            id="lv-type"
+            className="input"
+            value={v.leaveTypeId}
+            onChange={(e) => {
+              const id = e.target.value;
+              const allows = balances.data?.find((b) => b.leaveTypeId === id)?.allowHalfDay !== false;
+              setV((s) => ({ ...s, leaveTypeId: id, halfDay: allows ? s.halfDay : 'NONE' }));
+            }}
+          >
             {types.map((t) => (
               <option key={t.value} value={t.value}>{t.label}</option>
             ))}
@@ -307,7 +321,7 @@ function ApplyModal({ onClose }: { onClose: () => void }) {
         </div>
         <div className="field">
           <label htmlFor="lv-half">Half day</label>
-          <select id="lv-half" className="input" value={single ? v.halfDay : 'NONE'} disabled={!single || bal?.allowHalfDay === false} onChange={(e) => set('halfDay', e.target.value)}>
+          <select id="lv-half" className="input" value={halfDay} disabled={!single || !halfAllowed} onChange={(e) => set('halfDay', e.target.value)}>
             {HALF_DAY_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>{o.label}</option>
             ))}

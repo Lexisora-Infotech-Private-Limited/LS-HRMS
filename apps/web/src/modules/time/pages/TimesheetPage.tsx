@@ -71,10 +71,11 @@ export default function TimesheetPage() {
             )}
             <button className="btn btn-secondary" onClick={() => setOutside(true)} disabled={!w.editable}>Log outside-hours task</button>
             {w.canRecall && <button className="btn btn-ghost" onClick={() => recall.mutate(undefined)} disabled={recall.isPending}>Recall</button>}
-            <button className="btn btn-primary" onClick={() => void submit()} disabled={!w.canSubmit || busy}>{w.submitLabel}</button>
+            <button className="btn btn-primary" onClick={() => void submit()} disabled={!w.canSubmit || busy} title={w.submitHint ?? undefined}>{w.submitLabel}</button>
           </>
         }
       />
+      {w.submitHint && <div className="faint" style={{ fontSize: 13, marginTop: -8, textAlign: 'right' }}>{w.submitHint}</div>}
 
       <div className="row-between" style={{ flexWrap: 'wrap', gap: 10 }}>
         <div className="time-chain">
@@ -315,7 +316,11 @@ function CellEditor({ week, edit, rules, onClose, onSaved }: { week: TimesheetWe
   });
   const minutes = parseHmm(value);
   const changed = minutes !== null && minutes !== cell.claimed;
-  const needsReason = changed && (cell.tracked > 0 || minutes! > 0);
+  // Same rule as the server (timesheet-calc reasonRequired): a day with tracker data always needs a reason;
+  // a manual day only when its total would go above the attendance worked minutes (L17).
+  const dayTracked = week.lines.some((l) => (l.cells[edit.idx]?.tracked ?? 0) > 0 || (l.cells[edit.idx]?.idleAsWork ?? 0) > 0);
+  const dayAfter = week.lines.reduce((s, l) => s + (l.cells[edit.idx]?.claimed ?? 0), 0) - cell.claimed + (minutes ?? 0);
+  const needsReason = changed && (dayTracked || dayAfter > day.attendanceWorkedMinutes);
   function go() {
     if (minutes === null) return setErr('Use H:MM, e.g. 4:30');
     if (needsReason && reason.trim().length < 10) return setErr('Edits need a reason (at least 10 characters)');
@@ -360,7 +365,13 @@ function CellEditor({ week, edit, rules, onClose, onSaved }: { week: TimesheetWe
         <div className="field">
           <label>Reason{needsReason ? '' : ' (optional)'}</label>
           <textarea className="input" value={reason} placeholder={offDay ? 'e.g. Called in for the production release' : 'Why does this differ from the tracker?'} onChange={(e) => setReason(e.target.value)} />
-          <div className="field-hint">Anything above tracked time waits for your Project Lead and counts in your total once accepted.</div>
+          <div className="field-hint">
+            {needsReason
+              ? dayTracked
+                ? 'Edits to tracked time need a reason (at least 10 characters).'
+                : `More than your attended ${hmm(day.attendanceWorkedMinutes)} that day needs a reason (at least 10 characters).`
+              : 'Anything above tracked time waits for your Project Lead and counts in your total once accepted.'}
+          </div>
         </div>
         {err && <div className="field-error">{err}</div>}
       </div>

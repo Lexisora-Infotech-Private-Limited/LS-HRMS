@@ -29,7 +29,8 @@ function Body({ t, onClose }: { t: TaskDetail; onClose: () => void }) {
   const move = useAction((to: TaskStatusKey) => workApi.moveTask(t.id, { toStatus: to, version: t.version }), { success: (r) => r.message, invalidate: [...inv, ['work', 'projects']] });
   const addComment = useAction(() => workApi.comment(t.id, comment.trim()), { success: 'Comment added', invalidate: inv, onSuccess: () => setComment('') });
   const retry = useAction(() => workApi.retryGit(t.id), { success: (r) => r.message ?? 'GitLab sync retried', invalidate: inv });
-  const cancel = useAction(() => workApi.cancelTask(t.id), { success: `${t.key} cancelled`, invalidate: inv, onSuccess: onClose });
+  // Cancelling changes the project's progress too: refresh the project list / page (L30).
+  const cancel = useAction(() => workApi.cancelTask(t.id), { success: `${t.key} cancelled`, invalidate: [...inv, workKeys.projects, workKeys.project(t.projectId)], onSuccess: onClose });
   const ro = !t.canEdit;
   return (
     <>

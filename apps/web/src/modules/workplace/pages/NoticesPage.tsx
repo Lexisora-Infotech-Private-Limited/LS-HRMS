@@ -54,7 +54,8 @@ export default function NoticesPage() {
   const tabs: { value: PageTab; label: string }[] = [
     { value: 'all', label: 'All' },
     { value: 'global', label: 'Global' },
-    { value: 'teams', label: 'My teams' },
+    // HR / Admin see every team notice there (L7); everyone else, the notices for their own teams.
+    { value: 'teams', label: can('notices.publish.global') ? 'Team notices' : 'My teams' },
     ...(canPublish ? [{ value: 'drafts' as const, label: `Drafts & scheduled${counts?.drafts ? ` · ${counts.drafts}` : ''}` }] : []),
     { value: 'events', label: 'Events' },
     ...(can('quotes.manage') ? [{ value: 'quotes' as const, label: 'Thought of the day' }] : []),

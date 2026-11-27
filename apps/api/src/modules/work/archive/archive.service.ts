@@ -46,16 +46,22 @@ export class ArchiveService {
     return {};
   }
 
-  private searchWhere(q?: string): Prisma.ProjectWhereInput {
-    if (!q) return {};
-    const t = q.trim();
+  private async searchWhere(q?: string): Promise<Prisma.ProjectWhereInput> {
+    const t = q?.trim();
+    if (!t) return {};
+    // Tech stack is a text array (no "contains" on items in Prisma): match parts of a name in memory, so
+    // "node" finds "Node.js" and "react" finds "React Native" (L31). Archived projects are few.
+    const needle = t.toLowerCase();
+    const techHits = (await this.prisma.project.findMany({ where: { status: 'ARCHIVED' }, select: { id: true, techStack: true } }))
+      .filter((p) => p.techStack.some((s) => s.toLowerCase().includes(needle)))
+      .map((p) => p.id);
     return {
       OR: [
         { name: { contains: t, mode: 'insensitive' } },
         { key: { contains: t, mode: 'insensitive' } },
         { description: { contains: t, mode: 'insensitive' } },
         { client: { name: { contains: t, mode: 'insensitive' } } },
-        { techStack: { hasSome: [t, t.toLowerCase(), t[0]!.toUpperCase() + t.slice(1).toLowerCase(), t.toUpperCase()] } },
+        ...(techHits.length ? [{ id: { in: techHits } }] : []),
         { documents: { some: { title: { contains: t, mode: 'insensitive' } } } },
       ],
     };
@@ -88,7 +94,7 @@ export class ArchiveService {
   }
 
   async list(q: { page: number; pageSize: number; q?: string; tab: Tab }) {
-    const base: Prisma.ProjectWhereInput = { AND: [{ status: 'ARCHIVED' }, this.accessWhere(), this.searchWhere(q.q)] };
+    const base: Prisma.ProjectWhereInput = { AND: [{ status: 'ARCHIVED' }, this.accessWhere(), await this.searchWhere(q.q)] };
     const where: Prisma.ProjectWhereInput = { AND: [base, this.tabWhere(q.tab)] };
     const [rows, total, all, web, mobile, internal] = await Promise.all([
       this.prisma.project.findMany({ where, include: { client: true }, orderBy: [{ closedAt: 'desc' }, { name: 'asc' }], skip: (q.page - 1) * q.pageSize, take: q.pageSize }),
