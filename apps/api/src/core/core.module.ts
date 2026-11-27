@@ -26,6 +26,8 @@ import { SequenceService } from './registry/sequence.service';
 import { EventsService } from './registry/events.service';
 import { ApprovalCountsService, RegistriesController, SearchService } from './registry/registries';
 import { PermissionSyncService } from './registry/permission-sync.service';
+import { RegionController, RegionService } from './region/region.service';
+import { RegionCronService } from './region/region-cron.service';
 
 const SHARED = [
   LookupsService,
@@ -46,15 +48,17 @@ const SHARED = [
   JobsService,
   PdfService,
   OrgService,
+  RegionService,
 ];
 
 /** Cross-cutting services available to every domain module without importing. */
 @Global()
 @Module({
   imports: [PrismaModule, JwtModule.register({})],
-  controllers: [AuthController, NotificationsController, FilesController, HealthController, LookupsController, RegistriesController],
+  controllers: [AuthController, NotificationsController, FilesController, HealthController, LookupsController, RegistriesController, RegionController],
   providers: [
     ...SHARED,
+    RegionCronService,
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
   ],

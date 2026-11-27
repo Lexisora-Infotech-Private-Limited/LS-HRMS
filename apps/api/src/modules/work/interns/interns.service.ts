@@ -12,6 +12,7 @@ import { AppError, forbidden, notFound } from '../../../core/http/errors';
 import { WorkMetricsService } from '../projects/work-metrics.service';
 import { addDays, internAccess, internDayStatus, internForbiddenFields, meanScore, nextWorkingDay, weekStartOf, type InternStatus } from '../work.rules';
 import { dateKey, dateOnly, hoursOf, istMinuteOfDay, todayKey } from '../work.util';
+import { tenantsForCron } from '../../../core/region/region-cache';
 
 type Me = { employeeId: string | null; name: string; userId: string | null; viewAll: boolean; canAssign: boolean };
 type Intern = { id: string; fullName: string; empCode: string; managerId: string | null; userId: string | null; department: { name: string } | null; employmentType: string };
@@ -344,7 +345,7 @@ export class InternsService {
   /** 00:05 IST: tasks of earlier days still open become NOT_DONE (mentor may carry them over). */
   @Cron('5 0 * * *', { timeZone: 'Asia/Kolkata' })
   async closeYesterday() {
-    const tenants = await this.prisma.raw.tenant.findMany({ select: { id: true } });
+    const tenants = tenantsForCron(await this.prisma.raw.tenant.findMany({ select: { id: true } }));
     for (const tn of tenants) {
       await runAsTenant(tn.id, async () => {
         const r = await this.prisma.internTask.updateMany({ where: { date: { lt: dateOnly(todayKey()) }, status: { in: ['ASSIGNED', 'IN_PROGRESS'] } }, data: { status: 'NOT_DONE' } });
@@ -356,7 +357,7 @@ export class InternsService {
   /** 18:00 IST: remind interns about today's open tasks. */
   @Cron('0 18 * * 1-6', { timeZone: 'Asia/Kolkata' })
   async eveningReminder() {
-    const tenants = await this.prisma.raw.tenant.findMany({ select: { id: true } });
+    const tenants = tenantsForCron(await this.prisma.raw.tenant.findMany({ select: { id: true } }));
     for (const tn of tenants) {
       await runAsTenant(tn.id, async () => {
         const open = await this.prisma.internTask.findMany({ where: { date: dateOnly(todayKey()), status: { in: ['ASSIGNED', 'IN_PROGRESS'] } }, select: { internEmployeeId: true } });

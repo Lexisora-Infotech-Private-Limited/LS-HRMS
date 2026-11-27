@@ -18,6 +18,7 @@ import { MastersService } from './services/masters.service';
 import { PolicyService } from './services/policy.service';
 import { RegularizationService } from './services/regularization.service';
 import { TimesheetService } from './services/timesheet.service';
+import { tenantsForCron } from '../../core/region/region-cache';
 
 /**
  * Registries, event consumers, jobs and schedules of the time domain.
@@ -118,7 +119,7 @@ export class TimeRegistry implements OnModuleInit, OnApplicationBootstrap {
   }
 
   private async forEachTenant(fn: () => Promise<unknown>) {
-    const tenants = await this.prisma.raw.tenant.findMany({ select: { id: true } });
+    const tenants = tenantsForCron(await this.prisma.raw.tenant.findMany({ select: { id: true } }));
     for (const t of tenants) {
       try {
         await runAsTenant(t.id, fn);

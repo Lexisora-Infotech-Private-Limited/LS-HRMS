@@ -1,3 +1,4 @@
+import { zoneOffsetMinutes } from '@lexisora/shared';
 import { useState } from 'react';
 import type { BiometricDeviceRow, EnrollmentRow, RawLogRow } from '@lexisora/shared';
 import { FormModal, type FieldDef } from '@/components/form';
@@ -318,7 +319,7 @@ function Logs({ deviceId, setDeviceId }: { deviceId: string; setDeviceId: (v: st
 }
 
 function nowLocal(): string {
-  return new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 16);
+  return new Date(Date.now() + zoneOffsetMinutes(new Date()) * 60_000).toISOString().slice(0, 16);
 }
 
 function Simulator() {

@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { UK_NATIONS } from './region';
+import { UK_HOLIDAY_CALENDARS } from './uk-leave';
 
 /**
  * Shared request/response contracts for the time domain (attendance, shifts, locations,
@@ -343,10 +345,12 @@ export const locationSchema = z.object({
   lat: z.coerce.number().min(-90).max(90).optional().nullable(),
   lng: z.coerce.number().min(-180).max(180).optional().nullable(),
   geoFenceWebPunch: z.boolean().optional(),
+  /** UK tenants only: nation whose bank holidays apply (India never sends it). */
+  ukNation: z.enum(UK_NATIONS).optional().nullable(),
 });
 export type LocationInput = z.infer<typeof locationSchema>;
 export const assignLocationSchema = z.object({ employeeIds: z.array(z.string()).min(1, 'Select employees') });
-export type LocationRow = { id: string; name: string; address: string | null; geoRadiusM: number | null; geoRadius: string; punchMode: string; punchModeLabel: string; isRemote: boolean; isSystem: boolean; employees: number; lat: number | null; lng: number | null; geoFenceWebPunch: boolean };
+export type LocationRow = { id: string; name: string; address: string | null; geoRadiusM: number | null; geoRadius: string; punchMode: string; punchModeLabel: string; isRemote: boolean; isSystem: boolean; employees: number; lat: number | null; lng: number | null; geoFenceWebPunch: boolean; ukNation?: string | null };
 export type LocationDetail = LocationRow & { employeeList: { id: string; name: string; empCode: string; department: string | null; workMode: string }[]; devices: BiometricDeviceRow[] };
 
 // ── Attendance policy ─────────────────────────────────────────────────────────
@@ -443,7 +447,8 @@ export type HolidayInput = z.infer<typeof holidaySchema>;
 export function holidayLocationsOverlap(a: readonly string[], b: readonly string[]): boolean {
   return !a.length || !b.length || a.some((x) => b.includes(x));
 }
-export const holidayImportSchema = z.object({ year: z.coerce.number().int().min(2000).max(2100), calendar: z.enum(['National', 'Gujarat', 'Maharashtra']) });
+/** India lists; UK tenants import the UK_HOLIDAY_CALENDARS instead (checked by region on the API). */
+export const holidayImportSchema = z.object({ year: z.coerce.number().int().min(2000).max(2100), calendar: z.enum(['National', 'Gujarat', 'Maharashtra', ...UK_HOLIDAY_CALENDARS]) });
 export const holidayCopySchema = z.object({ fromYear: z.coerce.number().int(), toYear: z.coerce.number().int() });
 export type HolidayRow = { id: string; date: string; dateLabel: string; weekday: string; name: string; type: 'MANDATORY' | 'OPTIONAL'; calendar: string; locations: string; locationIds: string[] };
 /** Grouped for "Upcoming" lists: Diwali 8–9 Nov. */

@@ -1,3 +1,4 @@
+import { cacheRegion } from '../../../core/region/region-cache';
 import { Body, Controller, Get, HttpCode, Injectable, Param, Post, Query, Res } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import type { Response } from 'express';
@@ -192,7 +193,7 @@ export class TenantsService {
     const adminName = input.adminName?.trim() || nameFromEmail(input.adminEmail);
     const actor = this.actor();
 
-    const { tenant, admin } = await this.db.$transaction(async (tx) => {
+    const created = await this.db.$transaction(async (tx) => {
       const tenant = await tx.tenant.create({
         data: {
           name: input.company,
@@ -202,7 +203,9 @@ export class TenantsService {
           status: paid ? 'ACTIVE' : 'FREE_TIER',
           stateCode: input.stateCode ?? null,
           stateName: input.stateCode ? (GST_STATE_NAMES[input.stateCode] ?? null) : null,
-          gstin: input.gstin ?? null,
+          gstin: input.region === 'GB' ? null : (input.gstin ?? null),
+          region: input.region ?? 'IN',
+          timezone: input.region === 'GB' ? 'Europe/London' : 'Asia/Kolkata',
         },
       });
       const roles: Record<string, string> = {};
@@ -234,6 +237,8 @@ export class TenantsService {
       });
       return { tenant, admin };
     });
+    const { tenant, admin } = created;
+    cacheRegion(tenant.id, tenant.region);
 
     const label = planLabel(input.planCode, cycle);
     if (input.planCode === 'GROWTH') await runAsTenant(tenant.id, () => this.billing.issueOpeningInvoice());

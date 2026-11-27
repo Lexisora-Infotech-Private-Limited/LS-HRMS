@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import type { PayrollItem, PayrollRun } from '@prisma/client';
 import {
   PAYROLL_ITEM_STATUS_LABEL,
+  formatINR,
   type AdjustmentInput,
   type AdjustmentRow,
   type PayrollItemDetail,
@@ -29,6 +30,8 @@ import { GATE_OK } from './payroll-days';
 import { ADJ_LABEL, PayrollEngineService, type EngineRow } from './payroll-engine.service';
 import { PayslipService } from './payslip.service';
 import { PeriodLockPort } from './period-lock.port';
+import { UkPayrollService } from './uk/uk-payroll.service';
+import { currentRegion } from '../../../core/region/region-cache';
 
 const JOB_CALC = 'leavepay.payroll.calculate';
 const JOB_PUBLISH = 'leavepay.payslips.publish';
@@ -81,10 +84,19 @@ function engineToRow(r: EngineRow): PayrollItemRow {
   });
 }
 
+/** Dry-run previews per tenant + region + period (a region switch must never serve the other region's figures). */
+const PREVIEW_CACHE = new Map<string, { at: number; rows: EngineRow[] }>();
+const previewKey = (period: string) => `${currentTenantId()}:${currentRegion()}:${period}`;
+/** Drop every cached preview of the current tenant (after UK payroll details or rates change). */
+export function clearPayrollPreview(): void {
+  const prefix = `${currentTenantId()}:`;
+  for (const k of [...PREVIEW_CACHE.keys()]) if (k.startsWith(prefix)) PREVIEW_CACHE.delete(k);
+}
+
 @Injectable()
 export class PayrollService implements OnModuleInit {
   private readonly log = new Logger('Payroll');
-  private readonly previewCache = new Map<string, { at: number; rows: EngineRow[] }>();
+  private readonly previewCache = PREVIEW_CACHE;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -98,6 +110,7 @@ export class PayrollService implements OnModuleInit {
     private readonly storage: StorageService,
     private readonly crypto: CryptoService,
     private readonly ledger: LeaveLedgerService,
+    private readonly uk: UkPayrollService,
   ) {}
 
   onModuleInit() {
@@ -153,7 +166,7 @@ export class PayrollService implements OnModuleInit {
   }
 
   private async previewRows(period: string, refresh = false): Promise<EngineRow[]> {
-    const key = `${currentTenantId()}:${period}`;
+    const key = previewKey(period);
     const hit = this.previewCache.get(key);
     if (hit && !refresh && Date.now() - hit.at < PREVIEW_TTL_MS) return hit.rows;
     const rows = await this.engine.compute({ period, lockDate: monthBounds(period).end, includeIdle: true });
@@ -208,15 +221,18 @@ export class PayrollService implements OnModuleInit {
     const pendingLeave = await this.prisma.leaveRequest.count({ where: { status: 'PENDING', fromDate: { lte: dd(b.end) }, toDate: { gte: dd(b.start) } } });
     if (pendingLeave) out.push({ key: 'leave', text: `${pendingLeave} leave ${pendingLeave === 1 ? 'request' : 'requests'} pending in period`, tone: 'outline' });
     const ids = rows.map((r) => r.employeeId);
-    const noBank = await this.prisma.employee.count({ where: { id: { in: ids }, OR: [{ bankAccountEnc: null }, { bankIfsc: null }] } });
+    const isUk = currentRegion() === 'GB';
+    const noBank = await this.prisma.employee.count({ where: { id: { in: ids }, OR: [{ bankAccountEnc: null }, isUk ? { bankSortCode: null } : { bankIfsc: null }] } });
     if (noBank) out.push({ key: 'bank', text: `${noBank} ${noBank === 1 ? 'employee' : 'employees'} missing bank details`, tone: 'outline' });
     const noSalary = rows.filter((r) => r.errors.includes('No salary structure')).length;
+    const noUk = isUk ? rows.filter((r) => r.errors.some((x) => x.startsWith('UK payroll details missing'))).length : 0;
+    if (noUk) out.push({ key: 'uk-profile', text: `${noUk} ${noUk === 1 ? 'employee needs' : 'employees need'} a tax code and NI category`, tone: 'danger' });
     if (noSalary) out.push({ key: 'salary', text: `${noSalary} ${noSalary === 1 ? 'employee' : 'employees'} without salary structure`, tone: 'danger' });
     const joiners = await this.prisma.employee.count({ where: { joiningDate: { gte: dd(b.start), lte: dd(b.end) } } });
     const exits = await this.prisma.employee.count({ where: { exitDate: { gte: dd(b.start), lte: dd(b.end) } } });
     if (joiners || exits) out.push({ key: 'joiners', text: `New joiners ${joiners} · Exits ${exits}`, tone: 'neutral' });
     const adj = await this.prisma.payrollAdjustment.findMany({ where: { status: 'PENDING', forPeriod: { lte: period } }, select: { amountPaise: true } });
-    if (adj.length) out.push({ key: 'adjustments', text: `${adj.length} pending ${adj.length === 1 ? 'adjustment' : 'adjustments'} (₹ ${Math.round(adj.reduce((s, a) => s + a.amountPaise, 0) / 100).toLocaleString('en-IN')})`, tone: 'neutral' });
+    if (adj.length) out.push({ key: 'adjustments', text: `${adj.length} pending ${adj.length === 1 ? 'adjustment' : 'adjustments'} (${isUk ? formatINR(adj.reduce((s, a) => s + a.amountPaise, 0)) : `₹ ${Math.round(adj.reduce((s, a) => s + a.amountPaise, 0) / 100).toLocaleString('en-IN')}`})`, tone: 'neutral' });
     const holidays = await this.prisma.holiday.count({ where: { date: { gte: dd(`${b.year}-01-01`), lte: dd(`${b.year}-12-31`) } } });
     if (!holidays) out.push({ key: 'holidays', text: `Holiday calendar for ${b.year} is empty`, tone: 'outline' });
     return out;
@@ -227,7 +243,7 @@ export class PayrollService implements OnModuleInit {
     if (!i) throw notFound('Payroll item');
     const slip = await this.prisma.payslip.findUnique({ where: { itemId: i.id }, select: { id: true } });
     const row = toItemRow({ ...i, name: i.employee.fullName, code: i.employee.empCode, department: i.employee.department?.name ?? null });
-    const money = (p: number) => `₹ ${Math.round(p / 100).toLocaleString('en-IN')}`;
+    const money = (p: number) => (currentRegion() === 'GB' ? formatINR(p, { decimals: true }) : `₹ ${Math.round(p / 100).toLocaleString('en-IN')}`);
     return {
       ...row,
       runId: i.runId,
@@ -294,7 +310,7 @@ export class PayrollService implements OnModuleInit {
     const warn = await this.lockPort.lock(input.period, input.attendanceLockDate, run.id);
     if (warn) await this.prisma.payrollRun.update({ where: { id: run.id }, data: { lastError: warn } });
     await this.audit.record({ action: 'payroll.run.created', entity: 'PayrollRun', entityId: run.id, meta: { period: input.period, lock: input.attendanceLockDate, idle: input.includeIdleDeduction, mode: input.pendingTimesheetMode } });
-    this.previewCache.delete(`${currentTenantId()}:${input.period}`);
+    this.previewCache.delete(previewKey(input.period));
     await this.jobs.enqueue(JOB_CALC, { tenantId: currentTenantId(), runId: run.id, calcVersion: 1 });
     return this.runView(await this.loadRun(run.id), null);
   }
@@ -448,6 +464,7 @@ export class PayrollService implements OnModuleInit {
       if (adjIds.length) await this.prisma.payrollAdjustment.updateMany({ where: { id: { in: adjIds } }, data: { status: 'APPLIED', appliedRunId: id } });
     }
     if (run.runType === 'REGULAR') await this.bookLatePenalties(run, finals);
+    if (currentRegion() === 'GB') await this.uk.afterFinalize(run, finals);
     const saved = await this.aggregate(id, { status: 'FINALIZED', finalizedAt: new Date(), finalizedByName: ctx.userName ?? 'HR' });
     await this.audit.record({ action: 'payroll.run.finalized', entity: 'PayrollRun', entityId: id, meta: { period: run.period, employees: finals.length, netPaise: saved.netPaise } });
     this.events.emit('payroll.finalized', { runId: id, period: run.period, totals: { grossPaise: saved.grossPaise, netPaise: saved.netPaise, deductionsPaise: saved.deductionsPaise, employerPfPaise: saved.employerPfPaise } });
@@ -487,7 +504,7 @@ export class PayrollService implements OnModuleInit {
     await this.prisma.payrollRun.update({ where: { id }, data: { status: 'CANCELLED', cancelReason: reason, calcVersion: { increment: 1 } } });
     await this.lockPort.unlock(run.period, `Payroll run voided: ${reason}`);
     await this.audit.record({ action: 'payroll.run.cancelled', entity: 'PayrollRun', entityId: id, meta: { reason } });
-    this.previewCache.delete(`${currentTenantId()}:${run.period}`);
+    this.previewCache.delete(previewKey(run.period));
     return { ok: true };
   }
 
@@ -507,10 +524,13 @@ export class PayrollService implements OnModuleInit {
     if (!['FINALIZED', 'PAID'].includes(run.status)) throw new AppError(409, 'RUN_STATE', 'Finalize the run before generating the bank file');
     const items = await this.prisma.payrollItem.findMany({ where: { runId: id, status: { in: ['FINALIZED', 'PAID'] } }, include: { employee: { include: { leavepayPayrollProfile: true } } }, orderBy: { employee: { fullName: 'asc' } } });
     const esc = (s: string) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
-    const lines = ['Beneficiary Name,Account Number,IFSC,Amount,Payment Date,Narration,Employee ID'];
-    const excluded: { employeeId: string; name: string; reason: string }[] = [];
+    let lines = ['Beneficiary Name,Account Number,IFSC,Amount,Payment Date,Narration,Employee ID'];
+    let excluded: { employeeId: string; name: string; reason: string }[] = [];
     let total = 0;
-    for (const i of items) {
+    // UK tenants: sort code + account number file instead of the IFSC/NEFT file.
+    const ukFile = currentRegion() === 'GB' ? this.uk.bankCsv(run, items) : null;
+    if (ukFile) ({ lines, excluded, total } = ukFile);
+    for (const i of ukFile ? [] : items) {
       const e = i.employee;
       const mode = e.leavepayPayrollProfile?.paymentMode ?? 'BANK_TRANSFER';
       if (i.netPaise <= 0) continue;
@@ -589,6 +609,6 @@ export class PayrollService implements OnModuleInit {
       const item = await this.prisma.payrollItem.findFirst({ where: { runId: run.id, employeeId, status: 'TIMESHEET_PENDING' } });
       if (item) await this.calculateRun(run.id, run.calcVersion, [employeeId]);
     }
-    for (const p of periods) this.previewCache.delete(`${currentTenantId()}:${p}`);
+    for (const p of periods) this.previewCache.delete(previewKey(p));
   }
 }

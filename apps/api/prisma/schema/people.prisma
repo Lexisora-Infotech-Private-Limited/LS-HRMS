@@ -883,3 +883,40 @@ model VCardShare {
 
   @@index([tenantId, employeeId, createdAt])
 }
+
+// ── UK right to work (region GB) ───────────────────────────────────────────────
+/// One right-to-work check of an employee or offered candidate (UK tenants). The latest
+/// check per person is the current one; a time-limited result needs a follow-up check
+/// before `permissionExpiresOn`.
+model RightToWorkCheck {
+  id                  String    @id @default(cuid())
+  tenantId            String
+  employeeId          String
+  /// SHARE_CODE (Home Office online check) | IDSP (certified digital identity provider, British/Irish passports) | MANUAL (original documents seen)
+  method              String
+  /// e.g. British passport, Irish passport, eVisa (Skilled Worker), EU Settlement Scheme, BRP
+  documentType        String
+  /// Home Office share code (online checks only)
+  shareCode           String?
+  /// UNLIMITED | TIME_LIMITED | NO_RIGHT
+  result              String
+  /// Date the permission ends (time-limited only)
+  permissionExpiresOn DateTime? @db.Date
+  /// When the follow-up check is due (defaults to the expiry date)
+  followUpOn          DateTime? @db.Date
+  /// Date the check was done (must be on or before the first working day)
+  checkedOn           DateTime  @db.Date
+  checkedById         String?
+  /// Evidence copy (PDF/scan) kept for employment + 2 years
+  evidenceFileId      String?
+  /// Sponsored worker (Skilled Worker etc.): reporting duties apply
+  sponsored           Boolean   @default(false)
+  notes               String?
+  /// Set when a newer check replaces this one
+  supersededAt        DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([tenantId, employeeId])
+  @@index([tenantId, followUpOn])
+}

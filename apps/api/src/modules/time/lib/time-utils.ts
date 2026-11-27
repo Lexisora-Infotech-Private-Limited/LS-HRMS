@@ -1,8 +1,13 @@
+import { activeTimezone, zoneOffsetMinutes, zonedInstant } from '@lexisora/shared';
+
 /**
- * Date helpers for the time domain. Business dates are IST calendar days stored in
- * `@db.Date` columns as UTC midnight of that IST date. IST has no DST (+05:30 fixed).
+ * Date helpers for the time domain. Business dates are calendar days in the tenant's time
+ * zone stored in `@db.Date` columns as UTC midnight of that date. India (IST, fixed +05:30,
+ * no DST) uses the original fixed-offset maths; UK tenants use Europe/London with DST.
+ * The `ist*` names are kept so callers did not change.
  */
 export const IST_OFFSET_MIN = 330;
+const ACTIVE_IS_IST = () => activeTimezone() === 'Asia/Kolkata';
 const DAY_MS = 86_400_000;
 export const DOW_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MON_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -19,17 +24,20 @@ export function keyOf(d: Date): string {
 
 /** Instant → IST business-day key. */
 export function istKeyOf(instant: Date): string {
-  return keyOf(new Date(instant.getTime() + IST_OFFSET_MIN * 60_000));
+  const off = ACTIVE_IS_IST() ? IST_OFFSET_MIN : zoneOffsetMinutes(instant);
+  return keyOf(new Date(instant.getTime() + off * 60_000));
 }
 
 /** Minutes since IST midnight for an instant. */
 export function istMinuteOf(instant: Date): number {
-  const ms = (instant.getTime() + IST_OFFSET_MIN * 60_000) % DAY_MS;
+  const off = ACTIVE_IS_IST() ? IST_OFFSET_MIN : zoneOffsetMinutes(instant);
+  const ms = (((instant.getTime() + off * 60_000) % DAY_MS) + DAY_MS) % DAY_MS;
   return Math.floor(ms / 60_000);
 }
 
 /** IST date key + minute-of-day → instant. */
 export function istInstant(key: string, minute: number): Date {
+  if (!ACTIVE_IS_IST()) return zonedInstant(key, minute);
   return new Date(dateOf(key).getTime() + (minute - IST_OFFSET_MIN) * 60_000);
 }
 

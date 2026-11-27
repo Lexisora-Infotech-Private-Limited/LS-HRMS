@@ -1,4 +1,7 @@
-import { istDateKey } from '@lexisora/shared';
+import { activeTimezone, istDateKey, zoneOffsetMinutes, zonedInstant } from '@lexisora/shared';
+
+/** Business-zone offset (fixed IST for India; Europe/London with DST for UK tenants). */
+const offsetAt = (d: Date): number => (activeTimezone() === 'Asia/Kolkata' ? IST_OFFSET_MIN : zoneOffsetMinutes(d));
 
 export const IST_OFFSET_MIN = 330;
 export const DAY_MS = 86_400_000;
@@ -24,16 +27,17 @@ export function addDaysKey(key: string, days: number): string {
 /** IST wall clock (date key + "HH:mm") → UTC instant. */
 export function istInstant(key: string, hhmm: string): Date {
   const [h, m] = hhmm.split(':').map(Number);
+  if (activeTimezone() !== 'Asia/Kolkata') return zonedInstant(key, h! * 60 + m!);
   return new Date(dateOnly(key).getTime() + ((h! * 60 + m!) - IST_OFFSET_MIN) * 60_000);
 }
 
 /** Minutes since IST midnight for an instant. */
 export function istMinuteOfDay(d: Date): number {
-  const shifted = new Date(d.getTime() + IST_OFFSET_MIN * 60_000);
+  const shifted = new Date(d.getTime() + offsetAt(d) * 60_000);
   return shifted.getUTCHours() * 60 + shifted.getUTCMinutes();
 }
 
-const fmt = (opts: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', ...opts });
+const fmt = (opts: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat('en-GB', { timeZone: activeTimezone(), ...opts });
 
 /**
  * Fixed three-letter month names: recent CLDR data renders en-GB/en-IN September as
@@ -50,7 +54,7 @@ export function longDate(d: Date): string {
 
 /** "29 Sep" (IST calendar day of the instant; date-only values keep their date). */
 export function dayMonth(d: Date): string {
-  const s = new Date(d.getTime() + IST_OFFSET_MIN * 60_000);
+  const s = new Date(d.getTime() + offsetAt(d) * 60_000);
   return `${s.getUTCDate()} ${MONTHS_SHORT[s.getUTCMonth()]}`;
 }
 
@@ -66,7 +70,7 @@ export function hhmm(d: Date): string {
 
 /** "5 pm" / "10:30 am" (IST) */
 export function shortTime(d: Date): string {
-  const s = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true }).format(d);
+  const s = new Intl.DateTimeFormat('en-US', { timeZone: activeTimezone(), hour: 'numeric', minute: '2-digit', hour12: true }).format(d);
   return s.replace(':00', '').replace(' AM', ' am').replace(' PM', ' pm');
 }
 

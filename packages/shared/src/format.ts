@@ -1,8 +1,12 @@
+import { activeCurrency, activeTimezone, formatGBP, formatGBPCompact, zonedDateKey } from './region';
+
 /**
- * Money is stored as integer paise everywhere (Int / BigInt columns). These helpers
- * format for display using Indian digit grouping (₹ 1,02,880).
+ * Money is stored as integer minor units everywhere (Int / BigInt columns): paise for India,
+ * pence for UK tenants. These helpers format for the active region: Indian digit grouping
+ * (₹ 1,02,880) in India, "£102,880" for UK tenants.
  */
 export function formatINR(paise: number | bigint | null | undefined, opts: { decimals?: boolean } = {}): string {
+  if (activeCurrency() === 'GBP') return formatGBP(paise, opts);
   if (paise === null || paise === undefined) return '—';
   const rupees = Number(paise) / 100;
   const s = new Intl.NumberFormat('en-IN', {
@@ -14,6 +18,7 @@ export function formatINR(paise: number | bigint | null | undefined, opts: { dec
 
 /** Compact lakh/crore format used on KPI tiles: ₹ 19.2 L, ₹ 1.4 Cr. */
 export function formatINRCompact(paise: number | bigint): string {
+  if (activeCurrency() === 'GBP') return formatGBPCompact(paise);
   const r = Number(paise) / 100;
   if (Math.abs(r) >= 1e7) return `₹ ${(r / 1e7).toFixed(1)} Cr`;
   if (Math.abs(r) >= 1e5) return `₹ ${(r / 1e5).toFixed(1)} L`;
@@ -21,6 +26,10 @@ export function formatINRCompact(paise: number | bigint): string {
 }
 
 export const toPaise = (rupees: number): number => Math.round(rupees * 100);
+
+/** Region-neutral names for new code (same behaviour as formatINR / formatINRCompact). */
+export const formatMoney = formatINR;
+export const formatMoneyCompact = formatINRCompact;
 
 /** Seconds → "8h 20m". */
 export function formatHm(seconds: number): string {
@@ -47,8 +56,10 @@ export function formatClock(seconds: number): string {
 
 export const TIMEZONE = 'Asia/Kolkata';
 
-/** YYYY-MM-DD for a Date in IST (the business day). */
+/** YYYY-MM-DD for a Date in the tenant's business time zone (IST for India). */
 export function istDateKey(d: Date = new Date()): string {
+  const tz = activeTimezone();
+  if (tz !== TIMEZONE) return zonedDateKey(d, tz);
   return new Intl.DateTimeFormat('en-CA', { timeZone: TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
 }
 
@@ -60,7 +71,7 @@ export const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'A
 
 /** Day, month index and year of an instant in IST. */
 export function istParts(d: Date | string): { day: number; month: number; year: number } {
-  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: TIMEZONE, year: 'numeric', month: 'numeric', day: 'numeric' }).formatToParts(new Date(d));
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: activeTimezone(), year: 'numeric', month: 'numeric', day: 'numeric' }).formatToParts(new Date(d));
   const get = (t: string) => Number(parts.find((p) => p.type === t)?.value);
   return { day: get('day'), month: get('month') - 1, year: get('year') };
 }
@@ -86,10 +97,10 @@ export function formatMonthYear(d: Date | string | null | undefined): string {
   return `${MONTHS_SHORT[p.month]} ${p.year}`;
 }
 
-/** "09:41" in IST */
+/** "09:41" in the tenant's time zone (IST for India) */
 export function formatTime(d: Date | string | null | undefined): string {
   if (!d) return '—';
-  return new Intl.DateTimeFormat('en-GB', { timeZone: TIMEZONE, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(d));
+  return new Intl.DateTimeFormat('en-GB', { timeZone: activeTimezone(), hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(d));
 }
 
 export function initialsOf(name: string): string {

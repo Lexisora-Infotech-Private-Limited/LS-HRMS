@@ -36,20 +36,20 @@ export class BillingJobs {
   }
 
   /** 01:00 IST: periods that ended → renewal invoice (gateway collection) or scheduled downgrade. */
-  @Cron('0 1 * * *', { timeZone: 'Asia/Kolkata' })
+  @Cron('0 1 * * *', { timeZone: 'Asia/Kolkata', name: 'platform.billing.renewals' })
   async renewals() {
     const n = await this.eachSubscription('billing.renewals', { planCode: 'GROWTH', status: 'ACTIVE', currentPeriodEnd: { lt: new Date() } }, (s) => this.billing.renewOrDowngrade(s));
     if (n) this.log.log(`Processed ${n} renewals`);
   }
 
   /** Hourly: grace ended → read-only; 30 days unpaid → suspended. */
-  @Cron('20 * * * *', { timeZone: 'Asia/Kolkata' })
+  @Cron('20 * * * *', { timeZone: 'Asia/Kolkata', name: 'platform.billing.dunning' })
   async dunning() {
     await this.eachSubscription('billing.dunning', { status: { in: ['PAST_DUE', 'READ_ONLY'] } }, (s) => this.billing.dunning(s));
   }
 
   /** 09:00 IST: renewal reminders at T-30 (yearly), T-7 and T-1. */
-  @Cron('0 9 * * *', { timeZone: 'Asia/Kolkata' })
+  @Cron('0 9 * * *', { timeZone: 'Asia/Kolkata', name: 'platform.billing.reminders' })
   async reminders() {
     const now = new Date();
     await this.eachSubscription('billing.reminders', { planCode: 'GROWTH', status: 'ACTIVE', cancelAtPeriodEnd: false, currentPeriodEnd: { gt: now, lt: new Date(now.getTime() + 31 * DAY) } }, async (s) => {
@@ -58,7 +58,7 @@ export class BillingJobs {
   }
 
   /** 00:30 IST: platform MRR snapshot (Tenants screen "MRR +x%" compares with 30 days ago). */
-  @Cron('30 0 * * *', { timeZone: 'Asia/Kolkata' })
+  @Cron('30 0 * * *', { timeZone: 'Asia/Kolkata', name: 'platform.billing.mrrSnapshot' })
   async mrrSnapshot() {
     const operator = await platformTenantId(this.prisma.raw).catch(() => null);
     const subs = await this.prisma.raw.subscription.findMany({ where: operator ? { tenantId: { not: operator } } : {} });

@@ -60,7 +60,8 @@ export function mergeLines(lines: NormalLine[]): NormalLine[] {
 
 export type AccountMeta = { id: string; name: string; systemKey: string | null; partyType: string | null };
 const MONEY_KEYS = new Set(['BANK', 'CASH']);
-const TAX_KEYS = /^GST_(INPUT|OUTPUT)_/;
+/** GST heads (India) and the single VAT heads (UK). */
+const TAX_KEYS = /^(GST_(INPUT|OUTPUT)_|VAT_(INPUT|OUTPUT)$)/;
 
 /**
  * Day-book "Ledger" column: the party (client/vendor) account if any, otherwise the single

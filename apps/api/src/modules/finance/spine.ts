@@ -19,6 +19,8 @@ export type SpineClient = {
   city?: string | null;
   pincode?: string | null;
   stateCode: string | null;
+  /** ISO country (UK tenants: GB customers vs overseas → outside the scope of UK VAT). */
+  countryCode?: string | null;
   billingEmails: string[];
   defaultRatePerHourPaise: number | null;
   paymentTermsDays: number;

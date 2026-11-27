@@ -1,3 +1,5 @@
+import { activeTimezone, isUk, UK_NATION_LABELS, UK_NATIONS, regionText } from '@lexisora/shared';
+import { useMe } from '@/lib/auth';
 import { useState } from 'react';
 import type { AttendancePolicyDto, LocationRow, PolicyUpdateResult, ShiftAllocationRow, ShiftRow } from '@lexisora/shared';
 import { FormModal, MultiSelect, type FieldDef } from '@/components/form';
@@ -182,6 +184,7 @@ function AllocateForm({ onClose }: { onClose: () => void }) {
 // ── Work locations ───────────────────────────────────────────────────────────
 export function LocationsPage() {
   const q = useLocations();
+  const uk = isUk(useMe().region);
   const [form, setForm] = useState<{ edit: LocationRow | null } | null>(null);
   const [detail, setDetail] = useState<string | null>(null);
   return (
@@ -204,6 +207,7 @@ export function LocationsPage() {
             { key: 'a', header: 'Address', render: (r) => r.address ?? '—' },
             { key: 'g', header: 'Geo radius', render: (r) => r.geoRadius },
             { key: 'p', header: 'Punch mode', render: (r) => <Tag tone={r.punchMode === 'BIOMETRIC_ONLY' ? 'accent' : 'outline'}>{r.punchModeLabel}</Tag> },
+            ...(uk ? [{ key: 'uk', header: 'UK nation', render: (r: LocationRow) => (r.ukNation ? UK_NATION_LABELS[r.ukNation as keyof typeof UK_NATION_LABELS] ?? r.ukNation : <span className="faint">Not set</span>) }] : []),
             { key: 'e', header: 'Employees', render: (r) => r.employees, num: true },
           ]}
         />
@@ -224,6 +228,7 @@ export function LocationsPage() {
 }
 
 function LocationForm({ edit, onClose }: { edit: LocationRow | null; onClose: () => void }) {
+  const uk = isUk(useMe().region);
   const save = useAction((v: Record<string, unknown>) => (edit ? patch(`/locations/${edit.id}`, v) : post('/locations', v)), {
     success: edit ? 'Location updated' : 'Location added',
     invalidate: [tk.all, ['lookups']],
@@ -245,6 +250,10 @@ function LocationForm({ edit, onClose }: { edit: LocationRow | null; onClose: ()
     { name: 'lat', label: 'Latitude (optional)', type: 'text' },
     { name: 'lng', label: 'Longitude (optional)', type: 'text' },
     { name: 'geoFenceWebPunch', label: 'Check geo radius on web punch', type: 'checkbox', span: 2, showIf: (v) => v.punchMode === 'WEB_DESKTOP_ALLOWED' },
+    // UK only: which nation's bank holidays apply here (India never shows or sends it).
+    ...(uk
+      ? [{ name: 'ukNation', label: 'UK nation', type: 'select', span: 2, placeholder: 'Not set', options: UK_NATIONS.map((n) => ({ value: n, label: UK_NATION_LABELS[n] })), hint: 'Decides which bank holidays apply to people at this location.' } satisfies FieldDef]
+      : []),
   ];
   return (
     <FormModal
@@ -394,7 +403,7 @@ export function PolicyPage() {
 
   const bool = (label: string, key: BoolKey) => (
     <div className="rw" key={key}>
-      <span>{label}</span>
+      <span>{regionText(label)}</span>
       <span><Check checked={office[key] as boolean} disabled={save.isPending} onChange={(v) => void set('office', key, v)} /></span>
       <span><Check checked={remote[key] as boolean} disabled={save.isPending} onChange={(v) => void set('remote', key, v)} /></span>
     </div>
@@ -465,7 +474,7 @@ export function PolicyPage() {
         {bool('Desktop tracker required while punched in', 'trackerRequired')}
       </div>
       <div className="faint" style={{ fontSize: 12 }}>
-        Last changed {new Date(remote.updatedAt > office.updatedAt ? remote.updatedAt : office.updatedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+        Last changed {new Date(remote.updatedAt > office.updatedAt ? remote.updatedAt : office.updatedAt).toLocaleString('en-IN', { timeZone: activeTimezone(), day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
         {(remote.updatedAt > office.updatedAt ? remote.updatedByName : office.updatedByName) ? ` by ${remote.updatedAt > office.updatedAt ? remote.updatedByName : office.updatedByName}` : ''}. Changes reach desktop trackers immediately.
       </div>
     </div>

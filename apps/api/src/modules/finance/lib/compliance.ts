@@ -92,7 +92,8 @@ function clampDay(key: string): string {
   return `${ym}-${pad(d)}`;
 }
 
-export const filingKey = (form: ComplianceForm, period: string) => `${form}:${period}`;
+/** Also used for the UK forms (lib/compliance-uk.ts). */
+export const filingKey = (form: ComplianceForm | (string & {}), period: string) => `${form}:${period}`;
 
 /**
  * Calendar card: unfiled items that fell due in the last `pastDays` (OVERDUE), plus items due

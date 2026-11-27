@@ -1,3 +1,4 @@
+import { activeRegion } from '@lexisora/shared';
 /** Indian-system amount in words: 78420 → "Seventy-eight thousand four hundred and twenty rupees only". */
 const ONES = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'];
 const TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
@@ -32,7 +33,34 @@ export function numberToWordsIndian(n: number): string {
   return parts.join(' ');
 }
 
+/** Western grouping (thousand / million / billion) for UK amounts. */
+export function numberToWordsWestern(n: number): string {
+  n = Math.floor(Math.abs(n));
+  if (n === 0) return 'zero';
+  const scales: [number, string][] = [[1_000_000_000, 'billion'], [1_000_000, 'million'], [1000, 'thousand']];
+  const parts: string[] = [];
+  let rest = n;
+  for (const [v, name] of scales) {
+    const q = Math.floor(rest / v);
+    if (q) parts.push(`${threeDigits(q, false)} ${name}`);
+    rest %= v;
+  }
+  if (rest) parts.push(threeDigits(rest, parts.length > 0 && rest < 100));
+  return parts.join(' ');
+}
+
+/** "Two thousand nine hundred and ninety-nine pounds and thirty-four pence only" */
+export function poundsInWords(pence: number): string {
+  const pounds = Math.floor(Math.abs(pence) / 100);
+  const p = Math.abs(pence) % 100;
+  let s = numberToWordsWestern(pounds) + (pounds === 1 ? ' pound' : ' pounds');
+  if (p) s += ` and ${twoDigits(p)} ${p === 1 ? 'penny' : 'pence'}`;
+  s += ' only';
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 export function rupeesInWords(paise: number): string {
+  if (activeRegion() === 'GB') return poundsInWords(paise);
   const rupees = Math.floor(Math.abs(paise) / 100);
   const p = Math.abs(paise) % 100;
   let s = numberToWordsIndian(rupees) + ' rupees';

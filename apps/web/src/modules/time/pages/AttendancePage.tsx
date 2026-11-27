@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { DAY_STATUS_LABEL, REGULARIZATION_TYPES, REGULARIZATION_TYPE_LABEL, type AttendanceDayRow, type AttendanceMonthSummary, type AttendanceTimeline, type TeamTodayRow, type TimelineSegment } from '@lexisora/shared';
+import { DAY_STATUS_LABEL, REGULARIZATION_TYPES, REGULARIZATION_TYPE_LABEL, type AttendanceDayRow, type AttendanceMonthSummary, type AttendanceTimeline, type TeamTodayRow, type TimelineSegment, regionText } from '@lexisora/shared';
 import { FormModal, type FieldDef } from '@/components/form';
 import { DataTable } from '@/components/table';
 import { ErrorBlock, Kpis, Loading, PageHeader, Seg, Tabs, Tag, toneFor } from '@/components/ui';
@@ -82,7 +82,7 @@ function MyAttendance() {
           {!t ? (
             p.error ? <ErrorBlock error={p.error} retry={p.retry} /> : <Loading />
           ) : p.blocked || p.outElsewhere ? (
-            <div className="time-blocked">{t.blockReason ?? (p.outElsewhere ? 'Punch out where you punched in.' : 'Web punch is not allowed for you right now.')}</div>
+            <div className="time-blocked">{regionText(t.blockReason ?? (p.outElsewhere ? 'Punch out where you punched in.' : 'Web punch is not allowed for you right now.'))}</div>
           ) : (
             <button className="btn btn-primary" style={{ alignSelf: 'flex-start' }} onClick={() => void p.toggle()} disabled={p.busy}>
               {p.busy ? 'Saving…' : p.label}
@@ -94,7 +94,7 @@ function MyAttendance() {
               {t?.late.reason ? ` · “${t.late.reason}”` : ''}
             </div>
           )}
-          {t?.openSessionSource && p.punchedIn && <div className="card-meta">Punched in via {t.openSessionSource.toLowerCase()}</div>}
+          {t?.openSessionSource && p.punchedIn && <div className="card-meta">{regionText('Punched in via')} {t.openSessionSource.toLowerCase()}</div>}
         </div>
         <MonthCard employeeId={null} month={month} />
         <div className="card">
@@ -287,7 +287,7 @@ export function TimelineStrip({ tl, live }: { tl: AttendanceTimeline; live?: Pen
         <span><i className="a" />Active</span>
         <span><i className="b" />Break</span>
         <span><i className="i" />Idle (no input &gt; {tl.idleThresholdMinutes} min)</span>
-        {has('late') && <span><i className="l" />Not punched in (late)</span>}
+        {has('late') && <span><i className="l" />{regionText('Not punched in (late)')}</span>}
         {has('missing') && <span><i className="m" />No punch-out</span>}
         {tl.source === 'none' ? <span className="faint">No activity recorded yet</span> : <span className="faint">Hover a bar to see details</span>}
       </div>

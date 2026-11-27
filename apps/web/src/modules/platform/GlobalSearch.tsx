@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { searchTypeLabel, type SearchGroupDto } from '@lexisora/shared';
 import { Avatar } from '@/components/ui';
 import { useAuth, useCan } from '@/lib/auth';
@@ -19,6 +20,7 @@ export function GlobalSearch() {
   const nav = useNavigate();
   const loc = useLocation();
   const { reload } = useAuth();
+  const qc = useQueryClient();
   const can = useCan();
   const [text, setText] = useState('');
   const [q, setQ] = useState('');
@@ -70,6 +72,16 @@ export function GlobalSearch() {
   useEffect(() => onRealtime('rbac.changed', () => void reload().catch(() => undefined)), [reload]);
   // A newly published theme (Branding → Publish theme) applies live in every open session.
   useEffect(() => onRealtime('branding.updated', () => void reload().catch(() => undefined)), [reload]);
+  // Region switched (India ⇄ UK): reload the session and refetch every screen's data.
+  useEffect(
+    () =>
+      onRealtime('region.changed', () => {
+        void reload()
+          .then(() => qc.invalidateQueries())
+          .catch(() => undefined);
+      }),
+    [reload, qc],
+  );
 
   const term = text.trim();
   const showPanel = open && term.length >= 2;

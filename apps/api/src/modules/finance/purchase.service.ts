@@ -6,6 +6,15 @@ import {
   finMonthLabel,
   formatDate,
   formatINR,
+  formatUkVatNumber,
+  isValidUkVatNumber,
+  normalizeUkVatNumber,
+  ukEstimateInputVat,
+  ukVatDueDate,
+  ukVatQuarterOf,
+  UK_VAT_BOX_LABELS,
+  type UkVatBoxes,
+  type UkVatReturn,
   type BillExtraction,
   type CreatePurchaseInput,
   type FinVendorRow,
@@ -30,7 +39,10 @@ import { paginated, pageArgs } from '../../core/http/paginate';
 import { LedgerService, type PostLine } from './ledger.service';
 import { FilingService } from './filing.service';
 import { TextLayerBillOcr, type BillOcrAdapter } from './adapters/bill-ocr';
-import { PURCHASE_CATEGORIES } from './lib/coa';
+import { PURCHASE_CATEGORIES, UK_PURCHASE_CATEGORIES } from './lib/coa';
+import { PurchaseVatError, resolvePurchaseVat, ukVatReturnFromTotals } from './lib/vat';
+import { SettingsService } from '../../core/settings/settings.service';
+import { currentRegion } from '../../core/region/region-cache';
 import { isValidGstin, PurchaseGstError, resolvePurchaseGst, stateFromGstin, utiliseItc } from './lib/gst';
 import { currentMonthKey, dateKeyOf, dateOnly, fyOf, monthKeyOf, monthRange, pdfINR, todayDate } from './lib/money';
 
@@ -41,6 +53,9 @@ type CategoryUpdate = z.infer<typeof finUpdateCategorySchema>;
 
 const BILL_MIME = /^(application\/pdf|image\/(png|jpe?g|webp|heic))$/;
 const purchaseInclude = { vendor: true, category: true } satisfies Prisma.PurchaseInclude;
+const isGb = () => currentRegion() === 'GB';
+/** Same key as ComplianceService (UK: VAT quarter stagger lives under `uk`). */
+const COMPLIANCE_KEY = 'finance.compliance';
 type PurchaseRec = Prisma.PurchaseGetPayload<{ include: typeof purchaseInclude }>;
 
 /**
@@ -61,6 +76,7 @@ export class PurchaseService {
     private readonly pdf: PdfService,
     private readonly ledger: LedgerService,
     private readonly filing: FilingService,
+    private readonly settings?: SettingsService,
   ) {}
 
   private tenant() {
@@ -73,7 +89,7 @@ export class PurchaseService {
     const existing = await this.prisma.purchaseCategory.findMany({ select: { name: true } });
     if (existing.length) return;
     let order = 0;
-    for (const c of PURCHASE_CATEGORIES) {
+    for (const c of isGb() ? UK_PURCHASE_CATEGORIES : PURCHASE_CATEGORIES) {
       const accountId = await this.ledger.accountIdByKey(c.key);
       await this.prisma.purchaseCategory.create({
         data: { name: c.name, accountId, defaultGstRateBp: c.rateBp, itcEligibleDefault: c.itc, createsAsset: !!c.asset, sortOrder: ++order } as Prisma.PurchaseCategoryUncheckedCreateInput,
@@ -142,6 +158,11 @@ export class PurchaseService {
   }
 
   private vendorData(input: VendorInput) {
+    if (isGb()) {
+      // UK: VAT number (schema already format-checked); no PAN or state.
+      const vat = input.gstin ? normalizeUkVatNumber(input.gstin) : null;
+      return { name: input.name, gstin: vat, pan: null, stateCode: null, email: input.email || null };
+    }
     const gstin = input.gstin ? input.gstin.toUpperCase() : null;
     if (gstin && !isValidGstin(gstin)) throw new AppError(422, 'GSTIN_CHECKSUM', 'This GSTIN fails the check digit — please re-check it', { fieldErrors: { gstin: ['Invalid GSTIN'] } });
     return { name: input.name, gstin, pan: input.pan || (gstin ? gstin.slice(2, 12) : null), stateCode: input.stateCode || stateFromGstin(gstin), email: input.email || null };
@@ -234,7 +255,7 @@ export class PurchaseService {
       itcPeriod: p.itcPeriod,
       notes: p.notes,
       createdAt: p.createdAt.toISOString(),
-      supplyType: p.igstPaise > 0 ? 'INTER' : p.cgstPaise > 0 ? 'INTRA' : finDeriveSupplyType(tenant.stateCode, p.vendor.stateCode || stateFromGstin(p.vendor.gstin)),
+      supplyType: isGb() ? 'INTER' : p.igstPaise > 0 ? 'INTER' : p.cgstPaise > 0 ? 'INTRA' : finDeriveSupplyType(tenant.stateCode, p.vendor.stateCode || stateFromGstin(p.vendor.gstin)),
       filingDocumentId: doc?.id ?? null,
     };
   }
@@ -245,8 +266,10 @@ export class PurchaseService {
     const { row, data } = await this.storage.read(input.fileId);
     if (!BILL_MIME.test(row.mime)) throw new AppError(422, 'FILE_TYPE', 'Upload the bill as a PDF or an image (PNG, JPG)');
     if (row.size > 15 * 1024 * 1024) throw new AppError(422, 'FILE_TOO_LARGE', 'Bills can be at most 15 MB');
-    const r = await this.ocr.extract({ buffer: data, mime: row.mime });
+    const gb = isGb();
+    const r = await this.ocr.extract({ buffer: data, mime: row.mime }, gb ? { vat: true } : {});
     const cat = input.categoryId ? await this.prisma.purchaseCategory.findFirst({ where: { id: input.categoryId } }) : null;
+    if (gb) return this.extractUk(r, row.id, cat);
     const gstin = r.vendorGstin && isValidGstin(r.vendorGstin) ? r.vendorGstin : null;
     const vendors = await this.prisma.vendor.findMany({ where: { isActive: true } });
     const ocrName = (r.vendorName ?? '').toLowerCase();
@@ -276,6 +299,37 @@ export class PurchaseService {
     };
   }
 
+  /** UK: VAT number + VAT amount from the bill, else VAT estimated at the category rate. */
+  private async extractUk(r: Awaited<ReturnType<BillOcrAdapter['extract']>>, fileObjectId: string, cat: { defaultGstRateBp: number } | null): Promise<BillExtraction> {
+    const vatNo = r.vendorVatNumber && isValidUkVatNumber(r.vendorVatNumber) ? normalizeUkVatNumber(r.vendorVatNumber) : null;
+    const vendors = await this.prisma.vendor.findMany({ where: { isActive: true } });
+    const ocrName = (r.vendorName ?? '').toLowerCase();
+    const vendor = (vatNo ? vendors.find((v) => v.gstin === vatNo) : undefined) ?? (ocrName ? vendors.find((v) => ocrName.includes(v.name.toLowerCase())) : undefined) ?? null;
+    const amountPaise = r.totalPaise ?? null;
+    const ocrVat = r.textFound && r.gstPaise !== undefined && r.gstPaise > 0 ? r.gstPaise : null;
+    const inputGstPaise = ocrVat ?? (amountPaise ? ukEstimateInputVat(amountPaise, cat?.defaultGstRateBp ?? 2000) : null);
+    const billDate = r.invoiceDate && /^\d{4}-\d{2}-\d{2}$/.test(r.invoiceDate) ? r.invoiceDate : null;
+    let duplicateOf: BillExtraction['duplicateOf'] = null;
+    if (vendor && r.invoiceNo) {
+      const d = await this.prisma.purchase.findFirst({ where: { vendorId: vendor.id, vendorInvoiceNo: { equals: r.invoiceNo, mode: 'insensitive' }, fy: fyOf(billDate ? dateOnly(billDate) : todayDate()) } });
+      if (d) duplicateOf = { id: d.id, vendorInvoiceNo: d.vendorInvoiceNo };
+    }
+    await this.audit.record({ action: 'purchase.bill_extracted', entity: 'FileObject', entityId: fileObjectId, meta: { textFound: r.textFound, confidence: r.confidence } });
+    return {
+      source: ocrVat !== null ? 'OCR' : 'ESTIMATED',
+      confidence: r.confidence,
+      vendorName: vendor?.name ?? r.vendorName?.slice(0, 120) ?? null,
+      vendorId: vendor?.id ?? null,
+      vendorGstin: vatNo ?? vendor?.gstin ?? null,
+      invoiceNo: r.invoiceNo ?? null,
+      billDate,
+      amountPaise,
+      inputGstPaise,
+      duplicateOf,
+      textFound: r.textFound,
+    };
+  }
+
   // ── Record / cancel ──────────────────────────────────────────────────────
 
   async create(input: CreatePurchaseInput): Promise<PurchaseDetail> {
@@ -289,14 +343,18 @@ export class PurchaseService {
     const file = await this.prisma.fileObject.findFirst({ where: { id: input.billFileId } });
     if (!file) throw badRequest('Upload the bill');
     if (!BILL_MIME.test(file.mime)) throw new AppError(422, 'FILE_TYPE', 'Upload the bill as a PDF or an image (PNG, JPG)');
-    const gstin = input.vendorGstin ? input.vendorGstin.toUpperCase() : null;
-    if (gstin && !isValidGstin(gstin)) throw new AppError(422, 'GSTIN_CHECKSUM', 'This GSTIN fails the check digit — please re-check it', { fieldErrors: { vendorGstin: ['Invalid GSTIN'] } });
+    const gb = isGb();
+    const gstin = input.vendorGstin ? (gb ? normalizeUkVatNumber(input.vendorGstin) : input.vendorGstin.toUpperCase()) : null;
+    if (gb && gstin && !isValidUkVatNumber(gstin)) throw new AppError(422, 'VAT_NUMBER', 'Enter a valid UK VAT number, e.g. GB123456789', { fieldErrors: { vendorGstin: ['Invalid VAT number'] } });
+    if (!gb && gstin && !isValidGstin(gstin)) throw new AppError(422, 'GSTIN_CHECKSUM', 'This GSTIN fails the check digit — please re-check it', { fieldErrors: { vendorGstin: ['Invalid GSTIN'] } });
     const name = input.vendorName.trim();
     let vendor = (await this.prisma.vendor.findFirst({ where: { name: { equals: name, mode: 'insensitive' } } })) ?? (gstin ? await this.prisma.vendor.findFirst({ where: { gstin } }) : null);
     if (!vendor) {
-      vendor = await this.prisma.vendor.create({ data: { name, gstin, pan: gstin ? gstin.slice(2, 12) : null, stateCode: stateFromGstin(gstin) } as Prisma.VendorUncheckedCreateInput });
+      vendor = await this.prisma.vendor.create({ data: (gb ? { name, gstin, pan: null, stateCode: null } : { name, gstin, pan: gstin ? gstin.slice(2, 12) : null, stateCode: stateFromGstin(gstin) }) as Prisma.VendorUncheckedCreateInput });
       await this.audit.record({ action: 'vendor.created', entity: 'Vendor', entityId: vendor.id, meta: { name, gstin, via: 'purchase' } });
-    } else if (gstin && !vendor.gstin) {
+    } else if (gb && gstin && !vendor.gstin) {
+      vendor = await this.prisma.vendor.update({ where: { id: vendor.id }, data: { gstin } });
+    } else if (!gb && gstin && !vendor.gstin) {
       vendor = await this.prisma.vendor.update({ where: { id: vendor.id }, data: { gstin, stateCode: vendor.stateCode ?? stateFromGstin(gstin), pan: vendor.pan ?? gstin.slice(2, 12) } });
     }
     const fy = fyOf(billDate);
@@ -306,7 +364,9 @@ export class PurchaseService {
     const tenant = await this.tenant();
     let g: ReturnType<typeof resolvePurchaseGst>;
     try {
-      g = resolvePurchaseGst({
+      g = gb
+        ? resolvePurchaseVat({ amountPaise: input.amountPaise, vatRateBp: cat.defaultGstRateBp, inputVatPaise: input.inputGstPaise, source: input.gstSource, vendorVatNumber: vendor.gstin, reclaimableDefault: cat.itcEligibleDefault })
+        : resolvePurchaseGst({
         amountPaise: input.amountPaise,
         gstRateBp: cat.defaultGstRateBp,
         inputGstPaise: input.inputGstPaise,
@@ -318,6 +378,7 @@ export class PurchaseService {
       });
     } catch (e) {
       if (e instanceof PurchaseGstError) throw new AppError(422, 'INPUT_GST', e.message, { fieldErrors: { inputGstPaise: [e.message] } });
+      if (e instanceof PurchaseVatError) throw new AppError(422, 'INPUT_VAT', e.message, { fieldErrors: { inputGstPaise: [e.message] } });
       throw e;
     }
     const p = await this.prisma.purchase.create({
@@ -346,7 +407,7 @@ export class PurchaseService {
     });
     await this.audit.record({ action: 'purchase.recorded', entity: 'Purchase', entityId: p.id, meta: { vendor: vendor.name, invoiceNo, amountPaise: p.amountPaise, inputGstPaise: p.inputGstPaise, gstSource: p.gstSource } });
     if (g.source === 'MANUAL') {
-      await this.audit.record({ action: 'purchase.gst_overridden', entity: 'Purchase', entityId: p.id, meta: { estimatedPaise: finEstimateInputGst(input.amountPaise, cat.defaultGstRateBp), usedPaise: g.inputGstPaise } });
+      await this.audit.record({ action: 'purchase.gst_overridden', entity: 'Purchase', entityId: p.id, meta: { estimatedPaise: gb ? ukEstimateInputVat(input.amountPaise, cat.defaultGstRateBp) : finEstimateInputGst(input.amountPaise, cat.defaultGstRateBp), usedPaise: g.inputGstPaise } });
     }
     try {
       await this.ensureVoucher(p.id);
@@ -368,7 +429,9 @@ export class PurchaseService {
     const credit: PostLine = paid ? { accountId: '', systemKey: p.paidVia === 'CASH' ? 'CASH' : 'BANK', creditPaise: p.amountPaise } : { accountId: await this.ledger.vendorAccount(p.vendorId, p.vendor.name), creditPaise: p.amountPaise };
     const lines: PostLine[] = [
       { accountId: p.category.accountId, debitPaise: p.taxablePaise + (p.itcEligible ? 0 : p.inputGstPaise), narration: `${p.vendor.name} ${p.vendorInvoiceNo}` },
-      ...(p.itcEligible
+      ...(p.itcEligible && isGb()
+        ? [{ accountId: '', systemKey: 'VAT_INPUT', debitPaise: p.cgstPaise + p.sgstPaise + p.igstPaise, narration: 'Input VAT reclaimable' }]
+        : p.itcEligible
         ? [
             { accountId: '', systemKey: 'GST_INPUT_CGST', debitPaise: p.cgstPaise },
             { accountId: '', systemKey: 'GST_INPUT_SGST', debitPaise: p.sgstPaise },
@@ -493,5 +556,98 @@ export class PurchaseService {
     const doc = await this.filing.autoFile({ folderKey: 'GST_RETURNS', fileId: f.id, title: `GSTR-3B ${s.monthLabel} (working).pdf`, tags: ['gstr-3b', month, fyOf(monthRange(month).end)], linkedEntityType: 'GST_RETURN', linkedEntityId: `GSTR3B:${month}`, linkedRef: `GSTR-3B ${s.monthLabel}`, docDate: monthRange(month).end.getTime() > todayDate().getTime() ? todayDate() : monthRange(month).end });
     await this.audit.record({ action: 'gstr3b.filed', entity: 'Gstr3b', entityId: doc.id, meta: { month, payablePaise: s.payable.totalPaise } });
     return { documentId: doc.id, folderId: doc.folderId, title: doc.title, payable: formatINR(s.payable.totalPaise) };
+  }
+
+  // ── UK VAT return (region GB) ─────────────────────────────────────────────
+
+  private async vatStagger(): Promise<number> {
+    const c = this.settings ? await this.settings.get<{ uk?: { vatStaggerEndMonth?: number } }>(COMPLIANCE_KEY, {}) : {};
+    const m = Number(c?.uk?.vatStaggerEndMonth ?? 3);
+    return [1, 2, 3].includes(((m - 1) % 3) + 1) ? ((m - 1) % 3) + 1 : 3;
+  }
+
+  /**
+   * HMRC VAT return (9 boxes) for the quarter ending `period` (default: the quarter that
+   * contains the current month). Box 1 = VAT on invoices − credit notes, Box 4 = reclaimable
+   * input VAT on bills dated in the quarter, Box 6/7 = net sales / net purchases (whole £).
+   */
+  async vatReturn(period?: string): Promise<UkVatReturn> {
+    const stagger = await this.vatStagger();
+    const q = ukVatQuarterOf(period ?? currentMonthKey(), stagger);
+    const start = dateOnly(q.start);
+    const end = dateOnly(q.end);
+    const [inv, cn, bills, reclaim, blocked] = await Promise.all([
+      this.prisma.invoice.aggregate({ where: { status: { not: 'DRAFT' }, invoiceDate: { gte: start, lte: end } }, _sum: { subtotalPaise: true, igstPaise: true, cgstPaise: true, sgstPaise: true }, _count: { _all: true } }),
+      this.prisma.invoiceCreditNote.aggregate({ where: { date: { gte: start, lte: end } }, _sum: { subtotalPaise: true, igstPaise: true, cgstPaise: true, sgstPaise: true }, _count: { _all: true } }),
+      this.prisma.purchase.aggregate({ where: { status: 'RECORDED', billDate: { gte: start, lte: end } }, _sum: { taxablePaise: true }, _count: { _all: true } }),
+      this.prisma.purchase.aggregate({ where: { status: 'RECORDED', itcEligible: true, billDate: { gte: start, lte: end } }, _sum: { inputGstPaise: true } }),
+      this.prisma.purchase.aggregate({ where: { status: 'RECORDED', itcEligible: false, billDate: { gte: start, lte: end } }, _sum: { inputGstPaise: true } }),
+    ]);
+    const n = (x: number | null | undefined) => Number(x ?? 0);
+    const r = ukVatReturnFromTotals({
+      invoiceNetPence: n(inv._sum.subtotalPaise),
+      invoiceVatPence: n(inv._sum.igstPaise) + n(inv._sum.cgstPaise) + n(inv._sum.sgstPaise),
+      creditNetPence: n(cn._sum.subtotalPaise),
+      creditVatPence: n(cn._sum.igstPaise) + n(cn._sum.cgstPaise) + n(cn._sum.sgstPaise),
+      billNetPence: n(bills._sum.taxablePaise),
+      reclaimableVatPence: n(reclaim._sum.inputGstPaise),
+    });
+    return {
+      period: q.period,
+      periodLabel: q.label,
+      start: q.start,
+      end: q.end,
+      dueDate: ukVatDueDate(q.period),
+      boxes: r.boxes,
+      netPence: r.netPence,
+      invoices: inv._count._all,
+      creditNotes: cn._count._all,
+      bills: bills._count._all,
+      nonReclaimablePence: n(blocked._sum.inputGstPaise),
+    };
+  }
+
+  private vatRows(s: UkVatReturn): [string, string, number][] {
+    return (Object.keys(UK_VAT_BOX_LABELS) as (keyof UkVatBoxes)[]).map((k) => [`Box ${k.slice(3)}`, UK_VAT_BOX_LABELS[k], s.boxes[k]]);
+  }
+
+  async vatReturnCsv(period?: string) {
+    const s = await this.vatReturn(period);
+    const money = (p: number, box: string) => (['Box 6', 'Box 7', 'Box 8', 'Box 9'].includes(box) ? String(Math.trunc(p / 100)) : (p / 100).toFixed(2));
+    const rows = [
+      ['Box', 'Description', 'Amount (GBP)'],
+      ...this.vatRows(s).map(([b, label, v]) => [b, label, money(v, b)]),
+      ['', s.netPence >= 0 ? 'Payable to HMRC' : 'Repayment due from HMRC', (Math.abs(s.netPence) / 100).toFixed(2)],
+      ['', `Period ${s.start} to ${s.end} · due ${s.dueDate} · ${s.invoices} invoices, ${s.creditNotes} credit notes, ${s.bills} bills`, ''],
+    ];
+    await this.audit.record({ action: 'vat_return.exported', entity: 'VatReturn', meta: { period: s.period } });
+    return { filename: `VAT-return-${s.period}.csv`, csv: rows.map((x) => x.map((c) => (/[",\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c)).join(',')).join('\n') };
+  }
+
+  /** Save the VAT return working as a PDF into Filing › VAT returns (replaces the previous copy). */
+  async fileVatReturn(period?: string) {
+    const s = await this.vatReturn(period);
+    const tenant = await this.tenant();
+    const gbp = (p: number, box: string) => (['Box 6', 'Box 7', 'Box 8', 'Box 9'].includes(box) ? `£${new Intl.NumberFormat('en-GB').format(Math.trunc(p / 100))}` : `£${new Intl.NumberFormat('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(p / 100)}`);
+    const buf = await this.pdf.render((doc) => {
+      this.pdf.header(doc, (tenant.legalName || tenant.name).replace(/[^\x20-\x7e]/g, ''), `VAT return working · ${s.periodLabel}`.replace(/[–—]/g, '-'));
+      this.pdf.keyValues(doc, [
+        ['VAT registration no.', tenant.gstin ? formatUkVatNumber(tenant.gstin) : '-'],
+        ['Period', `${s.start} to ${s.end}`],
+        ['Return and payment due', s.dueDate],
+        ['Prepared on', formatDate(new Date())],
+      ]);
+      doc.moveDown(0.6);
+      this.pdf.table(doc, ['Box', 'Description', 'Amount'], this.vatRows(s).map(([b, label, v]) => [b, label, gbp(v, b)]), [0.12, 0.63, 0.25], [2]);
+      doc.font('Helvetica').fontSize(9.5).fillColor('#2d2b2b').text(`${s.netPence >= 0 ? 'Payable to HMRC' : 'Repayment due from HMRC'}: ${gbp(Math.abs(s.netPence), 'Box 5')}`);
+      if (s.nonReclaimablePence) doc.text(`VAT not reclaimed (business entertainment / no VAT invoice): ${gbp(s.nonReclaimablePence, 'Box 4')}`);
+      doc.font('Helvetica').fontSize(8.5).fillColor('#605d5d').text('Boxes 6-9 are whole pounds. Working paper - submit the return through Making Tax Digital compatible software.');
+    });
+    const f = await this.storage.save({ data: buf, filename: `VAT-return-${s.period}.pdf`, mime: 'application/pdf', category: 'filing' });
+    await this.prisma.filingDocument.updateMany({ where: { linkedEntityType: 'VAT_RETURN', linkedEntityId: `VAT:${s.period}`, deletedAt: null }, data: { deletedAt: new Date() } });
+    const endDate = dateOnly(s.end);
+    const doc = await this.filing.autoFile({ folderKey: 'VAT_RETURNS', fileId: f.id, title: `VAT return ${s.periodLabel} (working).pdf`, tags: ['vat-return', s.period, fyOf(endDate)], linkedEntityType: 'VAT_RETURN', linkedEntityId: `VAT:${s.period}`, linkedRef: `VAT return ${s.periodLabel}`, docDate: endDate.getTime() > todayDate().getTime() ? todayDate() : endDate });
+    await this.audit.record({ action: 'vat_return.filed', entity: 'VatReturn', entityId: doc.id, meta: { period: s.period, netPence: s.netPence } });
+    return { documentId: doc.id, folderId: doc.folderId, title: doc.title, payable: formatINR(s.netPence) };
   }
 }

@@ -1,4 +1,5 @@
 import type { PermissionKey } from './permissions';
+import { regionText, type RegionCode } from './region';
 
 export type NavItem = {
   /** Screen id from the wireframe (used in deep links `#screen=<id>`). */
@@ -7,6 +8,8 @@ export type NavItem = {
   path: string;
   /** Visible when the user holds this permission (or any of them, for an array). */
   permission: PermissionKey | PermissionKey[];
+  /** Only shown for tenants in these regions (all regions when omitted). */
+  regions?: RegionCode[];
 };
 
 export function canSee(item: Pick<NavItem, 'permission'>, granted: ReadonlySet<string>): boolean {
@@ -14,6 +17,19 @@ export function canSee(item: Pick<NavItem, 'permission'>, granted: ReadonlySet<s
   return req.some((p) => granted.has(p));
 }
 export type NavGroup = { group: string; items: NavItem[] };
+
+/** Is the item available in this region? */
+export function inRegion(item: Pick<NavItem, 'regions'>, region: RegionCode): boolean {
+  return !item.regions || item.regions.includes(region);
+}
+
+/** Sidebar for a user: permission + region filter, labels in the region's wording. */
+export function navFor(granted: ReadonlySet<string>, region: RegionCode): NavGroup[] {
+  return NAV.map((g) => ({
+    ...g,
+    items: g.items.filter((i) => canSee(i, granted) && inRegion(i, region)).map((i) => ({ ...i, label: regionText(i.label, region) })),
+  })).filter((g) => g.items.length);
+}
 
 /** Sidebar navigation, in wireframe order. Visibility = user holds `permission`. */
 export const NAV: NavGroup[] = [
@@ -51,6 +67,7 @@ export const NAV: NavGroup[] = [
     group: 'People',
     items: [
       { id: 'employees', label: 'Employees', path: '/employees', permission: 'employees.view' },
+      { id: 'right-to-work', label: 'Right to work', path: '/right-to-work', permission: 'rtw.manage', regions: ['GB'] },
       { id: 'onboarding', label: 'Paperless onboarding', path: '/onboarding', permission: 'onboarding.self' },
       { id: 'shifts', label: 'Shifts', path: '/shifts', permission: 'shifts.manage' },
       { id: 'locations', label: 'Work locations', path: '/locations', permission: 'locations.manage' },
@@ -96,6 +113,7 @@ export const NAV: NavGroup[] = [
     items: [
       { id: 'roles', label: 'Roles & access', path: '/roles', permission: 'roles.manage' },
       { id: 'settings', label: 'Attendance policy', path: '/attendance-policy', permission: 'settings.attendance' },
+      { id: 'region', label: 'Region & compliance', path: '/region', permission: 'region.manage' },
       { id: 'audit', label: 'Audit log', path: '/audit', permission: 'audit.view' },
       { id: 'notif', label: 'Alerts', path: '/alerts', permission: 'alerts.view' },
     ],

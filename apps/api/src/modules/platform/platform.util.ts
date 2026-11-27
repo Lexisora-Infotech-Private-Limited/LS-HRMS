@@ -1,11 +1,13 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
-import { formatDayMonth, formatMonthYear, formatTime, istDateKey } from '@lexisora/shared';
+import { activeTimezone, formatDayMonth, formatMonthYear, formatTime, istDateKey, zonedInstant } from '@lexisora/shared';
 
-/** Start of an IST calendar day ("2026-09-29") as a UTC instant. */
+/** Start of a business calendar day ("2026-09-29") as a UTC instant (IST for India). */
 export function istStart(key: string): Date {
+  if (activeTimezone() !== 'Asia/Kolkata') return zonedInstant(key, 0);
   return new Date(`${key}T00:00:00+05:30`);
 }
 export function istEnd(key: string): Date {
+  if (activeTimezone() !== 'Asia/Kolkata') return new Date(zonedInstant(key, 24 * 60).getTime() - 1);
   return new Date(`${key}T23:59:59.999+05:30`);
 }
 

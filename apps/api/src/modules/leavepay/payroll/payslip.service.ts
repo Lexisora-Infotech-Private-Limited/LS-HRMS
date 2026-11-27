@@ -1,3 +1,5 @@
+import { activeRegion, formatSortCode, maskNiNumber, taxYearLabel, taxYearStartOfPeriod, type UkStatutory } from '@lexisora/shared';
+import { currentRegion } from '../../../core/region/region-cache';
 import { Injectable, Logger } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
 import { DEFAULT_PAYSLIP_TEMPLATE, canvasFromBlockDesign, payslipCanvasPreset, payslipCanvasSchema, payslipDesignSchema, payslipTemplateSchema, type PayslipCanvas, type PayslipDesign, type PayslipDetail, type PayslipRow, type PayslipTemplate, type PayslipTemplateDto, type PayslipTemplatesView } from '@lexisora/shared';
@@ -27,7 +29,7 @@ type StoredPayslipTemplates = { items: StoredPayslipTemplate[]; defaultId: strin
 /** Pay component names the editor offers for renaming or always showing: those in the salary structures, plus the standard statutory deductions. */
 function componentNames(structureLines: unknown[]): { earnings: string[]; deductions: string[] } {
   const earnings: string[] = [];
-  const deductions: string[] = ['Provident fund', 'ESI', 'Professional tax', 'Income tax (TDS)'];
+  const deductions: string[] = activeRegion() === 'GB' ? ['Income tax (PAYE)', 'National Insurance', 'Pension (employee)', 'Student loan', 'Postgraduate loan'] : ['Provident fund', 'ESI', 'Professional tax', 'Income tax (TDS)'];
   const add = (list: string[], name: string) => {
     if (name && !list.some((x) => x.toLowerCase() === name.toLowerCase())) list.push(name);
   };
@@ -109,7 +111,33 @@ export class PayslipService {
     }
     // FY-to-date (published payslips of this FY up to and including this period).
     const periods = [...fyPriorPeriods(p.period), p.period];
-    const fyItems = await this.prisma.payrollItem.findMany({ where: { employeeId: p.employeeId, status: { in: ['FINALIZED', 'PAID'] }, run: { period: { in: periods }, status: { in: ['FINALIZED', 'PAID'] } } }, select: { grossEarnedPaise: true, tdsPaise: true, pfEePaise: true } });
+    const fyItems = await this.prisma.payrollItem.findMany({ where: { employeeId: p.employeeId, status: { in: ['FINALIZED', 'PAID'] }, run: { period: { in: periods }, status: { in: ['FINALIZED', 'PAID'] } } }, select: { grossEarnedPaise: true, tdsPaise: true, pfEePaise: true, ukStatutory: true } });
+    // UK tenants: PAYE details and tax-year-to-date figures instead of PAN / UAN / IFSC.
+    let uk: PayslipDetail['uk'] = null;
+    if (currentRegion() === 'GB') {
+      const u = (item.ukStatutory ?? null) as UkStatutory | null;
+      const ys = fyItems.map((i) => (i.ukStatutory ?? null) as UkStatutory | null).filter((x): x is UkStatutory => !!x);
+      const sum = (f: (x: UkStatutory) => number) => ys.reduce((s, x) => s + f(x), 0);
+      uk = {
+        niNumberMasked: maskNiNumber(emp.niNumberLast4),
+        taxCode: u?.taxCode ?? '',
+        taxBasis: u?.taxBasis ?? 'CUMULATIVE',
+        niCategory: u?.niCategory ?? '',
+        sortCode: formatSortCode(emp.bankSortCode),
+        taxYearLabel: taxYearLabel(taxYearStartOfPeriod(p.period), 'GB'),
+        ytd: {
+          // Taxable pay / tax to date carry any P45 figures from a previous job.
+          taxablePayPence: u?.taxablePayYtdPence ?? sum((x) => x.taxablePayPence),
+          taxPence: u?.taxYtdPence ?? sum((x) => x.taxPence),
+          niEmployeePence: sum((x) => x.niEmployeePence),
+          pensionEmployeePence: sum((x) => x.pensionEmployeePence),
+          studentLoanPence: sum((x) => x.studentLoanPence + x.postgradLoanPence),
+        },
+        employerNiPence: u?.niEmployerPence ?? 0,
+        employerPensionPence: u?.pensionEmployerPence ?? 0,
+      };
+      panMasked = uk.niNumberMasked;
+    }
     const earnings = item.lines.filter((l) => l.kind === 'EARNING').map((l) => ({ label: l.label, fullPaise: l.fullAmountPaise, amountPaise: l.amountPaise }));
     const deductions = item.lines.filter((l) => l.kind === 'DEDUCTION').map((l) => ({ label: l.label, amountPaise: l.amountPaise }));
     const employer = item.lines.filter((l) => l.kind === 'EMPLOYER').map((l) => ({ label: l.label, amountPaise: l.amountPaise }));
@@ -129,6 +157,7 @@ export class PayslipService {
       totalDeductionsPaise: deductions.reduce((s, e) => s + e.amountPaise, 0),
       netInWords: rupeesInWords(p.netPaise),
       ytd: { grossPaise: fyItems.reduce((s, i) => s + i.grossEarnedPaise, 0), tdsPaise: fyItems.reduce((s, i) => s + i.tdsPaise, 0), pfPaise: fyItems.reduce((s, i) => s + i.pfEePaise, 0) },
+      ...(uk ? { uk } : {}),
     };
   }
 

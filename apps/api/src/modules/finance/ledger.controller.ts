@@ -8,6 +8,7 @@ import {
   finExportQuery,
   finStatementQuery,
   finUpdateAccountSchema,
+  financeSettingsSchema,
   ledgerKpiQuery,
   lockBooksSchema,
   reverseVoucherSchema,
@@ -82,6 +83,13 @@ export class LedgerController {
   async settings() {
     const s = await this.ledger.financeSettings();
     return { booksLockedUpTo: s.booksLockedUpTo, defaultPaymentTermsDays: s.defaultPaymentTermsDays, bank: s.bank, signatory: s.signatory };
+  }
+
+  /** Bank details printed on invoices (UK: sort code + account number), signatory and default terms. */
+  @Patch('settings')
+  @RequirePerm('ledger.manage')
+  updateSettings(@Body(new ZodPipe(financeSettingsSchema)) dto: z.infer<typeof financeSettingsSchema>) {
+    return this.ledger.updateSettings(dto);
   }
 }
 

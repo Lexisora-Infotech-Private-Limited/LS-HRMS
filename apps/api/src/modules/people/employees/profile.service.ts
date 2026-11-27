@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import {
   formatMonthYear,
+  formatSortCode,
+  maskNiNumber,
   type ProfileAssetRow,
   type ProfileAttendanceRow,
   type ProfileDocumentRow,
@@ -14,6 +16,7 @@ import { requireContext } from '../../../core/context/request-context';
 import { CryptoService } from '../../../core/crypto/crypto.service';
 import { forbidden, notFound } from '../../../core/http/errors';
 import { PrismaService } from '../../../core/prisma/prisma.service';
+import { currentRegion } from '../../../core/region/region-cache';
 import { AssetsService } from '../assets/assets.service';
 import { loadCompensation } from '../compensation';
 import { VaultService } from '../documents/vault.service';
@@ -84,10 +87,20 @@ export class ProfileService {
         { label: 'Address', value: e.address ?? '—' },
         { label: 'Branch', value: e.branch?.name ?? '—' },
         { label: 'Employment type', value: e.employmentType === 'INTERN' ? 'Intern' : e.employmentType === 'CONTRACT' ? 'Contract' : 'Full-time' },
-        { label: 'PAN', value: maskPan(this.crypto.decrypt(e.panEnc)) },
-        { label: 'Bank account', value: e.bankAccountLast4 ? `${maskAccount(e.bankAccountLast4)} · ${e.bankIfsc ?? ''}` : '—' },
-        { label: 'Tax regime', value: e.taxRegime === 'OLD' ? 'Old regime' : 'New regime' },
       );
+      if (currentRegion() === 'GB') {
+        // UK: National Insurance number and sort code instead of PAN / IFSC / tax regime.
+        overview.push(
+          { label: 'National Insurance number', value: maskNiNumber(e.niNumberLast4) },
+          { label: 'Bank account', value: e.bankAccountLast4 ? `${maskAccount(e.bankAccountLast4)}${e.bankSortCode ? ` · sort code ${formatSortCode(e.bankSortCode)}` : ''}` : '—' },
+        );
+      } else {
+        overview.push(
+          { label: 'PAN', value: maskPan(this.crypto.decrypt(e.panEnc)) },
+          { label: 'Bank account', value: e.bankAccountLast4 ? `${maskAccount(e.bankAccountLast4)} · ${e.bankIfsc ?? ''}` : '—' },
+          { label: 'Tax regime', value: e.taxRegime === 'OLD' ? 'Old regime' : 'New regime' },
+        );
+      }
       if (e.status === 'NOTICE_PERIOD' || e.status === 'EXITED') overview.push({ label: e.status === 'EXITED' ? 'Exited on' : 'Last working day', value: fmt(e.exitDate) });
     }
 

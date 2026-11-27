@@ -1,9 +1,19 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import type { LoginInput, LoginResponse, PermissionKey, SessionUser } from '@lexisora/shared';
+import { setRegionResolver, type LoginInput, type LoginResponse, type PermissionKey, type RegionCode, type SessionUser } from '@lexisora/shared';
 import { api, onSessionRefreshed, post, refreshSession, setAccessToken, setSessionExpiredHandler } from './api';
 import { applyBranding } from './branding';
 import { connectSocket, disconnectSocket } from './socket';
+
+/**
+ * Region of the signed-in tenant. Shared formatters (money, dates, times) read it through the
+ * resolver, so every screen shows pounds and UK time for UK tenants and is unchanged for India.
+ */
+let sessionRegion: RegionCode = 'IN';
+setRegionResolver(() => sessionRegion);
+function applyRegion(u: SessionUser | null) {
+  sessionRegion = u?.region === 'GB' ? 'GB' : 'IN';
+}
 
 type AuthState = {
   user: SessionUser | null;
@@ -25,6 +35,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const acceptSession = useCallback((r: LoginResponse) => {
     setAccessToken(r.accessToken);
+    applyRegion(r.user);
     setUser(r.user);
     applyBranding(r.user.branding);
     connectSocket(r.accessToken);
@@ -32,6 +43,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const off = onSessionRefreshed((d) => {
+      applyRegion(d.user);
       setUser(d.user);
       // Page reload restores the session here (not via login): the tenant theme must be applied too.
       applyBranding(d.user.branding);
@@ -39,6 +51,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     setSessionExpiredHandler(() => {
       setAccessToken(null);
+      applyRegion(null);
       setUser(null);
       disconnectSocket();
     });
@@ -73,6 +86,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await post('/auth/logout');
     } finally {
       setAccessToken(null);
+      applyRegion(null);
       setUser(null);
       disconnectSocket();
       qc.clear();
@@ -81,6 +95,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const reload = useCallback(async () => {
     const me = await api<SessionUser>('/auth/me');
+    applyRegion(me);
     setUser(me);
     applyBranding(me.branding);
   }, []);

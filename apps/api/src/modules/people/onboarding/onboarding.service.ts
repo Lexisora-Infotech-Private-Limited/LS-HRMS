@@ -11,6 +11,14 @@ import {
   type OnboardingListRow,
   type OnboardingStepKey,
   type OnboardingTemplates,
+  UK_STARTER_STATEMENT_LABELS,
+  UK_STUDENT_LOAN_LABELS,
+  formatShareCode,
+  formatSortCode,
+  maskNiNumber,
+  zonedDateKey,
+  type UkBankStepData,
+  type UkDocsStepData,
 } from '@lexisora/shared';
 import { AuditService } from '../../../core/audit/audit.service';
 import { requireContext } from '../../../core/context/request-context';
@@ -19,6 +27,7 @@ import { AppError, badRequest, notFound } from '../../../core/http/errors';
 import { NotificationsService } from '../../../core/notifications/notifications.service';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { EventsService } from '../../../core/registry/events.service';
+import { currentRegion } from '../../../core/region/region-cache';
 import { SettingsService } from '../../../core/settings/settings.service';
 import { loadCompensation } from '../compensation';
 import { EsignService } from '../documents/esign.service';
@@ -43,10 +52,26 @@ import {
   type ObStatus,
   type ObStepStatus,
 } from '../people.rules';
-import { dbDateKey, fmt, inrPdf } from '../people.util';
+import { dbDateKey, fmt, moneyPdf } from '../people.util';
+import { mergeUkProfile, ukStarterTax } from './uk-onboarding.rules';
 
 const TEMPLATES_KEY = 'people.onboarding.templates';
 const VERIFY_TYPES = ['PAN', 'AADHAAR', 'MARKSHEET_10', 'MARKSHEET_12', 'DEGREE', 'PREV_EMPLOYMENT', 'CANCELLED_CHEQUE'] as const;
+/** UK tenants: the passport / photo ID also has to be verified before onboarding completes. */
+const UK_VERIFY_TYPES = [...VERIFY_TYPES, 'PASSPORT'] as const;
+const isUkTenant = () => currentRegion() === 'GB';
+
+/** UK bank & tax details shown to HR (onboarding detail). */
+export type UkOnboardingBank = {
+  sortCode: string | null;
+  niNumber: string;
+  starterStatement: string | null;
+  studentLoans: string;
+  p45: string | null;
+  taxCode: string | null;
+  nationality: string | null;
+  shareCode: string | null;
+};
 
 export const DEFAULT_TEMPLATES: OnboardingTemplates = {
   offerBody:
@@ -188,7 +213,7 @@ export class OnboardingService {
     let annexureNote: string | null = null;
     if (kind === 'OFFER') {
       const comp = await loadCompensation(this.prisma, this.crypto, employeeId);
-      if (comp) annexure = comp.rows.map((r) => ({ component: r.component, monthly: inrPdf(r.monthlyPaise), annual: inrPdf(r.annualPaise), isTotal: r.isTotal }));
+      if (comp) annexure = comp.rows.map((r) => ({ component: r.component, monthly: moneyPdf(r.monthlyPaise), annual: moneyPdf(r.annualPaise), isTotal: r.isTotal }));
       else annexureNote = 'Your compensation structure is being finalised by Payroll; HR will share Annexure A separately.';
     }
     return {
@@ -248,7 +273,7 @@ export class OnboardingService {
         note: key === 'offer' && !has(['OFFER_LETTER']) ? 'Completed before paperless onboarding' : null,
         completedAt: e.joiningDate?.toISOString() ?? null,
         envelopeId: null,
-        data: key === 'bank' ? { last4: e.bankAccountLast4, ifsc: e.bankIfsc, bank: e.bankName, taxRegime: e.taxRegime } : key === 'kit' ? { tshirtSize: e.tshirtSize } : null,
+        data: key === 'bank' ? (isUkTenant() ? { last4: e.bankAccountLast4, sortCode: e.bankSortCode, bank: e.bankName, niLast4: e.niNumberLast4 } : { last4: e.bankAccountLast4, ifsc: e.bankIfsc, bank: e.bankName, taxRegime: e.taxRegime }) : key === 'kit' ? { tshirtSize: e.tshirtSize } : null,
       }));
       return {
         id: '',
@@ -316,10 +341,39 @@ export class OnboardingService {
     return this.dto(ob ? await this.load(me) : null, me);
   }
 
-  async detail(employeeId: string): Promise<OnboardingDto & { bank: { holder: string | null; account: string; ifsc: string | null; bank: string | null; taxRegime: string; uan: string | null; pan: string } }> {
+  async detail(employeeId: string): Promise<OnboardingDto & { bank: { holder: string | null; account: string; ifsc: string | null; bank: string | null; taxRegime: string; uan: string | null; pan: string; uk?: UkOnboardingBank } }> {
     const ob = await this.load(employeeId);
     const e = await this.prisma.employee.findUniqueOrThrow({ where: { id: employeeId } });
     const bankStep = ob?.steps.find((s) => s.key === 'bank');
+    if (isUkTenant()) {
+      const bd = (bankStep?.data ?? {}) as Record<string, unknown>;
+      const dd = (ob?.steps.find((s) => s.key === 'docs')?.data ?? {}) as Record<string, unknown>;
+      const plans = ((bd.studentLoanPlans as string[] | undefined) ?? []).map((p) => UK_STUDENT_LOAN_LABELS[p as keyof typeof UK_STUDENT_LOAN_LABELS] ?? p);
+      if (bd.postgraduateLoan) plans.push('Postgraduate loan');
+      const st = bd.starterStatement as keyof typeof UK_STARTER_STATEMENT_LABELS | undefined;
+      return {
+        ...(await this.dto(ob, employeeId)),
+        bank: {
+          holder: (bd.holderName as string | undefined) ?? null,
+          account: maskAccount(e.bankAccountLast4),
+          ifsc: null,
+          bank: e.bankName,
+          taxRegime: '',
+          uan: null,
+          pan: '',
+          uk: {
+            sortCode: e.bankSortCode ? formatSortCode(e.bankSortCode) : null,
+            niNumber: e.niNumberLast4 ? maskNiNumber(e.niNumberLast4) : '—',
+            starterStatement: st ? (UK_STARTER_STATEMENT_LABELS[st] ?? st) : null,
+            studentLoans: plans.length ? plans.join(', ') : 'None',
+            p45: bd.hasP45 ? `Pay ${moneyPdf(Number(bd.previousPayPence ?? 0))} · tax ${moneyPdf(Number(bd.previousTaxPence ?? 0))} to date` : null,
+            taxCode: typeof bd.taxCode === 'string' ? `${bd.taxCode}${bd.taxBasis === 'NON_CUMULATIVE' ? ' (Month 1 basis)' : ''}` : null,
+            nationality: dd.nationality === 'BRITISH_IRISH' ? 'British or Irish citizen' : dd.nationality === 'OTHER' ? 'Other nationality' : null,
+            shareCode: typeof dd.shareCode === 'string' && dd.shareCode ? formatShareCode(dd.shareCode) : null,
+          },
+        },
+      };
+    }
     return {
       ...(await this.dto(ob, employeeId)),
       bank: {
@@ -449,6 +503,99 @@ export class OnboardingService {
     return this.mine();
   }
 
+  // ── UK (region GB) steps ─────────────────────────────────────────────────
+
+  /** UK "Personal documents": passport / photo ID, right to work share code, optional extras. */
+  async submitUkDocs(i: UkDocsStepData) {
+    const ob = await this.joinerOb();
+    const m = this.stepMap(ob);
+    if (m.offer !== 'DONE' && m.offer !== 'SKIPPED') throw new AppError(409, 'OFFER_FIRST', 'Sign the offer letter first');
+    const empId = ob.employeeId;
+    const current = await this.vault.listFor(empId);
+    const ids = current.filter((d) => d.docType === 'PASSPORT');
+    const needId = ids.length === 0 || ids.some((d) => d.status === 'REJECTED');
+    if (needId && !i.idFileId) throw new AppError(422, 'ID_REQUIRED', 'Upload your passport or photo ID');
+    const shareCode = i.nationality === 'OTHER' && i.shareCode ? i.shareCode : null;
+
+    const docIds: string[] = [];
+    const add = async (docType: 'PASSPORT' | 'OTHER' | 'DEGREE' | 'PREV_EMPLOYMENT', fileId: string, title?: string) => {
+      docIds.push((await this.vault.add(empId, { docType, fileId, title, source: 'SELF_UPLOAD' })).id);
+    };
+    if (needId) await add('PASSPORT', i.idFileId!, i.idDocument === 'PHOTO_ID' ? 'Photo ID card' : 'Passport');
+    if (i.rtwProofFileId) await add('OTHER', i.rtwProofFileId, 'Right to work proof');
+    if (i.addressProofFileId) await add('OTHER', i.addressProofFileId, 'Proof of address');
+    const quals = i.qualificationFileIds ?? [];
+    for (const [n, f] of quals.entries()) await add('DEGREE', f, quals.length === 1 ? 'Qualification certificate' : `Qualification certificate ${n + 1}`);
+    if (i.prevEmploymentFileId) await add('PREV_EMPLOYMENT', i.prevEmploymentFileId);
+
+    const data: Record<string, unknown> = { ...((ob.steps.find((s) => s.key === 'docs')?.data ?? {}) as Record<string, unknown>) };
+    data.idDocument = i.idDocument;
+    data.nationality = i.nationality;
+    data.shareCode = shareCode;
+    data.documentIds = [...new Set([...((data.documentIds as string[] | undefined) ?? []), ...docIds])];
+    await this.apply(ob, { type: 'STEP_DONE', key: 'docs' }, { docs: { data: data as Prisma.InputJsonValue } });
+    await this.audit.record({ action: 'onboarding.rtw_details', entity: 'Employee', entityId: empId, meta: { nationality: i.nationality, shareCodeGiven: !!shareCode } });
+    const e = await this.prisma.employee.findUnique({ where: { id: empId }, select: { fullName: true } });
+    const hr = await this.notify.usersWithPermission('rtw.manage');
+    await this.notify.notify({
+      userIds: hr.length ? hr : await this.notify.usersWithPermission('onboarding.manage'),
+      type: 'people.rtwDetails',
+      title: `${e?.fullName ?? 'A joiner'} sent right to work details`,
+      body: shareCode
+        ? `Share code ${formatShareCode(shareCode)}. Do the online check and record it on the Right to work page.`
+        : 'British or Irish citizen. Check the passport (manual or IDSP) and record it on the Right to work page.',
+      link: `/right-to-work?employee=${empId}`,
+      from: 'System',
+    });
+    return this.mine();
+  }
+
+  /** UK "Bank & tax": sort code + account, NI number, starter checklist, student loans, P45. */
+  async submitUkBank(i: UkBankStepData) {
+    const ob = await this.joinerOb();
+    const e = await this.prisma.employee.findUniqueOrThrow({ where: { id: ob.employeeId } });
+    if (i.hasP45 && i.p45FileId) await this.vault.add(e.id, { docType: 'OTHER', fileId: i.p45FileId, title: 'P45', source: 'SELF_UPLOAD' });
+    const ni = i.niNumber || null;
+    await this.prisma.employee.update({
+      where: { id: e.id },
+      data: {
+        bankAccountEnc: this.crypto.encrypt(i.accountNumber),
+        bankAccountLast4: i.accountNumber.slice(-4),
+        bankSortCode: i.sortCode,
+        ...(ni ? { niNumberEnc: this.crypto.encrypt(ni), niNumberLast4: ni.slice(-4) } : {}),
+      },
+    });
+    const existing = await this.prisma.employeePayrollProfile.findUnique({ where: { employeeId: e.id }, select: { id: true, ukProfile: true } });
+    const ukProfile = mergeUkProfile(existing?.ukProfile ?? null, i, zonedDateKey(new Date()));
+    if (existing) await this.prisma.employeePayrollProfile.update({ where: { employeeId: e.id }, data: { ukProfile: ukProfile as unknown as Prisma.InputJsonValue } });
+    else await this.prisma.employeePayrollProfile.create({ data: { employeeId: e.id, pfEnabled: false, ukProfile: ukProfile as unknown as Prisma.InputJsonValue } as Prisma.EmployeePayrollProfileUncheckedCreateInput });
+    await this.prisma.onboarding.update({ where: { id: ob.id }, data: { bankVerifiedAt: null, bankVerifiedBy: null } });
+    const mismatch = !namesMatch(e.fullName, i.holderName);
+    const starter = ukStarterTax(i.starterStatement);
+    await this.apply(ob, { type: 'STEP_DONE', key: 'bank' }, {
+      bank: {
+        data: {
+          holderName: i.holderName,
+          last4: i.accountNumber.slice(-4),
+          sortCode: i.sortCode,
+          niLast4: ni ? ni.slice(-4) : null,
+          starterStatement: i.starterStatement,
+          studentLoanPlans: i.studentLoanPlans,
+          postgraduateLoan: i.postgraduateLoan,
+          hasP45: i.hasP45,
+          previousPayPence: i.hasP45 ? (i.previousPayPence ?? 0) : null,
+          previousTaxPence: i.hasP45 ? (i.previousTaxPence ?? 0) : null,
+          taxCode: ukProfile.taxCode,
+          taxBasis: ukProfile.taxBasis,
+          starterTaxCode: starter.taxCode,
+          nameMismatch: mismatch,
+        },
+      },
+    });
+    await this.audit.record({ action: 'bank_account.submitted', entity: 'Employee', entityId: e.id, meta: { account: maskAccount(i.accountNumber.slice(-4)), sortCode: formatSortCode(i.sortCode), niGiven: !!ni, starterStatement: i.starterStatement } });
+    return this.mine();
+  }
+
   /** Step 5: T-shirt size → Finish. HR notified, `onboarding.completed` emitted, ID card queued. */
   async finish(i: KitStepInput) {
     const ob = await this.joinerOb();
@@ -557,7 +704,7 @@ export class OnboardingService {
   async maybeComplete(employeeId: string) {
     const ob = await this.load(employeeId);
     if (!ob || ob.status !== 'SUBMITTED' || !ob.bankVerifiedAt) return false;
-    const open = await this.prisma.employeeDocument.count({ where: { employeeId, docType: { in: [...VERIFY_TYPES] }, isCurrent: true, deletedAt: null, verificationStatus: { in: ['PENDING', 'REJECTED'] } } });
+    const open = await this.prisma.employeeDocument.count({ where: { employeeId, docType: { in: [...(isUkTenant() ? UK_VERIFY_TYPES : VERIFY_TYPES)] }, isCurrent: true, deletedAt: null, verificationStatus: { in: ['PENDING', 'REJECTED'] } } });
     if (open) return false;
     await this.apply(ob, { type: 'ALL_VERIFIED' });
     await this.notify.notify({ userIds: await this.notify.usersForEmployees([employeeId]), type: 'people.onboardingCompleted', title: 'Your onboarding is complete', body: 'HR has verified your documents and bank details.', link: '/onboarding', from: 'HR' });

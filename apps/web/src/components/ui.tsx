@@ -1,14 +1,18 @@
 import { useEffect, type ReactNode } from 'react';
+import { regionText } from '@lexisora/shared';
 import { fileUrl } from '@/lib/api';
+
+/** Text in the tenant's region wording (UK: Clock in, Rotas, Performance reviews…). India: unchanged. */
+export const rt = (n: ReactNode): ReactNode => (typeof n === 'string' ? regionText(n) : n);
 
 /** Page title block: h2 + subtitle on the left, actions on the right (every wireframe screen). */
 export function PageHeader({ title, sub, actions, kicker }: { title: ReactNode; sub?: ReactNode; actions?: ReactNode; kicker?: ReactNode }) {
   return (
     <div className="page-head">
       <div>
-        {kicker && <div className="kicker">{kicker}</div>}
-        <h2 style={kicker ? { marginTop: 4 } : undefined}>{title}</h2>
-        {sub && <p>{sub}</p>}
+        {kicker && <div className="kicker">{rt(kicker)}</div>}
+        <h2 style={kicker ? { marginTop: 4 } : undefined}>{rt(title)}</h2>
+        {sub && <p>{rt(sub)}</p>}
       </div>
       {actions && <div className="row">{actions}</div>}
     </div>
@@ -55,7 +59,7 @@ export function Tabs<T extends string | number>({ tabs, value, onChange }: { tab
     <div className="tabs" role="tablist">
       {tabs.map((t) => (
         <button key={String(t.value)} role="tab" aria-selected={t.value === value} onClick={() => onChange(t.value)}>
-          {t.label}
+          {rt(t.label)}
         </button>
       ))}
     </div>
@@ -68,7 +72,7 @@ export function Seg<T extends string>({ options, value, onChange }: { options: {
     <div className="seg">
       {options.map((o) => (
         <button key={o.value} aria-pressed={o.value === value} onClick={() => onChange(o.value)}>
-          {o.label}
+          {rt(o.label)}
         </button>
       ))}
     </div>
@@ -94,7 +98,7 @@ export function Pills<T extends string>({ options, value, onChange }: { options:
             color: o.value === value ? 'var(--color-accent-700)' : 'var(--color-text)',
           }}
         >
-          {o.label}
+          {rt(o.label)}
         </button>
       ))}
     </div>
@@ -107,9 +111,9 @@ export function Kpis({ items }: { items: KpiItem[] }) {
     <div className="kpis">
       {items.map((k, i) => (
         <div className="kpi" key={i}>
-          <div className="kpi-label">{k.label}</div>
+          <div className="kpi-label">{rt(k.label)}</div>
           <div className="kpi-value">{k.value}</div>
-          {k.sub && <div className="kpi-sub">{k.sub}</div>}
+          {k.sub && <div className="kpi-sub">{rt(k.sub)}</div>}
         </div>
       ))}
     </div>
@@ -119,8 +123,8 @@ export function Kpis({ items }: { items: KpiItem[] }) {
 export function Card({ kicker, title, children, actions, style }: { kicker?: ReactNode; title?: ReactNode; children?: ReactNode; actions?: ReactNode; style?: React.CSSProperties }) {
   return (
     <div className="card" style={style}>
-      {kicker && <div className="card-kicker">{kicker}</div>}
-      {title && <div className="card-title">{title}</div>}
+      {kicker && <div className="card-kicker">{rt(kicker)}</div>}
+      {title && <div className="card-title">{rt(title)}</div>}
       {children}
       {actions && <div className="row" style={{ marginTop: 'auto' }}>{actions}</div>}
     </div>
@@ -193,7 +197,7 @@ export function Modal({ title, onClose, children, actions, wide }: { title: Reac
     <div className="dialog-backdrop">
       <div className={`dialog${wide ? ' dialog-wide' : ''}`} role="dialog" aria-modal onMouseDown={(e) => e.stopPropagation()}>
         <div className="dialog-head">
-          <div className="dialog-title">{title}</div>
+          <div className="dialog-title">{rt(title)}</div>
           <button type="button" className="dialog-close" aria-label="Close" onClick={onClose}>×</button>
         </div>
         {children}
@@ -211,11 +215,11 @@ export function ConfirmDialog({ title, body, confirmLabel = 'Confirm', danger, o
       actions={
         <>
           <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button className={`btn ${danger ? 'btn-danger' : 'btn-primary'}`} disabled={busy} onClick={onConfirm}>{confirmLabel}</button>
+          <button className={`btn ${danger ? 'btn-danger' : 'btn-primary'}`} disabled={busy} onClick={onConfirm}>{rt(confirmLabel)}</button>
         </>
       }
     >
-      {body && <div className="dialog-body">{body}</div>}
+      {body && <div className="dialog-body">{rt(body)}</div>}
     </Modal>
   );
 }

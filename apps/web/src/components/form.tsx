@@ -1,5 +1,9 @@
 import { useRef, useState, type ReactNode } from 'react';
+import { currencySymbol, regionText } from '@lexisora/shared';
 import { HttpError, uploadFile } from '@/lib/api';
+
+/** Field labels are written with ₹; UK tenants see £. */
+export const moneyText = (s: string): string => regionText(s.includes('₹') ? s.replace(/₹/g, currencySymbol()) : s);
 import { Modal } from './ui';
 
 export type Option = { value: string; label: string };
@@ -93,7 +97,7 @@ export function FormModal({
     for (const f of visible) {
       const v = values[f.name];
       const empty = f.type === 'file' ? !files[f.name] && !v : v === '' || v === null || v === undefined || (Array.isArray(v) && !v.length);
-      if (f.required && empty) errs[f.name] = `${f.label} is required`;
+      if (f.required && empty) errs[f.name] = `${moneyText(f.label)} is required`;
       if (f.type === 'email' && v && !/^\S+@\S+\.\S+$/.test(v)) errs[f.name] = 'Enter a valid email';
     }
     setErrors(errs);
@@ -108,7 +112,7 @@ export function FormModal({
           const file = files[f.name];
           v = file ? (await uploadFile(file, f.category ?? 'misc')).id : v || null;
         } else if (f.type === 'number') v = v === '' ? null : Number(v);
-        else if (f.type === 'money') v = v === '' ? null : Math.round(Number(String(v).replace(/[,₹\s]/g, '')) * 100);
+        else if (f.type === 'money') v = v === '' ? null : Math.round(Number(String(v).replace(/[,₹£\s]/g, '')) * 100);
         else if (v === '') v = null;
         out[f.name] = v;
       }
@@ -134,12 +138,12 @@ export function FormModal({
         <>
           <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
           <button className="btn btn-primary" onClick={submit} disabled={busy}>
-            {busy ? 'Saving…' : submitLabel}
+            {busy ? 'Saving…' : regionText(submitLabel)}
           </button>
         </>
       }
     >
-      {intro && <div className="dialog-body">{intro}</div>}
+      {intro && <div className="dialog-body">{typeof intro === 'string' ? regionText(intro) : intro}</div>}
       <form
         className="form-grid"
         onSubmit={(e) => {
@@ -149,7 +153,7 @@ export function FormModal({
       >
         {visible.map((f) => (
           <div key={f.name} className={`field${f.span === 2 || f.type === 'area' || f.type === 'file' ? ' span-2' : ''}`}>
-            {f.type !== 'checkbox' && f.type !== 'toggle' && <label htmlFor={`f-${f.name}`}>{f.label}{f.required ? <span className="field-required"> *</span> : null}</label>}
+            {f.type !== 'checkbox' && f.type !== 'toggle' && <label htmlFor={`f-${f.name}`}>{moneyText(f.label)}{f.required ? <span className="field-required"> *</span> : null}</label>}
             <FieldInput f={f.optionsFor ? { ...f, options: f.optionsFor(values) } : f} value={values[f.name]} onChange={(v) => set(f.name, v)} file={files[f.name] ?? null} onFile={(file) => setFiles((s) => ({ ...s, [f.name]: file }))} invalid={!!errors[f.name]} />
             {errors[f.name] ? <div className="field-error">{errors[f.name]}</div> : f.hint ? <div className="field-hint">{f.hint}</div> : null}
           </div>
@@ -170,7 +174,7 @@ export function FieldInput({ f, value, onChange, file, onFile, invalid }: { f: F
         <select className="input" {...common} value={value ?? ''} onChange={(e) => onChange(e.target.value)}>
           {!f.required && <option value="">{f.placeholder ?? 'Select…'}</option>}
           {(f.options ?? []).map((o) => (
-            <option key={o.value} value={o.value}>{o.label}</option>
+            <option key={o.value} value={o.value}>{regionText(o.label)}</option>
           ))}
         </select>
       );
@@ -183,7 +187,7 @@ export function FieldInput({ f, value, onChange, file, onFile, invalid }: { f: F
         <label className="radio">
           <input type="checkbox" checked={!!value} onChange={(e) => onChange(e.target.checked)} />
           <span className="dot" style={{ borderRadius: 3 }} />
-          {f.label}
+          {moneyText(f.label)}
         </label>
       );
     case 'toggle':
@@ -191,7 +195,7 @@ export function FieldInput({ f, value, onChange, file, onFile, invalid }: { f: F
         <label className="switch">
           <input type="checkbox" role="switch" checked={!!value} disabled={f.disabled} onChange={(e) => onChange(e.target.checked)} />
           <span className="switch-track"><span className="switch-thumb" /></span>
-          {f.label}
+          {moneyText(f.label)}
         </label>
       );
     case 'file':
@@ -199,7 +203,7 @@ export function FieldInput({ f, value, onChange, file, onFile, invalid }: { f: F
     case 'phone':
       return <input className="input" {...common} type="tel" inputMode="tel" autoComplete="off" maxLength={18} placeholder={f.placeholder} value={value ?? ''} onChange={(e) => onChange(cleanPhone(e.target.value))} />;
     case 'money':
-      return <input className="input" {...common} inputMode="decimal" placeholder={f.placeholder ?? '₹'} value={value ?? ''} onChange={(e) => onChange(e.target.value)} />;
+      return <input className="input" {...common} inputMode="decimal" placeholder={f.placeholder ? moneyText(f.placeholder) : currencySymbol()} value={value ?? ''} onChange={(e) => onChange(e.target.value)} />;
     case 'datetime':
       return <input className="input" {...common} type="datetime-local" value={value ?? ''} onChange={(e) => onChange(e.target.value)} />;
     default:

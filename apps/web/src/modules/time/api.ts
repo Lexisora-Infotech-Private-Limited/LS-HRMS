@@ -1,3 +1,4 @@
+import { zoneOffsetMinutes } from '@lexisora/shared';
 import { useQuery } from '@tanstack/react-query';
 import type {
   ApprovalDetail,
@@ -150,7 +151,7 @@ export function parseHmm(v: string): number | null {
   return null;
 }
 export function istToday(): string {
-  return new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10);
+  return new Date(Date.now() + zoneOffsetMinutes(new Date()) * 60_000).toISOString().slice(0, 10);
 }
 export function addDaysKey(key: string, n: number): string {
   return new Date(new Date(`${key}T00:00:00Z`).getTime() + n * 86_400_000).toISOString().slice(0, 10);
@@ -176,10 +177,10 @@ export function dayKeyLabel(key: string): string {
 /** ISO instant → "29 Sep, 09:41" (IST). */
 export function stamp(iso: string | null | undefined): string {
   if (!iso) return '—';
-  const d = new Date(new Date(iso).getTime() + 330 * 60_000);
+  const d = new Date(new Date(iso).getTime() + zoneOffsetMinutes(new Date(iso)) * 60_000);
   return `${d.getUTCDate()} ${d.toLocaleString('en-IN', { month: 'short', timeZone: 'UTC' })}, ${d.toISOString().slice(11, 16)}`;
 }
 export function timeOf(iso: string | null | undefined): string {
   if (!iso) return '—';
-  return new Date(new Date(iso).getTime() + 330 * 60_000).toISOString().slice(11, 16);
+  return new Date(new Date(iso).getTime() + zoneOffsetMinutes(new Date(iso)) * 60_000).toISOString().slice(11, 16);
 }

@@ -29,6 +29,8 @@ model Tenant {
   stateName   String?
   phone       String?
   timezone    String          @default("Asia/Kolkata")
+  /// Country the tenant runs in: IN (default, original behaviour) | GB. Drives currency, time zone, payroll and tax rules.
+  region      String          @default("IN")
   brandAccent String          @default("#b68235")
   brandAccent2 String         @default("#2d2b2b")
   brandName   String?
@@ -249,6 +251,10 @@ model Employee {
   bankIfsc              String?
   bankName              String?
   taxRegime             TaxRegime      @default(NEW)
+  // UK tenants only (region GB): National Insurance number (encrypted) and bank sort code.
+  niNumberEnc           String?
+  niNumberLast4         String?
+  bankSortCode          String?
   tshirtSize            String?
   createdAt             DateTime       @default(now())
   updatedAt             DateTime       @updatedAt

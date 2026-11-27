@@ -12,6 +12,7 @@ import { LedgerService } from './ledger.service';
 import { InvoiceService } from './invoice.service';
 import { PurchaseService } from './purchase.service';
 import type { PayrollTotals } from './lib/gst';
+import { tenantsForCron } from '../../core/region/region-cache';
 
 /**
  * Finance wiring (ARCHITECTURE §6/§7): event consumers that post vouchers, dropdown lookups,
@@ -135,7 +136,7 @@ export class FinanceRegistry implements OnModuleInit {
   /** 09:00 IST daily: invoices that became overdue yesterday → alert finance admins. */
   @Cron('0 9 * * *', { timeZone: 'Asia/Kolkata' })
   async overdueScan() {
-    const tenants = await this.prisma.raw.tenant.findMany({ where: { status: 'ACTIVE' }, select: { id: true } });
+    const tenants = tenantsForCron(await this.prisma.raw.tenant.findMany({ where: { status: 'ACTIVE' }, select: { id: true } }));
     for (const t of tenants) {
       try {
         const n = await runAsTenant(t.id, () => this.invoices.notifyNewlyOverdue());

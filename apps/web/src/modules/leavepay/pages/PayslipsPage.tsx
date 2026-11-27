@@ -82,7 +82,9 @@ function PayslipModal({ row, onClose, onDownload }: { row: PayslipRow; onClose: 
             <div className="faint" style={{ fontSize: 12.5 }}>{d.netInWords}</div>
           </div>
           <div className="faint" style={{ fontSize: 12.5 }}>
-            Year to date: gross {formatINR(d.ytd.grossPaise)} · TDS {formatINR(d.ytd.tdsPaise)} · PF {formatINR(d.ytd.pfPaise)}{d.taxRegime ? ` · ${d.taxRegime === 'OLD' ? 'Old' : 'New'} tax regime` : ''}
+            {d.uk
+              ? `Tax year ${d.uk.taxYearLabel} to date: taxable pay ${formatINR(d.uk.ytd.taxablePayPence, { decimals: true })} · tax ${formatINR(d.uk.ytd.taxPence, { decimals: true })} · NI ${formatINR(d.uk.ytd.niEmployeePence, { decimals: true })} · pension ${formatINR(d.uk.ytd.pensionEmployeePence, { decimals: true })} · tax code ${d.uk.taxCode} · NI category ${d.uk.niCategory}`
+              : <>Year to date: gross {formatINR(d.ytd.grossPaise)} · TDS {formatINR(d.ytd.tdsPaise)} · PF {formatINR(d.ytd.pfPaise)}{d.taxRegime ? ` · ${d.taxRegime === 'OLD' ? 'Old' : 'New'} tax regime` : ''}</>}
           </div>
         </div>
       )}

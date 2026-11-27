@@ -9,6 +9,8 @@ import {
   onboardingTemplatesSchema,
   peopleReasonSchema,
   reopenStepSchema,
+  ukBankStepSchema,
+  ukDocsStepSchema,
   vaultUploadSchema,
   vaultVerifySchema,
   verifyBankSchema,
@@ -23,6 +25,7 @@ import { Public, RequirePerm } from '../../../core/auth/decorators';
 import { requireContext } from '../../../core/context/request-context';
 import { notFound } from '../../../core/http/errors';
 import { ZodPipe } from '../../../core/http/zod.pipe';
+import { currentRegion } from '../../../core/region/region-cache';
 import { EsignService } from '../documents/esign.service';
 import { VaultService } from '../documents/vault.service';
 import { OnboardingService } from './onboarding.service';
@@ -65,14 +68,20 @@ export class OnboardingController {
   @Post('me/docs')
   @RequirePerm('onboarding.self')
   @HttpCode(200)
-  docs(@Body(new ZodPipe(docsStepSchema)) dto: DocsStepInput) {
+  docs(@Body() body: unknown) {
+    // UK tenants: passport / ID + right to work share code instead of PAN / Aadhaar.
+    if (currentRegion() === 'GB') return this.onboarding.submitUkDocs(new ZodPipe(ukDocsStepSchema).transform(body));
+    const dto: DocsStepInput = new ZodPipe(docsStepSchema).transform(body);
     return this.onboarding.submitDocs(dto);
   }
 
   @Post('me/bank')
   @RequirePerm('onboarding.self')
   @HttpCode(200)
-  bank(@Body(new ZodPipe(bankStepSchema)) dto: BankStepInput) {
+  bank(@Body() body: unknown) {
+    // UK tenants: sort code, NI number and the HMRC starter checklist instead of IFSC / UAN / tax regime.
+    if (currentRegion() === 'GB') return this.onboarding.submitUkBank(new ZodPipe(ukBankStepSchema).transform(body));
+    const dto: BankStepInput = new ZodPipe(bankStepSchema).transform(body);
     return this.onboarding.submitBank(dto);
   }
 

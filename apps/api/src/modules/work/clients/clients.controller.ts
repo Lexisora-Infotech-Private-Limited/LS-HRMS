@@ -1,9 +1,19 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, type PipeTransform } from '@nestjs/common';
 import type { z } from 'zod';
-import { clientInput, clientListQuery, clientStatusInput, projectDocumentInput, type ClientInput } from '@lexisora/shared';
+import { clientInput, clientListQuery, clientStatusInput, projectDocumentInput, ukClientInput, type ClientInput } from '@lexisora/shared';
+import { currentRegion } from '../../../core/region/region-cache';
 import { RequirePerm } from '../../../core/auth/decorators';
 import { ZodPipe } from '../../../core/http/zod.pipe';
 import { ClientsService } from './clients.service';
+
+/** India: `clientInput` (GSTIN, GST registration type, state) unchanged; UK (GB): `ukClientInput` (VAT number, country). */
+class ClientBodyPipe implements PipeTransform {
+  private readonly india = new ZodPipe(clientInput);
+  private readonly uk = new ZodPipe(ukClientInput);
+  transform(value: unknown): ClientInput {
+    return currentRegion() === 'GB' ? (this.uk.transform(value) as ClientInput) : this.india.transform(value);
+  }
+}
 
 @Controller('clients')
 @RequirePerm('clients.manage')
@@ -16,7 +26,7 @@ export class ClientsController {
   }
 
   @Post()
-  create(@Body(new ZodPipe(clientInput)) body: ClientInput) {
+  create(@Body(new ClientBodyPipe()) body: ClientInput) {
     return this.svc.create(body);
   }
 
@@ -26,7 +36,7 @@ export class ClientsController {
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body(new ZodPipe(clientInput)) body: ClientInput) {
+  update(@Param('id') id: string, @Body(new ClientBodyPipe()) body: ClientInput) {
     return this.svc.update(id, body);
   }
 

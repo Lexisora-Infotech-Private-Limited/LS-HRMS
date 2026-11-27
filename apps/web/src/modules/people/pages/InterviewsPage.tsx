@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { INTERVIEW_RECOMMENDATION_LABELS, RECOMMENDATIONS, type InterviewDetail, type InterviewRow, type ScorecardInput } from '@lexisora/shared';
+import { INTERVIEW_RECOMMENDATION_LABELS, RECOMMENDATIONS, type InterviewDetail, type InterviewRow, type ScorecardInput, activeTimezone } from '@lexisora/shared';
 import { fileUrl } from '@/lib/api';
 import { useMe } from '@/lib/auth';
 import { useAction } from '@/lib/query';
@@ -14,8 +14,8 @@ import { PromptModal, ScheduleInterviewModal } from '../recruitment';
 import '../people.css';
 
 const TAB_LABELS: Record<InterviewTab, string> = { upcoming: 'Upcoming', past: 'Past', all: 'All' };
-const istDate = (iso: string) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date(iso));
-const istTime = (iso: string) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(iso));
+const istDate = (iso: string) => new Intl.DateTimeFormat('en-CA', { timeZone: activeTimezone() }).format(new Date(iso));
+const istTime = (iso: string) => new Intl.DateTimeFormat('en-GB', { timeZone: activeTimezone(), hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(iso));
 
 /**
  * Interviews. Recruiters see everything in scope; leads, managers and any employee sitting on a

@@ -24,6 +24,10 @@
 .brand { padding: 0 8px; display: flex; flex-direction: column; gap: 2px; text-decoration: none; color: var(--color-sidebar-text); }
 .brand-name { font-family: var(--font-heading); font-size: 22px; font-weight: 600; line-height: 1; color: var(--color-sidebar-active-text); }
 .brand-sub { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-sidebar-text-muted); }
+/* Region the company runs in (India / United Kingdom), shown to everyone next to the product name. */
+.brand-sub { display: inline-flex; align-items: center; gap: 8px; }
+.region-badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 9.5px; font-weight: 700; letter-spacing: 0.08em; line-height: 1.5; color: var(--color-sidebar-active-text); border: 1px solid color-mix(in srgb, var(--color-sidebar-active-text) 45%, transparent); }
+.region-badge-uk { background: color-mix(in srgb, var(--color-accent) 85%, transparent); border-color: var(--color-accent); color: #fff; }
 .nav-group { display: flex; flex-direction: column; gap: 1px; }
 .nav-group-title { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-sidebar-text-muted); padding: 0 8px 4px; }
 .nav-link { text-align: left; font-size: 13px; padding: 5px 8px; border-radius: 4px; color: var(--color-sidebar-text); text-decoration: none; display: flex; justify-content: space-between; }

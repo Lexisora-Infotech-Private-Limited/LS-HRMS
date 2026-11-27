@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { formatDate, formatINR, type FilingDocumentRow, type FilingFolderTile, type FinComplianceItem, type FinGstReturnRow, type FinGstReturnStatus } from '@lexisora/shared';
+import { formatDate, formatINR, type FilingDocumentRow, type FilingFolderTile, type FinComplianceItem, type FinGstReturnRow, type FinGstReturnStatus, type FinVatReturnRow } from '@lexisora/shared';
+import { useMe } from '@/lib/auth';
 import { Card, ConfirmDialog, ErrorBlock, Loading, Modal, PageHeader, Tag, type Tone } from '@/components/ui';
 import { DataTable, Pager, type Column } from '@/components/table';
 import { FormModal } from '@/components/form';
@@ -17,10 +18,12 @@ const COMPLIANCE_TONE: Record<FinComplianceItem['status'], Tone> = { FILED: 'acc
 const COMPLIANCE_LABEL: Record<FinComplianceItem['status'], string> = { FILED: 'Filed', OVERDUE: 'Overdue', DUE_SOON: 'Due soon', UPCOMING: 'Upcoming' };
 const RETURN_TONE: Record<FinGstReturnStatus['status'], Tone> = { FILED: 'accent', OVERDUE: 'danger', DUE: 'outline', OPEN: 'neutral' };
 const RETURN_LABEL: Record<FinGstReturnStatus['status'], string> = { FILED: 'Filed', OVERDUE: 'Overdue', DUE: 'Due', OPEN: 'Open' };
-const LINK_LABEL: Record<string, string> = { PURCHASE: 'Purchase', INVOICE: 'Invoice', GST_RETURN: 'GST return' };
+const LINK_LABEL: Record<string, string> = { PURCHASE: 'Purchase', INVOICE: 'Invoice', GST_RETURN: 'GST return', VAT_RETURN: 'VAT return' };
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
 /** Filing cabinet (GEN.filing): compliance calendar, folder tiles, folder view, search, upload. */
 export default function FilingPage() {
+  const gb = useMe().region === 'GB';
   const [folderId, setFolderId] = useParamState('folder');
   const [q, setQ] = useParamState('q');
   const [upload, setUpload] = useState(false);
@@ -42,7 +45,7 @@ export default function FilingPage() {
         }
       />
       <div className="fin-toolbar">
-        <input className="input grow" aria-label="Search documents" placeholder="Search all documents by name, tag or reference (e.g. INV-0412, gst, amazon)" value={q ?? ''} onChange={(e) => setQ(e.target.value || null)} />
+        <input className="input grow" aria-label="Search documents" placeholder={gb ? 'Search all documents by name, tag or reference (e.g. INV-0412, vat, hmrc)' : 'Search all documents by name, tag or reference (e.g. INV-0412, gst, amazon)'} value={q ?? ''} onChange={(e) => setQ(e.target.value || null)} />
       </div>
       {q && !folderId ? (
         <SearchResults q={q} onOpenFolder={(id) => (setQ(null), setFolderId(id))} />
@@ -111,12 +114,14 @@ function FolderTiles({ folders, onOpen }: { folders: FilingFolderTile[]; onOpen:
 // ── Compliance calendar ──────────────────────────────────────────────────────
 
 function ComplianceCard() {
+  const gb = useMe().region === 'GB';
   const q = useQuery({ queryKey: finKeys.compliance, queryFn: finApi.compliance });
   const [filing, setFiling] = useState<FinComplianceItem | null>(null);
+  const [ukSettings, setUkSettings] = useState(false);
   const unfile = useAction((i: FinComplianceItem) => finApi.unmarkFiled(i.form, i.period), { success: 'Marked as not filed', invalidate: FIN_ALL });
   const items = (q.data ?? []).slice(0, 8);
   return (
-    <Card kicker="Compliance calendar" title="Upcoming statutory due dates">
+    <Card kicker="Compliance calendar" title="Upcoming statutory due dates" actions={gb ? <button className="btn btn-ghost btn-sm" onClick={() => setUkSettings(true)}>Year end & VAT quarters</button> : undefined}>
       {q.error ? (
         <ErrorBlock error={q.error} />
       ) : !q.data ? (
@@ -147,7 +152,46 @@ function ComplianceCard() {
         </div>
       )}
       {filing && <MarkFiledDialog form={filing.form} period={filing.period} label={`${filing.label} · ${filing.periodLabel}`} onClose={() => setFiling(null)} />}
+      {ukSettings && <UkComplianceSettingsDialog onClose={() => setUkSettings(false)} />}
     </Card>
+  );
+}
+
+/** UK (GB): company year end, VAT quarter stagger and confirmation statement review date. */
+function UkComplianceSettingsDialog({ onClose }: { onClose: () => void }) {
+  const q = useQuery({ queryKey: finKeys.ukCompliance, queryFn: finApi.ukComplianceSettings });
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  if (!q.data) return <Modal title="Year end & VAT quarters" onClose={onClose}>{q.error ? <ErrorBlock error={q.error} /> : <Loading />}</Modal>;
+  const d = q.data;
+  const monthOptions = MONTH_NAMES.map((m, i) => ({ value: String(i + 1), label: m }));
+  return (
+    <FormModal
+      title="Year end & VAT quarters"
+      fields={[
+        { name: 'vatStaggerEndMonth', label: 'VAT quarters end in', type: 'select', required: true, options: [{ value: '3', label: 'Mar, Jun, Sep, Dec' }, { value: '1', label: 'Jan, Apr, Jul, Oct' }, { value: '2', label: 'Feb, May, Aug, Nov' }] },
+        { name: 'yearEndMonth', label: 'Company year end — month', type: 'select', required: true, options: monthOptions },
+        { name: 'yearEndDay', label: 'Company year end — day', type: 'number', required: true },
+        { name: 'confirmationMonth', label: 'Confirmation statement review date — month', type: 'select', options: monthOptions, placeholder: 'Same as the year end' },
+        { name: 'confirmationDay', label: 'Confirmation statement review date — day', type: 'number' },
+      ]}
+      submitLabel="Save"
+      initial={{ vatStaggerEndMonth: String(d.vatStaggerEndMonth), yearEndMonth: String(d.yearEndMonth), yearEndDay: d.yearEndDay, confirmationMonth: d.confirmationMonth ? String(d.confirmationMonth) : '', confirmationDay: d.confirmationDay ?? '' }}
+      onSubmit={async (v) => {
+        const day = (x: unknown) => (x === '' || x === null || x === undefined ? null : Math.min(31, Math.max(1, Math.round(Number(x)))));
+        await finApi.saveUkComplianceSettings({
+          vatStaggerEndMonth: Number(v.vatStaggerEndMonth),
+          yearEndMonth: Number(v.yearEndMonth),
+          yearEndDay: day(v.yearEndDay) ?? 31,
+          confirmationMonth: v.confirmationMonth ? Number(v.confirmationMonth) : null,
+          confirmationDay: v.confirmationMonth ? day(v.confirmationDay) : null,
+        });
+        void qc.invalidateQueries({ queryKey: ['finance', 'filing'] });
+        void qc.invalidateQueries({ queryKey: ['finance', 'purchases'] });
+        toast('Saved');
+      }}
+      onClose={onClose}
+    />
   );
 }
 
@@ -167,8 +211,8 @@ function MarkFiledDialog({ form, period, label, onClose }: { form: FinCompliance
       }
     >
       <div className="form-grid">
-        <Field label="ARN / challan / acknowledgement no." htmlFor="mf-ref">
-          <input id="mf-ref" className="input" value={ref} onChange={(e) => setRef(e.target.value)} placeholder="e.g. AA2409260012345" />
+        <Field label={useMe().region === 'GB' ? 'HMRC / Companies House reference' : 'ARN / challan / acknowledgement no.'} htmlFor="mf-ref">
+          <input id="mf-ref" className="input" value={ref} onChange={(e) => setRef(e.target.value)} placeholder={useMe().region === 'GB' ? 'e.g. submission receipt no.' : 'e.g. AA2409260012345'} />
         </Field>
         <Field label="Filed on" htmlFor="mf-date">
           <input id="mf-date" type="date" className="input" max={todayKey()} value={filedOn} onChange={(e) => setFiledOn(e.target.value)} />
@@ -182,6 +226,7 @@ function MarkFiledDialog({ form, period, label, onClose }: { form: FinCompliance
 
 function useDocColumns(onPreview: (d: FilingDocumentRow) => void, onEdit: (d: FilingDocumentRow) => void, onDelete: (d: FilingDocumentRow) => void, showFolder: boolean): Column<FilingDocumentRow>[] {
   const navigate = useNavigate();
+  const gb = useMe().region === 'GB';
   const link = (d: FilingDocumentRow) => {
     if (d.linkedEntityType === 'INVOICE' && d.linkedEntityId) return () => navigate(`/invoices?open=${d.linkedEntityId}`);
     if (d.linkedEntityType === 'PURCHASE' && d.linkedEntityId) return () => navigate(`/purchases?open=${d.linkedEntityId}`);
@@ -241,7 +286,7 @@ function useDocColumns(onPreview: (d: FilingDocumentRow) => void, onEdit: (d: Fi
         <span className="row" style={{ gap: 4, flexWrap: 'nowrap' }} onClick={(e) => e.stopPropagation()}>
           <button className="btn btn-ghost btn-sm" onClick={() => void finApi.downloadDoc(d.id)}>Download</button>
           <button className="btn btn-ghost btn-sm" onClick={() => onEdit(d)}>Edit</button>
-          <button className="btn btn-ghost btn-sm" disabled={d.locked} title={d.locked ? 'Linked to a posted record — kept for 8 years (GST record retention)' : undefined} onClick={() => onDelete(d)}>Delete</button>
+          <button className="btn btn-ghost btn-sm" disabled={d.locked} title={d.locked ? (gb ? 'Linked to a posted record — kept for 6 years (HMRC record keeping)' : 'Linked to a posted record — kept for 8 years (GST record retention)') : undefined} onClick={() => onDelete(d)}>Delete</button>
         </span>
       ),
     },
@@ -317,6 +362,7 @@ function FolderView({ id, q, onOpenFolder, onBack }: { id: string; q: string; on
         {canDelete && <button className="btn btn-ghost btn-sm" onClick={() => setDeleting(true)}>Delete folder</button>}
       </div>
       {d.folder.systemKey === 'GST_RETURNS' && <GstReturnsCard />}
+      {d.folder.systemKey === 'VAT_RETURNS' && <VatReturnsCard />}
       {d.subfolders.length > 0 && <FolderTiles folders={d.subfolders} onOpen={onOpenFolder} />}
       <div className="fin-toolbar">
         <select className="input" aria-label="Tag" value={tag} onChange={(e) => (setTag(e.target.value), setPage(1))}>
@@ -467,7 +513,7 @@ function UploadDialog({ folders, defaultFolderId, onClose }: { folders: FilingFo
           <MultiFileDrop files={files} onFiles={setFiles} accept="application/pdf,image/*,.csv,.txt,.zip,.doc,.docx,.xls,.xlsx" />
         </Field>
         <Field span2 label="Tags" htmlFor="up-tags" hint="Press Enter or comma after each tag">
-          <ChipsInput id="up-tags" value={tags} onChange={setTags} lower placeholder="e.g. gst, fy 2026-27, amazon" />
+          <ChipsInput id="up-tags" value={tags} onChange={setTags} lower placeholder={useMe().region === 'GB' ? 'e.g. vat, 2026-27, hmrc' : 'e.g. gst, fy 2026-27, amazon'} />
         </Field>
         <Field label="Document date" htmlFor="up-date" hint="Sets the financial year">
           <input id="up-date" type="date" className="input" max={todayKey()} value={docDate} onChange={(e) => setDocDate(e.target.value)} />
@@ -538,6 +584,66 @@ function GstReturnsCard() {
         )}
       </Section>
       {mark && <MarkFiledDialog form={mark.form} period={mark.row.period} label={`${mark.form === 'GSTR1' ? 'GSTR-1' : 'GSTR-3B'} · ${mark.row.periodLabel}`} onClose={() => setMark(null)} />}
+    </Card>
+  );
+}
+
+// ── UK VAT returns register (inside the VAT returns folder) ─────────────────
+
+function VatReturnsCard() {
+  const q = useQuery({ queryKey: finKeys.vatReturns, queryFn: finApi.vatReturns });
+  const prepare = useAction((period: string) => finApi.fileVatReturn(period), { success: (r) => `VAT return working saved · ${r.title}`, invalidate: FIN_ALL });
+  const [mark, setMark] = useState<FinVatReturnRow | null>(null);
+  return (
+    <Card kicker="Returns" title="VAT returns">
+      <Section title="VAT return by quarter (due 1 month and 7 days after the quarter)">
+        {q.error ? (
+          <ErrorBlock error={q.error} />
+        ) : !q.data ? (
+          <Loading />
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table className="fin-lines">
+              <thead>
+                <tr>
+                  <th>Quarter</th>
+                  <th>Return & payment</th>
+                  <th className="num">VAT on sales (1)</th>
+                  <th className="num">VAT reclaimed (4)</th>
+                  <th className="num">Net (5)</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {q.data.map((r) => (
+                  <tr key={r.period}>
+                    <td>
+                      {r.periodLabel}
+                      <div className="fin-muted fin-small">{r.invoices} invoices · {r.bills} bills</div>
+                    </td>
+                    <td>
+                      <Tag tone={RETURN_TONE[r.status.status]} title={r.status.ref ? `Ref ${r.status.ref}` : `Due ${formatDate(r.status.dueDate)}`}>
+                        {r.status.status === 'FILED' ? `Filed ${r.status.filedOn ? formatDate(r.status.filedOn) : ''}` : `${RETURN_LABEL[r.status.status]} · ${formatDate(r.status.dueDate)}`}
+                      </Tag>
+                    </td>
+                    <td className="num">{formatINR(r.box1)}</td>
+                    <td className="num">{formatINR(r.box4)}</td>
+                    <td className="num">{r.netPence < 0 ? `${formatINR(r.box5)} repayment` : formatINR(r.box5)}</td>
+                    <td className="num">
+                      <span className="row" style={{ gap: 4, flexWrap: 'nowrap', justifyContent: 'flex-end' }}>
+                        <button className="btn btn-ghost btn-sm" disabled={prepare.isPending} onClick={() => prepare.mutate(r.period)}>{r.workingDocumentId ? 'Re-prepare' : 'Prepare'}</button>
+                        <button className="btn btn-ghost btn-sm" onClick={() => void finApi.vatReturnCsv(r.period)}>CSV</button>
+                        {r.status.status !== 'FILED' && <button className="btn btn-ghost btn-sm" onClick={() => setMark(r)}>Filed</button>}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Section>
+      {mark && <MarkFiledDialog form="VAT_RETURN" period={mark.period} label={`VAT return · ${mark.periodLabel}`} onClose={() => setMark(null)} />}
     </Card>
   );
 }

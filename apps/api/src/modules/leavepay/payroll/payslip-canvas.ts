@@ -1,9 +1,12 @@
-import { PAYSLIP_PAGE, applyTextCase, planPayslipTable, tableBodyRows, type PayslipCanvas, type PayslipDetail, type PayslipElementOf, type PayslipElementType } from '@lexisora/shared';
+import { PAYSLIP_PAGE, applyTextCase, planPayslipTable, tableBodyRows, type PayslipCanvas, type PayslipDetail, type PayslipElementOf, type PayslipElementType, activeRegion } from '@lexisora/shared';
 import { PDF_COLORS, type Pdf, type PdfService } from '../../../core/pdf/pdf.service';
-import { fieldValues, fillFields, fontFor } from './payslip-blocks';
+import { fieldValues, fillFields, fontFor, ukLabels } from './payslip-blocks';
+
+/** Captions drawn as-is in India; UK payslips get the UK wording (NI number, Tax code, …). */
+const caption = (t: string) => (activeRegion() === 'GB' ? ukLabels(t) : t);
 
 /** "Rs. 78,420.00" — built-in PDF fonts have no ₹ glyph. */
-const money = (paise: number) => `Rs. ${(paise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const money = (paise: number) => (activeRegion() === 'GB' ? `£${(paise / 100).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : `Rs. ${(paise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
 
 type Ctx = { doc: Pdf; d: PayslipDetail; v: Record<string, string>; logo: Buffer | null };
 type El<T extends PayslipElementType> = PayslipElementOf<T>;
@@ -133,7 +136,7 @@ function details(c: Ctx, e: El<'details'>) {
   e.rows.forEach((r, i) => {
     const y = e.y + i * e.rowHeight;
     const raw = applyTextCase(fillFields(r.value, c.v).trim(), e.style.textCase);
-    doc.font(fontFor({ ...e.style, bold: false }, false)).fontSize(e.style.size * 0.9).fillColor(e.labelColor).text(r.label, e.x, y, { width: e.labelWidth - 4, height: e.rowHeight, ellipsis: true });
+    doc.font(fontFor({ ...e.style, bold: false }, false)).fontSize(e.style.size * 0.9).fillColor(e.labelColor).text(caption(r.label), e.x, y, { width: e.labelWidth - 4, height: e.rowHeight, ellipsis: true });
     if (e.separator) doc.font(fontFor({ ...e.style, bold: false }, false)).fontSize(e.style.size).fillColor(e.labelColor).text(e.separator, valueX - sepW, y, { width: sepW, lineBreak: false });
     style(doc, e.style).text(raw || '—', valueX, y, { width: valueW, height: e.rowHeight, ellipsis: true });
   });
@@ -151,7 +154,7 @@ function table(c: Ctx, e: El<'table'>) {
   const rightCols = full ? [1, 2] : [1];
   const body = tableBodyRows(e, lines, money, (t) => fillFields(t, c.v));
   const plan = planPayslipTable(e, body.map((b) => b.key));
-  const head = full ? [e.heading, e.fullMonthHeading, e.amountHeading] : [e.heading, e.amountHeading];
+  const head = (full ? [e.heading, e.fullMonthHeading, e.amountHeading] : [e.heading, e.amountHeading]).map(caption);
   const totalCells = full ? [e.totalLabel, '', money(total)] : [e.totalLabel, money(total)];
 
   const startY = e.y;

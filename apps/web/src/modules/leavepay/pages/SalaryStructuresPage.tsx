@@ -12,7 +12,9 @@ import {
   type SalaryTemplateInput,
   type SalaryTemplateLine,
   type SalaryTemplateRow,
+  currencySymbol,
 } from '@lexisora/shared';
+import { useMe } from '@/lib/auth';
 import { useAction } from '@/lib/query';
 import { DataTable, type Column } from '@/components/table';
 import { ConfirmDialog, ErrorBlock, Modal, PageHeader, Tag } from '@/components/ui';
@@ -32,6 +34,9 @@ const slug = (label: string) => {
 };
 
 /** The range as the CTCs it actually covers: the lower limit is included, the upper limit is not (so it shows one rupee less). */
+/** UK default structure: the whole salary is basic pay (no HRA / PF / ESI). */
+const UK_SALARY_LINES: SalaryTemplateLine[] = [{ componentCode: 'BASIC', label: 'Basic salary', calc: 'BALANCING' } as SalaryTemplateLine];
+
 function rangeText(t: Pick<SalaryTemplateRow, 'minCtcPaise' | 'maxCtcPaise'>) {
   const { minCtcPaise: lo, maxCtcPaise: hi } = t;
   if (lo == null && hi == null) return 'Any CTC';
@@ -167,7 +172,8 @@ function TemplateEditor({ row, fromStandard, onClose }: { row: SalaryTemplateRow
   const [maxR, setMaxR] = useState(row?.maxCtcPaise != null ? String(row.maxCtcPaise / 100) : '');
   const [isDefault, setIsDefault] = useState(row?.isDefault ?? fromStandard);
   const [active, setActive] = useState(row?.active ?? true);
-  const [lines, setLines] = useState<EditorLine[]>((row?.lines ?? (fromStandard || !row ? STANDARD_SALARY_LINES : [])).map(toEditor));
+  const uk = useMe().region === 'GB';
+  const [lines, setLines] = useState<EditorLine[]>((row?.lines ?? (fromStandard || !row ? (uk ? UK_SALARY_LINES : STANDARD_SALARY_LINES) : [])).map(toEditor));
   const [eePct, setEePct] = useState(String((row?.pf ?? DEFAULT_PF_SETTINGS).employeePct));
   const [erPct, setErPct] = useState(String((row?.pf ?? DEFAULT_PF_SETTINGS).employerPct));
   const [ceiling, setCeiling] = useState(String((row?.pf ?? DEFAULT_PF_SETTINGS).wageCeiling));
@@ -257,11 +263,11 @@ function TemplateEditor({ row, fromStandard, onClose }: { row: SalaryTemplateRow
             <input id="st-name" className="input" value={name} maxLength={60} onChange={(e) => setName(e.target.value)} placeholder="e.g. Executive (₹6L and above)" />
           </div>
           <div className="field">
-            <label htmlFor="st-min">CTC from (₹ per year, optional)</label>
+            <label htmlFor="st-min">{uk ? 'Annual salary from' : 'CTC from'} ({currencySymbol()} per year, optional)</label>
             <input id="st-min" className="input" inputMode="numeric" value={minR} onChange={(e) => setMinR(digits(e.target.value))} placeholder="0" />
           </div>
           <div className="field">
-            <label htmlFor="st-max">CTC up to, not including (₹ per year, optional)</label>
+            <label htmlFor="st-max">{uk ? 'Annual salary up to' : 'CTC up to'}, not including ({currencySymbol()} per year, optional)</label>
             <input id="st-max" className="input" inputMode="numeric" value={maxR} onChange={(e) => setMaxR(digits(e.target.value))} placeholder="no upper limit" aria-invalid={rangeBad || undefined} />
             {rangeBad && <div className="field-error">The upper CTC must be higher than the lower CTC</div>}
           </div>
@@ -336,6 +342,12 @@ function TemplateEditor({ row, fromStandard, onClose }: { row: SalaryTemplateRow
           {problems.map((p) => <div key={p} className="field-error">{p}</div>)}
         </div>
 
+        {uk ? (
+          <div className="faint" style={{ fontSize: 12.5 }}>
+            UK structures hold earnings only. PAYE tax, National Insurance, student loans and workplace pension are worked out in each pay run from the employee&apos;s tax code, NI category and pension settings (Pay &amp; PAYE details).
+          </div>
+        ) : (
+        <>
         <div className="stack" style={{ gap: 8 }}>
           <div className="kicker">Provident fund (PF)</div>
           <div className="faint" style={{ fontSize: 12.5 }}>
@@ -386,12 +398,14 @@ function TemplateEditor({ row, fromStandard, onClose }: { row: SalaryTemplateRow
           )}
           {esiProblems.map((p) => <div key={p} className="field-error">{p}</div>)}
         </div>
+        </>
+        )}
 
         <div className="stack" style={{ gap: 8 }}>
           <div className="row-between">
             <div className="kicker">Preview</div>
             <div className="row" style={{ gap: 6, alignItems: 'center' }}>
-              <label htmlFor="st-sample" className="faint" style={{ fontSize: 12.5 }}>For an annual CTC of ₹</label>
+              <label htmlFor="st-sample" className="faint" style={{ fontSize: 12.5 }}>{uk ? 'For an annual salary of' : 'For an annual CTC of'} {currencySymbol()}</label>
               <input id="st-sample" className="input" style={{ width: 130 }} inputMode="numeric" value={sample} onChange={(e) => setSample(digits(e.target.value))} />
             </div>
           </div>

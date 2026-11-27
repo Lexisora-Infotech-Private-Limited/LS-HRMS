@@ -123,6 +123,50 @@ export function integerInWords(n: number): string {
   return parts.join(' ');
 }
 
+// ── UK (region GB) ──────────────────────────────────────────────────────────
+
+/** PDF money in pounds: "£4,720.50" (the built-in fonts' WinAnsi encoding has £). */
+export function pdfGBP(pence: number, decimals = true): string {
+  const r = pence / 100;
+  const s = new Intl.NumberFormat('en-GB', { minimumFractionDigits: decimals ? 2 : 0, maximumFractionDigits: decimals ? 2 : 0 }).format(Math.abs(r));
+  return `${r < 0 ? '-' : ''}£${s}`;
+}
+
+/** International numbering in words: 1,250,000 → "One Million Two Hundred and Fifty Thousand". */
+export function integerInWordsIntl(n: number): string {
+  n = Math.floor(Math.abs(n));
+  if (n === 0) return 'Zero';
+  const scales: [number, string][] = [
+    [1e9, 'Billion'],
+    [1e6, 'Million'],
+    [1e3, 'Thousand'],
+  ];
+  const parts: string[] = [];
+  for (const [v, name] of scales) {
+    const q = Math.floor(n / v);
+    if (q) {
+      parts.push(`${q >= 1000 ? integerInWordsIntl(q) : threeDigitsGb(q)} ${name}`);
+      n %= v;
+    }
+  }
+  if (n) parts.push(parts.length && n < 100 ? `and ${twoDigits(n)}` : threeDigitsGb(n));
+  return parts.join(' ');
+}
+function threeDigitsGb(n: number): string {
+  const h = Math.floor(n / 100);
+  const rest = n % 100;
+  if (h && rest) return `${ONES[h]} Hundred and ${twoDigits(rest)}`;
+  if (h) return `${ONES[h]} Hundred`;
+  return twoDigits(rest);
+}
+
+/** "Four Thousand Seven Hundred and Twenty Pounds and Fifty Pence" (no lakh/crore). */
+export function amountInWordsGBP(pence: number): string {
+  const pounds = Math.floor(Math.abs(pence) / 100);
+  const p = Math.abs(pence) % 100;
+  return `${integerInWordsIntl(pounds)} ${pounds === 1 ? 'Pound' : 'Pounds'}${p ? ` and ${twoDigits(p)} ${p === 1 ? 'Penny' : 'Pence'}` : ''}`;
+}
+
 /** "Rupees Four Lakh Seventy-Two Thousand Only" (paise appended when non-zero). */
 export function amountInWords(paise: number): string {
   const rupees = Math.floor(Math.abs(paise) / 100);

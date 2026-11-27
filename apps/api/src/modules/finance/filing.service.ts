@@ -7,14 +7,16 @@ import { StorageService } from '../../core/storage/storage.service';
 import { requireContext } from '../../core/context/request-context';
 import { AppError, badRequest, conflict, notFound } from '../../core/http/errors';
 import { paginated, pageArgs } from '../../core/http/paginate';
-import { SYSTEM_FOLDERS } from './lib/coa';
+import { SYSTEM_FOLDERS, UK_SYSTEM_FOLDERS } from './lib/coa';
+import { currentRegion } from '../../core/region/region-cache';
 import { dateKeyOf, dateOnly, fyOf, todayDate } from './lib/money';
 
 const LOCKED_LINKS = new Set(['PURCHASE', 'INVOICE']);
 const FILING_MIME = /^(application\/pdf|image\/(png|jpe?g|webp)|text\/(csv|plain)|application\/(json|zip|msword|vnd\.ms-excel|vnd\.openxmlformats-officedocument\.[\w.]+))$/;
 
 export type AutoFileInput = {
-  folderKey: 'BILLS' | 'SALES_INVOICES' | 'GST_RETURNS' | 'INCOME_TAX';
+  /** India: GST_RETURNS / INCOME_TAX; UK: VAT_RETURNS / PAYE_PAYROLL / CORPORATION_TAX / COMPANIES_HOUSE. */
+  folderKey: 'BILLS' | 'SALES_INVOICES' | 'GST_RETURNS' | 'INCOME_TAX' | 'VAT_RETURNS' | 'PAYE_PAYROLL' | 'CORPORATION_TAX' | 'COMPANIES_HOUSE';
   fileId: string;
   title: string;
   tags: string[];
@@ -39,7 +41,7 @@ export class FilingService {
     const rows = await this.prisma.filingFolder.findMany({ where: { systemKey: { not: null } }, select: { id: true, systemKey: true } });
     const map = new Map(rows.map((r) => [r.systemKey!, r.id]));
     let order = 0;
-    for (const f of SYSTEM_FOLDERS) {
+    for (const f of currentRegion() === 'GB' ? UK_SYSTEM_FOLDERS : SYSTEM_FOLDERS) {
       order++;
       if (map.has(f.key)) continue;
       const row = await this.prisma.filingFolder.create({
@@ -207,7 +209,7 @@ export class FilingService {
     const d = await this.prisma.filingDocument.findFirst({ where: { id, deletedAt: null } });
     if (!d) throw notFound('Document');
     if (LOCKED_LINKS.has(d.linkedEntityType ?? '')) {
-      throw new AppError(409, 'RETENTION_LOCKED', `This document is linked to ${d.linkedRef ?? 'a posted record'} and must be kept for 8 years (GST record retention)`);
+      throw new AppError(409, 'RETENTION_LOCKED', `This document is linked to ${d.linkedRef ?? 'a posted record'} and must be kept for ${currentRegion() === 'GB' ? '6 years (HMRC record keeping)' : '8 years (GST record retention)'}`);
     }
     await this.prisma.filingDocument.update({ where: { id }, data: { deletedAt: new Date() } });
     await this.audit.record({ action: 'filing.document.deleted', entity: 'FilingDocument', entityId: id, meta: { title: d.title, by: ctx.userName ?? null } });

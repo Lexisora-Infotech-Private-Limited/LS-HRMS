@@ -7,6 +7,7 @@ import { AuditService } from '../../../core/audit/audit.service';
 import { todayKey, yearOf } from '../common/dates';
 import { LeaveAdminService } from './leave-admin.service';
 import { LeaveRequestsService } from './leave-requests.service';
+import { tenantsForCron } from '../../../core/region/region-cache';
 
 /** Leave schedules: monthly/annual credits, year-end, comp-off expiry, approver reminders + escalation. */
 @Injectable()
@@ -22,7 +23,7 @@ export class LeaveJobs {
   ) {}
 
   private async eachTenant(name: string, fn: () => Promise<unknown>) {
-    const tenants = await this.prisma.raw.tenant.findMany({ where: { status: 'ACTIVE' }, select: { id: true } });
+    const tenants = tenantsForCron(await this.prisma.raw.tenant.findMany({ where: { status: 'ACTIVE' }, select: { id: true } }));
     for (const t of tenants) {
       try {
         await runAsTenant(t.id, fn);

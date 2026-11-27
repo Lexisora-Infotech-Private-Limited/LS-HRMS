@@ -1,3 +1,4 @@
+import { activeTimezone } from '@lexisora/shared';
 import type {
   BookingCheck,
   BookingCreateInput,
@@ -159,14 +160,14 @@ export const hubApi = {
 export function dayHeading(iso: string): string {
   const d = new Date(iso);
   const today = new Date();
-  const key = (x: Date) => x.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const key = (x: Date) => x.toLocaleDateString('en-CA', { timeZone: activeTimezone() });
   if (key(d) === key(today)) return 'Today';
   if (key(d) === key(new Date(today.getTime() - 86_400_000))) return 'Yesterday';
-  return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' });
+  return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: activeTimezone() });
 }
 
 export function istTodayKey(): string {
-  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  return new Date().toLocaleDateString('en-CA', { timeZone: activeTimezone() });
 }
 
 export function newClientId(): string {

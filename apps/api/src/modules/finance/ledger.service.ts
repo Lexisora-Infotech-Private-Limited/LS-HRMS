@@ -24,8 +24,10 @@ import { requireContext, type RequestContext } from '../../core/context/request-
 import { hasPerm } from '../../core/auth/decorators';
 import { AppError, badRequest, conflict, forbidden, notFound } from '../../core/http/errors';
 import { paginated, pageArgs } from '../../core/http/paginate';
-import { CHART_OF_ACCOUNTS } from './lib/coa';
+import { CHART_OF_ACCOUNTS, UK_CHART_OF_ACCOUNTS } from './lib/coa';
 import { payrollPostingLines, type PayrollTotals } from './lib/gst';
+import { aggregateUkPayroll, ukPayrollPostingLines, type UkPayrollTotals } from './lib/vat';
+import { currentRegion } from '../../core/region/region-cache';
 import { computeTrialBalance, primaryLedger, reverseLines, runningStatement, validateVoucherLines, VoucherValidationError, type AccountMeta, type LineInput } from './lib/ledger-math';
 import { currentMonthKey, dateKeyOf, dateOnly, fyOf, fyStart, monthRange, todayDate, voucherSequence, type VoucherKind } from './lib/money';
 
@@ -33,8 +35,16 @@ export const FINANCE_SETTINGS_KEY = 'finance.settings';
 export type FinanceSettings = {
   booksLockedUpTo: string | null;
   defaultPaymentTermsDays: number;
-  bank: { bankName: string; accountName: string; accountNo: string; ifsc: string; branch: string; upiId: string };
+  /** India: IFSC + UPI. UK tenants use `sortCode` (IFSC/UPI left empty). */
+  bank: { bankName: string; accountName: string; accountNo: string; ifsc: string; branch: string; upiId: string; sortCode?: string; iban?: string };
   signatory: string;
+};
+/** Defaults for a UK (GB) tenant: no IFSC / UPI; sort code + account number. */
+export const UK_DEFAULT_FINANCE_SETTINGS: FinanceSettings = {
+  booksLockedUpTo: null,
+  defaultPaymentTermsDays: 30,
+  bank: { bankName: '', accountName: '', accountNo: '', ifsc: '', branch: '', upiId: '', sortCode: '', iban: '' },
+  signatory: '',
 };
 export const DEFAULT_FINANCE_SETTINGS: FinanceSettings = {
   booksLockedUpTo: null,
@@ -81,17 +91,31 @@ export class LedgerService {
   ) {}
 
   financeSettings(): Promise<FinanceSettings> {
-    return this.settings.get<FinanceSettings>(FINANCE_SETTINGS_KEY, DEFAULT_FINANCE_SETTINGS);
+    return this.settings.get<FinanceSettings>(FINANCE_SETTINGS_KEY, currentRegion() === 'GB' ? UK_DEFAULT_FINANCE_SETTINGS : DEFAULT_FINANCE_SETTINGS);
+  }
+
+  /** Update bank details / signatory / default terms (audited). */
+  async updateSettings(input: { defaultPaymentTermsDays?: number; signatory?: string; bank?: Partial<FinanceSettings['bank']> }) {
+    const s = await this.financeSettings();
+    const next: FinanceSettings = {
+      ...s,
+      ...(input.defaultPaymentTermsDays !== undefined ? { defaultPaymentTermsDays: input.defaultPaymentTermsDays } : {}),
+      ...(input.signatory !== undefined ? { signatory: input.signatory } : {}),
+      bank: { ...s.bank, ...(input.bank ?? {}) },
+    };
+    await this.settings.set(FINANCE_SETTINGS_KEY, next);
+    await this.audit.record({ action: 'finance.settings.updated', entity: 'Ledger', meta: { fields: Object.keys(input) } });
+    return { booksLockedUpTo: next.booksLockedUpTo, defaultPaymentTermsDays: next.defaultPaymentTermsDays, bank: next.bank, signatory: next.signatory };
   }
 
   // ── Chart of accounts ────────────────────────────────────────────────────
 
-  /** Create any missing seeded accounts for the current tenant (idempotent). */
+  /** Create any missing seeded accounts for the current tenant (idempotent). UK tenants get the UK chart. */
   async ensureChart(): Promise<void> {
     const existing = await this.prisma.account.findMany({ select: { id: true, code: true, systemKey: true } });
     const byCode = new Map(existing.map((a) => [a.code, a.id]));
     const keys = new Set(existing.map((a) => a.systemKey).filter(Boolean));
-    for (const e of CHART_OF_ACCOUNTS) {
+    for (const e of currentRegion() === 'GB' ? UK_CHART_OF_ACCOUNTS : CHART_OF_ACCOUNTS) {
       if (byCode.has(e.code) || (e.key && keys.has(e.key))) continue;
       const row = await this.prisma.account.create({
         data: { code: e.code, name: e.name, type: e.type, isGroup: !!e.group, systemKey: e.key ?? null, isSystem: true, parentId: e.parent ? (byCode.get(e.parent) ?? null) : null } as Prisma.AccountUncheckedCreateInput,
@@ -160,7 +184,7 @@ export class LedgerService {
     let date = end.getTime() > today.getTime() ? today : end;
     const s = await this.financeSettings();
     if (s.booksLockedUpTo && dateKeyOf(date) <= s.booksLockedUpTo) date = today;
-    const lines = payrollPostingLines({ ...p.totals, employeeCount: p.totals.employeeCount ?? count });
+    const lines = currentRegion() === 'GB' ? ukPayrollPostingLines(await this.ukPayrollTotals(p.runId, p.totals)) : payrollPostingLines({ ...p.totals, employeeCount: p.totals.employeeCount ?? count });
     return this.post({
       type: 'PAYROLL',
       date,
@@ -171,6 +195,20 @@ export class LedgerService {
       sourceRef: `${p.period} payroll`,
       allowFuture: true,
     });
+  }
+
+  /**
+   * UK run totals from the finalized items' `ukStatutory` (PAYE, NI, pension, loans). When the
+   * items can't be read, the event totals are used with all deductions owed to HMRC.
+   */
+  async ukPayrollTotals(runId: string, totals: PayrollTotals): Promise<UkPayrollTotals> {
+    const items = await this.prisma.payrollItem
+      .findMany({ where: { runId, status: { in: ['FINALIZED', 'PAID'] } }, select: { totalEarningsPaise: true, netPaise: true, tdsPaise: true, ukStatutory: true } })
+      .catch(() => [] as { totalEarningsPaise: number; netPaise: number; tdsPaise: number; ukStatutory: unknown }[]);
+    if (items.length) return aggregateUkPayroll(items);
+    const gross = Math.round(totals.grossPaise);
+    const net = Math.round(totals.netPaise);
+    return { grossPence: gross, netPence: net, taxPence: Math.max(0, Math.round(totals.deductionsPaise ?? gross - net)), niEmployeePence: 0, niEmployerPence: 0, pensionEmployeePence: 0, pensionEmployerPence: 0, studentLoanPence: 0, postgradLoanPence: 0, employeeCount: totals.employeeCount ?? 0 };
   }
 
   /** `payroll.paid` → salary payout: Dr Salary payable, Cr Bank (idempotent per run). */
@@ -212,6 +250,9 @@ export class LedgerService {
     // Resolve system keys → account ids.
     const resolved: LineInput[] = [];
     for (const l of input.lines) {
+      // Zero lines are dropped by validation anyway; skipping them here means a system key that
+      // only exists in another region's chart (e.g. GST heads on a UK tenant) is never looked up.
+      if (!l.accountId && !Math.round(l.debitPaise ?? 0) && !Math.round(l.creditPaise ?? 0)) continue;
       const accountId = l.accountId || (l.systemKey ? await this.accountIdByKey(l.systemKey) : '');
       if (!accountId) throw badRequest('Every line needs an account');
       resolved.push({ ...l, accountId });

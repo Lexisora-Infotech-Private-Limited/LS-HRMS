@@ -1,3 +1,4 @@
+import { regionText } from '@lexisora/shared';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { AttendanceToday, LatePrompt, PunchResult } from '@lexisora/shared';
@@ -105,16 +106,16 @@ export function usePunch() {
   const blocked = !!today && !punchedIn && !today.webPunchAllowed;
   /** Punched in somewhere the web can't close (biometric): punch out there. */
   const outElsewhere = !!today && punchedIn && !today.canPunchOut;
-  const label = punchedIn ? 'Punch out' : 'Punch in';
+  const label = regionText(punchedIn ? 'Punch out' : 'Punch in');
 
   async function toggle() {
     if (!today || state.busy) return;
     if (blocked) {
-      toast(today.blockReason ?? 'Web punch is not allowed for you right now');
+      toast(regionText(today.blockReason ?? 'Web punch is not allowed for you right now'));
       return;
     }
     if (outElsewhere) {
-      toast(today.blockReason ?? `Punch out where you punched in (${(today.openSessionSource ?? 'device').toLowerCase()})`);
+      toast(regionText(today.blockReason ?? `Punch out where you punched in (${(today.openSessionSource ?? 'device').toLowerCase()})`));
       return;
     }
     // The browser only shows this prompt on a click; with it, idle sees input in other apps too.
@@ -180,7 +181,7 @@ export function usePunch() {
     outElsewhere,
     busy,
     label,
-    title: today?.title ?? 'Not punched in',
+    title: regionText(today?.title ?? 'Not punched in'),
     elapsed: hhmmss(elapsedSec),
     elapsedSec,
     toggle,
@@ -199,7 +200,7 @@ export function lateText(t: AttendanceToday | undefined): string | null {
 export function PunchButton() {
   const p = usePunch();
   if (!p.enabled || !p.today) return null;
-  const why = p.blocked || p.outElsewhere ? (p.today.blockReason ?? (p.outElsewhere ? 'Punch out where you punched in' : 'Web punch is not allowed')) : undefined;
+  const why = p.blocked || p.outElsewhere ? regionText(p.today.blockReason ?? (p.outElsewhere ? 'Punch out where you punched in' : 'Web punch is not allowed')) : undefined;
   return (
     <button
       className={`btn btn-sm topbar-punch ${p.punchedIn ? 'btn-secondary' : 'btn-primary'}`}
@@ -235,7 +236,7 @@ export function PunchCard() {
       )}
       {late && <div className="time-late-note">{late}{t?.late.reason ? ` · “${t.late.reason}”` : ''}</div>}
       {t && (p.blocked || p.outElsewhere) ? (
-        <div className="time-blocked">{t.blockReason ?? (p.outElsewhere ? 'Punch out where you punched in.' : 'Web punch is not allowed for you right now.')}</div>
+        <div className="time-blocked">{regionText(t.blockReason ?? (p.outElsewhere ? 'Punch out where you punched in.' : 'Web punch is not allowed for you right now.'))}</div>
       ) : (
         <button className="btn btn-primary" style={{ alignSelf: 'flex-start' }} onClick={() => void p.toggle()} disabled={!t || p.busy}>
           {p.busy ? 'Saving…' : p.label}
@@ -279,14 +280,14 @@ export function LatePunchDialog() {
       actions={
         <>
           <button className="btn btn-secondary" onClick={() => late.answer(null)}>Cancel</button>
-          <button className="btn btn-primary" onClick={go}>{p.overLimit ? 'OK, punch in' : 'Punch in'}</button>
+          <button className="btn btn-primary" onClick={go}>{regionText(p.overLimit ? 'OK, punch in' : 'Punch in')}</button>
         </>
       }
     >
       <div className="stack" style={{ gap: 12 }}>
         <div className="kv-row"><span>Shift starts</span><span className="tnum">{p.shiftStart}</span></div>
         <div className="kv-row"><span>Grace</span><span className="tnum">{p.graceMinutes} min · until {p.lateAfter}</span></div>
-        <div className="kv-row"><span>Punching in at</span><span className="tnum">{p.punchAt}</span></div>
+        <div className="kv-row"><span>{regionText('Punching in at')}</span><span className="tnum">{p.punchAt}</span></div>
         <div className="kv-row"><span>Late by</span><span className="tnum" style={{ fontWeight: 600 }}>{dur(p.lateByMinutes)}</span></div>
         {p.lateAllowed > 0 && (
           <div className="kv-row">

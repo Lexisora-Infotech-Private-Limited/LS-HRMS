@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { ApplicationStage, Prisma } from '@prisma/client';
 import {
+  activeRegion,
   CANDIDATE_SOURCE_LABELS,
   type CandidateDetail,
   type CandidateInput,
@@ -18,7 +19,7 @@ import { NotificationsService } from '../../../core/notifications/notifications.
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { EmployeesService, escapeHtml } from '../employees/employees.service';
 import { addDays, applicationScore, canMoveStage } from '../people.rules';
-import { dbDateKey, fmt, fmtWhen, inrPdf, toDbDate, todayKey } from '../people.util';
+import { dbDateKey, fmt, fmtWhen, moneyPdf, toDbDate, todayKey } from '../people.util';
 
 export const STAGE_LABEL: Record<ApplicationStage, string> = {
   SCREENING: 'Screening',
@@ -299,15 +300,17 @@ export class CandidatesService {
     await this.prisma.jobOffer.upsert({ where: { applicationId }, create: { applicationId, ...data } as Prisma.JobOfferUncheckedCreateInput, update: data });
     if (a.stage !== 'OFFERED') {
       await this.prisma.jobApplication.update({ where: { id: applicationId }, data: { stage: 'OFFERED', stageChangedAt: new Date() } });
-      await this.event(applicationId, a.stage, 'OFFERED', `Offer ${inrPdf(i.annualCtcPaise)} p.a.`);
+      await this.event(applicationId, a.stage, 'OFFERED', `Offer ${moneyPdf(i.annualCtcPaise)} p.a.`);
     }
     const t = await this.prisma.raw.tenant.findUnique({ where: { id: requireContext().tenantId } });
     const company = t?.name ?? 'Lexisora';
+    // India: "annual CTC of Rs. 9,00,000" (unchanged). UK: "annual salary of £45,000".
+    const payWords = activeRegion() === 'GB' ? 'an annual salary of' : 'an annual CTC of';
     await this.mail.send({
       to: a.candidate.email,
       subject: `Offer from ${company} · ${a.job.title}`,
-      text: `Hi ${a.candidate.fullName},\n\nWe are delighted to offer you the role of ${a.job.title} at ${company} with an annual CTC of ${inrPdf(i.annualCtcPaise)}, joining on ${fmt(i.joiningDate)}.\n\nThis offer is valid until ${fmt(i.expiresOn)}. Once you accept, you will receive an invite to sign the formal offer letter online.\n\n— ${company} HR`,
-      html: `<p>Hi ${escapeHtml(a.candidate.fullName)},</p><p>We are delighted to offer you the role of <b>${escapeHtml(a.job.title)}</b> at ${escapeHtml(company)} with an annual CTC of <b>${inrPdf(i.annualCtcPaise)}</b>, joining on ${fmt(i.joiningDate)}.</p><p>This offer is valid until ${fmt(i.expiresOn)}. Once you accept, you will receive an invite to sign the formal offer letter online.</p><p>— ${escapeHtml(company)} HR</p>`,
+      text: `Hi ${a.candidate.fullName},\n\nWe are delighted to offer you the role of ${a.job.title} at ${company} with ${payWords} ${moneyPdf(i.annualCtcPaise)}, joining on ${fmt(i.joiningDate)}.\n\nThis offer is valid until ${fmt(i.expiresOn)}. Once you accept, you will receive an invite to sign the formal offer letter online.\n\n— ${company} HR`,
+      html: `<p>Hi ${escapeHtml(a.candidate.fullName)},</p><p>We are delighted to offer you the role of <b>${escapeHtml(a.job.title)}</b> at ${escapeHtml(company)} with ${payWords} <b>${moneyPdf(i.annualCtcPaise)}</b>, joining on ${fmt(i.joiningDate)}.</p><p>This offer is valid until ${fmt(i.expiresOn)}. Once you accept, you will receive an invite to sign the formal offer letter online.</p><p>— ${escapeHtml(company)} HR</p>`,
     });
     await this.audit.record({ action: 'offer.issued', entity: 'JobApplication', entityId: applicationId, meta: { annualCtcPaise: i.annualCtcPaise, joiningDate: i.joiningDate } });
     return this.detail(a.candidateId);

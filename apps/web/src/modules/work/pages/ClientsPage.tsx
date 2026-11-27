@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { CLIENT_GST_REG_TYPES, CLIENT_GST_STATES, PROJECT_STATUS_LABELS, formatINR, type ClientDetail, type ClientRow } from '@lexisora/shared';
+import { CLIENT_GST_REG_TYPES, CLIENT_GST_STATES, PROJECT_STATUS_LABELS, UK_CLIENT_COUNTRIES, formatINR, formatUkVatNumber, ukCountryName, type ClientDetail, type ClientRow } from '@lexisora/shared';
+import { useMe } from '@/lib/auth';
 import { useAction } from '@/lib/query';
 import { FormModal, type FieldDef } from '@/components/form';
 import { DataTable, Pager, type Column } from '@/components/table';
@@ -13,6 +14,7 @@ import '../work.css';
 type Status = 'ALL' | 'ACTIVE' | 'INACTIVE';
 
 export default function ClientsPage() {
+  const gb = useMe().region === 'GB';
   const [status, setStatus] = useState<Status>('ALL');
   const [q, setQ] = useState('');
   const [page, setPage] = useState(1);
@@ -22,8 +24,10 @@ export default function ClientsPage() {
   const c = list.data?.counts;
   const columns: Column<ClientRow>[] = [
     { key: 'n', header: 'Client', render: (r) => <div><div>{r.name}</div><div className="faint" style={{ fontSize: 11.5 }}>{r.code}{r.legalName ? ` · ${r.legalName}` : ''}</div></div> },
-    { key: 'g', header: 'GSTIN', render: (r) => (r.isInternal ? <Tag>Internal</Tag> : r.gstin ?? <span className="faint">{humanize(r.gstRegType)}</span>) },
-    { key: 's', header: 'State', render: (r) => r.stateName ?? (r.countryCode !== 'IN' ? r.countryCode : '—') },
+    gb
+      ? { key: 'g', header: 'VAT number', render: (r) => (r.isInternal ? <Tag>Internal</Tag> : r.gstin ? (r.countryCode === 'GB' ? formatUkVatNumber(r.gstin) : r.gstin) : <span className="faint">Not VAT registered</span>) }
+      : { key: 'g', header: 'GSTIN', render: (r) => (r.isInternal ? <Tag>Internal</Tag> : r.gstin ?? <span className="faint">{humanize(r.gstRegType)}</span>) },
+    gb ? { key: 's', header: 'Country', render: (r) => ukCountryName(r.countryCode) } : { key: 's', header: 'State', render: (r) => r.stateName ?? (r.countryCode !== 'IN' ? r.countryCode : '—') },
     { key: 'e', header: 'Billing emails', render: (r) => (r.billingEmails.length ? r.billingEmails.join(', ') : '—') },
     { key: 'r', header: 'Rate / hour', num: true, render: (r) => (r.defaultRatePerHourPaise != null ? formatINR(r.defaultRatePerHourPaise) : '—') },
     { key: 'p', header: 'Projects', num: true, render: (r) => `${r.activeProjects} / ${r.totalProjects}` },
@@ -33,7 +37,7 @@ export default function ClientsPage() {
     <div data-screen-label="Clients" className="stack" style={{ gap: 18 }}>
       <PageHeader
         title="Clients"
-        sub="Client master for projects and GST invoices: legal name, GSTIN, place of supply, billing emails and default hourly rate."
+        sub={gb ? 'Client master for projects and VAT invoices: legal name, VAT number, country, billing emails and default hourly rate.' : 'Client master for projects and GST invoices: legal name, GSTIN, place of supply, billing emails and default hourly rate.'}
         actions={<button className="btn btn-primary" onClick={() => setEditing('new')}>Add client</button>}
       />
       <div className="row-between" style={{ flexWrap: 'wrap', gap: 10 }}>
@@ -46,7 +50,7 @@ export default function ClientsPage() {
             { value: 'INACTIVE', label: `Inactive${c ? ` · ${c.INACTIVE}` : ''}` },
           ]}
         />
-        <input className="input wk-search" placeholder="Search name, code or GSTIN" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />
+        <input className="input wk-search" placeholder={gb ? 'Search name, code or VAT number' : 'Search name, code or GSTIN'} value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />
       </div>
       {list.error ? <ErrorBlock error={list.error} retry={() => void list.refetch()} /> : <DataTable columns={columns} rows={list.data?.items} loading={list.isLoading} rowKey={(r) => r.id} onRowClick={(r) => setOpenId(r.id)} empty="No clients yet." />}
       {list.data && <Pager page={page} pageSize={list.data.pageSize} total={list.data.total} onPage={setPage} />}
@@ -57,11 +61,34 @@ export default function ClientsPage() {
 }
 
 function ClientForm({ client, onClose }: { client: ClientRow | null; onClose: () => void }) {
+  const gb = useMe().region === 'GB';
   const save = useAction(
     (b: Record<string, unknown>) => (client ? workApi.updateClient(client.id, b) : workApi.createClient(b)),
     { success: (r) => (client ? 'Client updated' : 'Client added') + (r.warning ? ` · ${r.warning}` : ''), invalidate: [workKeys.clients, ['work', 'client'], ['lookups']] },
   );
-  const fields: FieldDef[] = [
+  // UK (GB): VAT number + country instead of GST registration / state / PAN.
+  const ukFields: FieldDef[] = [
+    { name: 'name', label: 'Client name', type: 'text', required: true },
+    { name: 'legalName', label: 'Legal name', type: 'text' },
+    { name: 'isInternal', label: 'Internal (non-billable, no VAT)', type: 'checkbox', span: 2 },
+    { name: 'countryCode', label: 'Country', type: 'select', options: UK_CLIENT_COUNTRIES.map((c) => ({ value: c.code, label: c.name })), required: true, showIf: (v) => !v.isInternal },
+    {
+      name: 'gstin',
+      label: 'VAT number',
+      type: 'text',
+      placeholder: 'Optional, e.g. GB123456789',
+      showIf: (v) => !v.isInternal,
+    },
+    { name: 'address', label: 'Billing address', type: 'area', span: 2 },
+    { name: 'city', label: 'Town / city', type: 'text' },
+    { name: 'pincode', label: 'Postcode', type: 'text' },
+    { name: 'billingEmails', label: 'Billing emails', type: 'text', span: 2, placeholder: 'accounts@client.co.uk, finance@client.co.uk', showIf: (v) => !v.isInternal },
+    { name: 'rate', label: 'Default rate per hour (£)', type: 'money', showIf: (v) => !v.isInternal },
+    { name: 'paymentTermsDays', label: 'Payment terms (days)', type: 'number' },
+    { name: 'contactName', label: 'Contact person', type: 'text' },
+    { name: 'contactPhone', label: 'Contact phone', type: 'text' },
+  ];
+  const fields: FieldDef[] = gb ? ukFields : [
     { name: 'name', label: 'Client name', type: 'text', required: true },
     { name: 'legalName', label: 'Legal name', type: 'text' },
     { name: 'isInternal', label: 'Internal (non-billable, no GST)', type: 'checkbox', span: 2 },
@@ -92,10 +119,28 @@ function ClientForm({ client, onClose }: { client: ClientRow | null; onClose: ()
               rate: client.defaultRatePerHourPaise != null ? String(client.defaultRatePerHourPaise / 100) : '',
               paymentTermsDays: String(client.paymentTermsDays),
             }
-          : { gstRegType: 'REGULAR', paymentTermsDays: '15' }
+          : gb
+            ? { countryCode: 'GB', paymentTermsDays: '30' }
+            : { gstRegType: 'REGULAR', paymentTermsDays: '15' }
       }
       onSubmit={(v) =>
-        save.mutateAsync({
+        gb
+          ? save.mutateAsync({
+              name: v.name,
+              legalName: v.legalName,
+              isInternal: !!v.isInternal,
+              gstin: v.isInternal ? null : v.gstin || null,
+              countryCode: v.isInternal ? 'GB' : (v.countryCode ?? 'GB'),
+              address: v.address,
+              city: v.city,
+              pincode: v.pincode,
+              billingEmails: v.isInternal ? [] : String(v.billingEmails ?? '').split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean),
+              defaultRatePerHourPaise: v.isInternal ? null : (v.rate ?? null),
+              paymentTermsDays: v.paymentTermsDays ?? 30,
+              contactName: v.contactName,
+              contactPhone: v.contactPhone,
+            })
+          : save.mutateAsync({
           name: v.name,
           legalName: v.legalName,
           isInternal: !!v.isInternal,
@@ -120,6 +165,7 @@ function ClientForm({ client, onClose }: { client: ClientRow | null; onClose: ()
 }
 
 function ClientDrawer({ id, onClose, onEdit }: { id: string; onClose: () => void; onEdit: (r: ClientRow) => void }) {
+  const gb = useMe().region === 'GB';
   const q = useQuery({ queryKey: workKeys.client(id), queryFn: () => workApi.client(id) });
   const inv = [workKeys.client(id), workKeys.clients];
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -146,9 +192,18 @@ function ClientDrawer({ id, onClose, onEdit }: { id: string; onClose: () => void
           </div>
           <div className="wk-kv">
             <span>Status</span><span><StatusTag status={c.status} /></span>
-            <span>GST</span><span>{c.isInternal ? 'Not applicable' : `${humanize(c.gstRegType)}${c.gstin ? ` · ${c.gstin}` : ''}`}</span>
-            <span>Place of supply</span><span>{c.stateName ? `${c.stateCode} · ${c.stateName}` : '—'}</span>
-            <span>PAN</span><span>{c.pan ?? '—'}</span>
+            {gb ? (
+              <>
+                <span>VAT number</span><span>{c.isInternal ? 'Not applicable' : c.gstin ? (c.countryCode === 'GB' ? formatUkVatNumber(c.gstin) : c.gstin) : 'Not VAT registered'}</span>
+                <span>Country</span><span>{ukCountryName(c.countryCode)}{!c.isInternal && c.countryCode !== 'GB' ? ' · outside the scope of UK VAT (reverse charge)' : ''}</span>
+              </>
+            ) : (
+              <>
+                <span>GST</span><span>{c.isInternal ? 'Not applicable' : `${humanize(c.gstRegType)}${c.gstin ? ` · ${c.gstin}` : ''}`}</span>
+                <span>Place of supply</span><span>{c.stateName ? `${c.stateCode} · ${c.stateName}` : '—'}</span>
+                <span>PAN</span><span>{c.pan ?? '—'}</span>
+              </>
+            )}
             <span>Address</span><span>{[c.address, c.city, c.pincode].filter(Boolean).join(', ') || '—'}</span>
             <span>Billing emails</span><span>{c.billingEmails.join(', ') || '—'}</span>
             <span>Default rate</span><span>{c.defaultRatePerHourPaise != null ? `${formatINR(c.defaultRatePerHourPaise)} / hour` : '—'}</span>

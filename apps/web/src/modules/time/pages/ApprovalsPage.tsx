@@ -1,3 +1,4 @@
+import { activeTimezone } from '@lexisora/shared';
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
@@ -242,7 +243,7 @@ function Detail({ stepId, onDone }: { stepId: string; onDone: () => void }) {
           <div className="time-label">History</div>
           {d.history.map((h, i) => (
             <div key={i} style={{ fontSize: 12.5 }} className="muted">
-              {new Date(h.at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })} · {h.actor ?? 'System'} · {h.type}
+              {new Date(h.at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: activeTimezone() })} · {h.actor ?? 'System'} · {h.type}
               {h.level ? ` (L${h.level})` : ''}
               {h.comment ? ` — “${h.comment}”` : ''}
             </div>

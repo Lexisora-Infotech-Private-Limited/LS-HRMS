@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { formatDate, formatDayMonth, formatMonthYear, formatTime, istDateKey } from '@lexisora/shared';
+import { activeRegion, formatDate, formatDayMonth, formatMonthYear, formatTime, istDateKey } from '@lexisora/shared';
 
 /** Business "today" (IST) as YYYY-MM-DD. */
 export const todayKey = () => istDateKey(new Date());
@@ -22,6 +22,12 @@ export const token = (bytes = 24) => randomBytes(bytes).toString('base64url');
 /** Indian digit grouping without symbol spacing issues in PDFs: "₹ 10,29,600" → "Rs. 10,29,600" (built-in PDF fonts lack ₹). */
 export function inrPdf(paise: number): string {
   return 'Rs. ' + new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(Math.round(paise / 100));
+}
+
+/** Money for PDFs and emails in the tenant's currency: India "Rs. 10,29,600" (unchanged), UK "£45,000". */
+export function moneyPdf(paise: number): string {
+  if (activeRegion() !== 'GB') return inrPdf(paise);
+  return '£' + new Intl.NumberFormat('en-GB', { maximumFractionDigits: 0 }).format(Math.round(paise / 100));
 }
 
 export function splitName(full: string): { firstName: string; lastName: string } {

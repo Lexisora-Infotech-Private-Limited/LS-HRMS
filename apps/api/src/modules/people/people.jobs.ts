@@ -16,7 +16,9 @@ import { IdCardsService } from './idcards/idcards.service';
 import { OnboardingService } from './onboarding/onboarding.service';
 import { CandidatesService } from './recruitment/candidates.service';
 import { InterviewsService } from './recruitment/interviews.service';
+import { RtwService } from './rtw/rtw.service';
 import { isHr, PeopleAccess } from './people.access';
+import { tenantsForCron } from '../../core/region/region-cache';
 
 /** Registries (lookups, search, approvals, file access), event handlers and schedules for People. */
 @Injectable()
@@ -39,6 +41,7 @@ export class PeopleJobs implements OnModuleInit {
     private readonly candidates: CandidatesService,
     private readonly interviews: InterviewsService,
     private readonly appraisals: AppraisalsService,
+    private readonly rtw: RtwService,
   ) {}
 
   onModuleInit() {
@@ -93,6 +96,8 @@ export class PeopleJobs implements OnModuleInit {
         if (hasPerm(ctx, 'candidates.view') || hasPerm(ctx, 'candidates.manage')) return true;
         if (ctx.employeeId && (await this.prisma.interview.findFirst({ where: { application: { candidateId: cand.id }, panelists: { some: { employeeId: ctx.employeeId } } }, select: { id: true } }))) return true;
       }
+      // UK right to work evidence: HR, or the employee it belongs to.
+      if (await this.rtw.canViewEvidence(fileId, ctx.employeeId)) return true;
       if (hasPerm(ctx, 'idcard.manage') && (await this.prisma.idCardTemplate.findFirst({ where: { OR: [{ frontBgFileId: fileId }, { backBgFileId: fileId }] }, select: { id: true } }))) return true;
       return false;
     });
@@ -108,7 +113,7 @@ export class PeopleJobs implements OnModuleInit {
   }
 
   private async forEachTenant(name: string, fn: () => Promise<unknown>) {
-    const tenants = await this.prisma.raw.tenant.findMany({ select: { id: true } }).catch(() => [] as { id: string }[]);
+    const tenants = tenantsForCron(await this.prisma.raw.tenant.findMany({ select: { id: true } }).catch(() => [] as { id: string }[]));
     for (const t of tenants) {
       try {
         await runAsTenant(t.id, fn);
@@ -140,5 +145,11 @@ export class PeopleJobs implements OnModuleInit {
   @Cron('15 2 * * *', { timeZone: 'Asia/Kolkata' })
   async candidateRetention() {
     await this.forEachTenant('candidate-retention', () => this.candidates.retentionSweep());
+  }
+
+  /** 09:15 local time (UK tenants only): right to work re-check reminders, expired permissions, joiners with no check. */
+  @Cron('15 9 * * *', { timeZone: 'Asia/Kolkata' })
+  async rightToWorkReminders() {
+    await this.forEachTenant('rtw-reminders', () => this.rtw.remind());
   }
 }
