@@ -680,6 +680,8 @@ export const createTenantSchema = z
     seats: z.coerce.number().int().min(1).max(100000).nullish(),
     adminEmail: z.string().trim().toLowerCase().email('Enter the admin’s email'),
     adminName: z.string().trim().max(80).nullish(),
+    /** Country the company runs in (India by default). */
+    region: z.enum(['IN', 'GB']).default('IN'),
     stateCode: z
       .string()
       .nullish()

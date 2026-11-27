@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { auditChangeRows, istDateKey, type AuditQuery, type AuditResult, type AuditRowDto } from '@lexisora/shared';
+import { auditChangeRows, istDateKey, type AuditQuery, type AuditResult, type AuditRowDto, activeTimezone } from '@lexisora/shared';
 import { ErrorBlock, Modal, PageHeader, Tabs, Tag, type Tone } from '@/components/ui';
 import { DataTable, Pager, type Column } from '@/components/table';
 import { download } from '@/lib/api';
@@ -16,7 +16,7 @@ const PAGE_SIZE = 25;
 /** "29 Sep, 10:12:04" in IST. */
 export function auditWhen(iso: string, withYear = false): string {
   const parts = Object.fromEntries(
-    new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+    new Intl.DateTimeFormat('en-GB', { timeZone: activeTimezone(), year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
       .formatToParts(new Date(iso))
       .map((p) => [p.type, p.value]),
   ) as Record<string, string>;

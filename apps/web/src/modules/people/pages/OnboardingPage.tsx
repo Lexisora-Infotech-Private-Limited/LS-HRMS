@@ -4,7 +4,15 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ONBOARDING_STEP_LABELS,
   TSHIRT_SIZES,
+  UK_ID_DOCUMENT_LABELS,
+  UK_STARTER_STATEMENT_LABELS,
+  UK_STARTER_STATEMENTS,
+  UK_STUDENT_LOAN_LABELS,
+  UK_STUDENT_LOAN_PLANS,
   formatDate,
+  formatShareCode,
+  formatSortCode,
+  normaliseShareCode,
   type OnboardingDto,
   type OnboardingListRow,
   type OnboardingStepDto,
@@ -28,6 +36,16 @@ const COPY: Record<OnboardingStepKey, { title?: string; body: string; action: st
   bank: { title: 'Bank and tax details', body: 'Salary account, IFSC and tax regime selection for payroll.', action: 'Bank details', cta: 'Save & continue' },
   kit: { title: 'Your welcome kit', body: 'T-shirt, mug, notebook and bag will be handed over on day one. Pick your T-shirt size.', action: 'Confirm size', cta: 'Finish onboarding' },
 };
+/** UK (region GB) wording for the docs and bank steps; India keeps COPY unchanged. */
+const UK_COPY: Partial<typeof COPY> = {
+  docs: { title: 'Upload your documents', body: 'Passport or photo ID, your right to work share code (if you are not a British or Irish citizen), and optional proof of address, qualifications and references. HR verifies each one.', action: 'Upload documents', cta: 'Upload & continue' },
+  bank: { title: 'Bank and tax details', body: 'Your UK bank account, National Insurance number and the HMRC new starter checklist, so your first pay is taxed correctly.', action: 'Bank & tax details', cta: 'Save & continue' },
+};
+function useCopy(): typeof COPY {
+  const uk = useMe().region === 'GB';
+  return uk ? { ...COPY, ...UK_COPY } : COPY;
+}
+
 const OB_STATUS_LABEL: Record<string, string> = { NOT_STARTED: 'Not started', IN_PROGRESS: 'In progress', SUBMITTED: 'Submitted · HR verifying', COMPLETED: 'Completed', CANCELLED: 'Cancelled' };
 
 /** Paperless onboarding — joiner's 5 steps; HR sees all joiners + verification. */
@@ -59,6 +77,8 @@ function stepState(s: OnboardingStepDto, current: OnboardingStepKey | null) {
 }
 
 function JoinerFlow() {
+  const copy = useCopy();
+  const uk = useMe().region === 'GB';
   const q = useQuery({ queryKey: peopleKeys.onboardingMe, queryFn: peopleApi.myOnboarding });
   const [sel, setSel] = useState<OnboardingStepKey | null>(null);
   if (q.isLoading) return <Loading />;
@@ -92,16 +112,16 @@ function JoinerFlow() {
       <div className="pp-ob">
         <DocPanel ob={ob} step={step} />
         <div className="pp-action">
-          <h4 style={{ margin: 0 }}>{COPY[key].action}</h4>
+          <h4 style={{ margin: 0 }}>{copy[key].action}</h4>
           {step.note && step.status === 'NEEDS_ATTENTION' && <div className="note pp-err" style={{ fontSize: 12.5 }}>{step.note}</div>}
           {readOnly || step.status === 'DONE' || step.status === 'SKIPPED' ? (
             key === 'kit' && !readOnly && ob.status !== 'NOT_STARTED' ? <KitStep ob={ob} onDone={next} /> : <StepSummary ob={ob} step={step} />
           ) : key === 'offer' || key === 'nda' ? (
             <SignStep ob={ob} step={step} onDone={next} />
           ) : key === 'docs' ? (
-            <DocsStep ob={ob} onDone={next} />
+            uk ? <UkDocsStep ob={ob} onDone={next} /> : <DocsStep ob={ob} onDone={next} />
           ) : key === 'bank' ? (
-            <BankStep ob={ob} onDone={next} />
+            uk ? <UkBankStep ob={ob} onDone={next} /> : <BankStep ob={ob} onDone={next} />
           ) : (
             <KitStep ob={ob} onDone={next} />
           )}
@@ -112,10 +132,12 @@ function JoinerFlow() {
 }
 
 function DocPanel({ ob, step }: { ob: OnboardingDto; step: OnboardingStepDto }) {
+  const copy = useCopy();
+  const uk = useMe().region === 'GB';
   const k = step.key;
-  const title = k === 'offer' ? ob.offerDoc.title : k === 'nda' ? ob.ndaDoc.title : COPY[k].title!;
-  const body = k === 'offer' ? ob.offerDoc.body : k === 'nda' ? ob.ndaDoc.body : COPY[k].body;
-  const docs = k === 'docs' ? ob.documents.filter((d) => ['GOVERNMENT_ID', 'EDUCATION', 'EMPLOYMENT'].includes(d.category)) : [];
+  const title = k === 'offer' ? ob.offerDoc.title : k === 'nda' ? ob.ndaDoc.title : copy[k].title!;
+  const body = k === 'offer' ? ob.offerDoc.body : k === 'nda' ? ob.ndaDoc.body : copy[k].body;
+  const docs = k === 'docs' ? ob.documents.filter((d) => (uk ? ['GOVERNMENT_ID', 'EDUCATION', 'EMPLOYMENT', 'OTHER'] : ['GOVERNMENT_ID', 'EDUCATION', 'EMPLOYMENT']).includes(d.category)) : [];
   return (
     <div className="pp-doc">
       <div className="pp-doc-title">{title}</div>
@@ -153,6 +175,18 @@ function StepSummary({ ob, step }: { ob: OnboardingDto; step: OnboardingStepDto 
   if (step.key === 'offer' || step.key === 'nda') {
     lines.push(d.signedAt ? `Signed ${formatDate(d.signedAt)}` : step.note ?? 'Signed');
     if (d.signedSha256) lines.push(`Document fingerprint ${String(d.signedSha256).slice(0, 16)}…`);
+  } else if (step.key === 'docs' && (d.nationality || d.idDocument)) {
+    // UK tenant
+    lines.push(d.nationality === 'BRITISH_IRISH' ? 'British or Irish citizen' : 'Other nationality');
+    if (d.shareCode) lines.push(`Right to work share code ${formatShareCode(d.shareCode)}`);
+    lines.push('Each document shows its HR verification status on the left.');
+  } else if (step.key === 'bank' && (d.sortCode || d.starterStatement)) {
+    // UK tenant
+    if (d.last4) lines.push(`Account ••••${d.last4}${d.sortCode ? ` · sort code ${formatSortCode(d.sortCode)}` : ''}`);
+    if (d.niLast4) lines.push(`National Insurance number •• •• ${d.niLast4}`);
+    if (d.starterStatement) lines.push(`Starter checklist: statement ${d.starterStatement}`);
+    if (d.taxCode) lines.push(`Starting tax code ${d.taxCode}${d.taxBasis === 'NON_CUMULATIVE' ? ' (Month 1 basis)' : ''}`);
+    lines.push(ob.bankVerified ? 'Verified by HR' : 'Awaiting HR verification');
   } else if (step.key === 'docs') {
     if (d.pan) lines.push(`PAN ${d.pan}`);
     if (d.aadhaarLast4) lines.push(`Aadhaar XXXX XXXX ${d.aadhaarLast4}`);
@@ -461,12 +495,215 @@ function BankStep({ ob, onDone }: { ob: OnboardingDto; onDone: (d: OnboardingDto
   );
 }
 
+// ── UK (region GB) steps ──────────────────────────────────────────────────
+
+function UkDocsStep({ ob, onDone }: { ob: OnboardingDto; onDone: (d: OnboardingDto) => void }) {
+  const { toast, toastError } = useToast();
+  const qc = useQueryClient();
+  const prev = (ob.steps.find((s) => s.key === 'docs')?.data ?? {}) as Record<string, any>;
+  const ids = ob.documents.filter((d) => d.docType === 'PASSPORT');
+  const needId = ids.length === 0 || ids.some((d) => d.status === 'REJECTED');
+  const [idDocument, setIdDocument] = useState<'PASSPORT' | 'PHOTO_ID'>((prev.idDocument as never) ?? 'PASSPORT');
+  const [idFile, setIdFile] = useState<File | null>(null);
+  const [nationality, setNationality] = useState<'BRITISH_IRISH' | 'OTHER'>((prev.nationality as never) ?? 'BRITISH_IRISH');
+  const [shareCode, setShareCode] = useState<string>(prev.shareCode ? formatShareCode(prev.shareCode) : '');
+  const [rtwProof, setRtwProof] = useState<File | null>(null);
+  const [address, setAddress] = useState<File | null>(null);
+  const [qual, setQual] = useState<File | null>(null);
+  const [prevJob, setPrevJob] = useState<File | null>(null);
+  const [decl, setDecl] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const code = normaliseShareCode(shareCode);
+  const codeBad = nationality === 'OTHER' && shareCode.length > 0 && !/^[A-Z0-9]{9}$/.test(code);
+  const ready = (!needId || idFile) && (nationality === 'BRITISH_IRISH' || (code.length === 9 && !codeBad)) && decl;
+  async function submit() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const up = (f: File | null) => (f ? uploadFile(f, 'vault').then((r) => r.id) : Promise.resolve(null));
+      const [idFileId, rtwProofFileId, addressProofFileId, qualId, prevId] = await Promise.all([needId ? up(idFile) : Promise.resolve(null), up(rtwProof), up(address), up(qual), up(prevJob)]);
+      const d = await peopleApi.submitUkDocs({
+        idDocument,
+        ...(idFileId ? { idFileId } : {}),
+        nationality,
+        shareCode: nationality === 'OTHER' ? code : null,
+        rtwProofFileId,
+        addressProofFileId,
+        qualificationFileIds: qualId ? [qualId] : [],
+        prevEmploymentFileId: prevId,
+        declaration: true,
+      });
+      qc.setQueryData(peopleKeys.onboardingMe, d);
+      void qc.invalidateQueries({ queryKey: peopleKeys.vault });
+      toast('Documents uploaded · HR will verify them');
+      onDone(d);
+    } catch (e) {
+      setErr((e as Error).message);
+      toastError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="stack" style={{ gap: 10 }}>
+      {needId ? (
+        <>
+          <div className="field">
+            <label>Identity document</label>
+            <Seg value={idDocument} onChange={setIdDocument} options={[{ value: 'PASSPORT', label: UK_ID_DOCUMENT_LABELS.PASSPORT }, { value: 'PHOTO_ID', label: 'Photo ID card' }]} />
+          </div>
+          <FileDrop file={idFile} onFile={setIdFile} accept=".pdf,image/*" label={idDocument === 'PASSPORT' ? 'Drop the photo page of your passport or browse' : 'Drop both sides of your ID card or browse'} />
+        </>
+      ) : (
+        <SubmittedDoc label={ids[0]!.title} status={ids[0]!.status} />
+      )}
+      <div className="field">
+        <label>Right to work in the UK</label>
+        <Seg value={nationality} onChange={setNationality} options={[{ value: 'BRITISH_IRISH', label: 'British or Irish citizen' }, { value: 'OTHER', label: 'Other nationality' }]} />
+      </div>
+      {nationality === 'OTHER' ? (
+        <>
+          <div className="field">
+            <label htmlFor="sc">Share code</label>
+            <input id="sc" className="input tnum" value={shareCode} maxLength={11} placeholder="W4K 7RT 2PQ" autoComplete="off" onChange={(e) => setShareCode(e.target.value.toUpperCase())} aria-invalid={codeBad || undefined} />
+            {codeBad && <div className="field-error">A share code is 9 letters or numbers</div>}
+            <div className="faint" style={{ fontSize: 11.5 }}>Get it from GOV.UK "Prove your right to work to an employer". HR uses it with your date of birth to check online.</div>
+          </div>
+          <div className="field"><label>eVisa or BRP proof (optional)</label><FileDrop file={rtwProof} onFile={setRtwProof} accept=".pdf,image/*" /></div>
+        </>
+      ) : (
+        <div className="faint" style={{ fontSize: 12 }}>HR checks your passport (in person or with a digital ID check) before your first day. No share code is needed.</div>
+      )}
+      <div className="field"><label>Proof of address (optional)</label><FileDrop file={address} onFile={setAddress} accept=".pdf,image/*" label="Utility bill or bank statement" /></div>
+      <div className="field"><label>Qualification certificate (optional)</label><FileDrop file={qual} onFile={setQual} accept=".pdf,image/*" /></div>
+      <div className="field"><label>Previous employment letter or reference (optional)</label><FileDrop file={prevJob} onFile={setPrevJob} accept=".pdf,image/*" /></div>
+      <label className="radio"><input type="checkbox" checked={decl} onChange={(e) => setDecl(e.target.checked)} /><span className="dot" style={{ borderRadius: 3 }} />I confirm these documents are genuine and belong to me</label>
+      {err && <div className="field-error" role="alert">{err}</div>}
+      <button className="btn btn-primary" disabled={!ready || busy} onClick={() => void submit()}>{busy ? 'Uploading…' : UK_COPY.docs!.cta}</button>
+    </div>
+  );
+}
+
+/** "£1,234.56" typed by the joiner → pence (empty → null). */
+const poundsToPence = (s: string): number | null => {
+  const n = Number(s.replace(/[£,\s]/g, ''));
+  return s.trim() && Number.isFinite(n) ? Math.round(n * 100) : null;
+};
+
+function UkBankStep({ ob, onDone }: { ob: OnboardingDto; onDone: (d: OnboardingDto) => void }) {
+  const prev = (ob.steps.find((s) => s.key === 'bank')?.data ?? {}) as Record<string, any>;
+  const [v, setV] = useState({
+    holderName: (prev.holderName as string) ?? ob.employeeName,
+    sortCode: prev.sortCode ? formatSortCode(prev.sortCode) : '',
+    accountNumber: '',
+    confirmAccountNumber: '',
+    niNumber: '',
+  });
+  const [starter, setStarter] = useState<'A' | 'B' | 'C' | null>((prev.starterStatement as never) ?? null);
+  const [plans, setPlans] = useState<string[]>((prev.studentLoanPlans as string[]) ?? []);
+  const [pgl, setPgl] = useState<boolean>(!!prev.postgraduateLoan);
+  const [hasP45, setHasP45] = useState<boolean>(!!prev.hasP45);
+  const [p45Pay, setP45Pay] = useState(prev.previousPayPence ? String(prev.previousPayPence / 100) : '');
+  const [p45Tax, setP45Tax] = useState(prev.previousTaxPence ? String(prev.previousTaxPence / 100) : '');
+  const [p45File, setP45File] = useState<File | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const qc = useQueryClient();
+  const { toast, toastError } = useToast();
+  const clean: Partial<Record<keyof typeof v, (x: string) => string>> = {
+    sortCode: (x) => formatSortCode(x.replace(/\D/g, '').slice(0, 6)),
+    accountNumber: (x) => x.replace(/\D/g, '').slice(0, 8),
+    confirmAccountNumber: (x) => x.replace(/\D/g, '').slice(0, 8),
+    niNumber: (x) => x.toUpperCase().replace(/[^A-Z0-9 ]/g, '').slice(0, 13),
+  };
+  const set = (k: keyof typeof v) => (e: React.ChangeEvent<HTMLInputElement>) => setV((s) => ({ ...s, [k]: clean[k] ? clean[k]!(e.target.value) : e.target.value }));
+  const sortDigits = v.sortCode.replace(/\D/g, '');
+  const sortBad = sortDigits.length > 0 && sortDigits.length !== 6;
+  const accountBad = v.accountNumber.length > 0 && v.accountNumber.length !== 8;
+  const mismatch = v.confirmAccountNumber && v.accountNumber !== v.confirmAccountNumber;
+  const ni = v.niNumber.replace(/\s+/g, '');
+  const niBad = ni.length > 0 && !/^(?!BG|GB|NK|KN|TN|NT|ZZ)[A-CEGHJ-PR-TW-Z][A-CEGHJ-NPR-TW-Z]\d{6}[A-D]$/.test(ni);
+  const togglePlan = (p: string) => setPlans((s) => (s.includes(p) ? s.filter((x) => x !== p) : [...s, p]));
+  async function submit() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const p45FileId = hasP45 && p45File ? (await uploadFile(p45File, 'vault')).id : null;
+      const d = await peopleApi.submitUkBank({
+        holderName: v.holderName,
+        sortCode: sortDigits,
+        accountNumber: v.accountNumber,
+        confirmAccountNumber: v.confirmAccountNumber,
+        niNumber: ni || null,
+        starterStatement: starter!,
+        studentLoanPlans: plans as never,
+        postgraduateLoan: pgl,
+        hasP45,
+        previousPayPence: hasP45 ? poundsToPence(p45Pay) : null,
+        previousTaxPence: hasP45 ? poundsToPence(p45Tax) : null,
+        p45FileId,
+      });
+      qc.setQueryData(peopleKeys.onboardingMe, d);
+      toast('Bank and tax details saved');
+      onDone(d);
+    } catch (e) {
+      setErr((e as Error).message);
+      toastError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="stack" style={{ gap: 10 }}>
+      <div className="field"><label htmlFor="ubh">Account holder name</label><input id="ubh" className="input" value={v.holderName} onChange={set('holderName')} /></div>
+      <div className="form-grid">
+        <div className="field"><label htmlFor="ubs">Sort code</label><input id="ubs" className="input tnum" inputMode="numeric" placeholder="20-00-00" value={v.sortCode} onChange={set('sortCode')} aria-invalid={sortBad || undefined} />{sortBad && <div className="field-error">Sort code is 6 digits</div>}</div>
+        <div className="field"><label htmlFor="ubn">NI number (if you have one)</label><input id="ubn" className="input tnum" placeholder="AB 12 34 56 C" autoComplete="off" value={v.niNumber} onChange={set('niNumber')} aria-invalid={niBad || undefined} />{niBad && <div className="field-error">2 letters, 6 digits, then A, B, C or D</div>}</div>
+        <div className="field"><label htmlFor="uba">Account number</label><input id="uba" className="input tnum" inputMode="numeric" autoComplete="off" value={v.accountNumber} onChange={set('accountNumber')} aria-invalid={accountBad || undefined} />{accountBad && <div className="field-error">Account number is 8 digits</div>}</div>
+        <div className="field"><label htmlFor="ubc">Confirm account number</label><input id="ubc" className="input tnum" inputMode="numeric" autoComplete="off" value={v.confirmAccountNumber} onChange={set('confirmAccountNumber')} aria-invalid={!!mismatch || undefined} />{mismatch && <div className="field-error">Account numbers don't match</div>}</div>
+      </div>
+      <div className="field">
+        <label>New starter checklist (HMRC) · pick the statement that applies</label>
+        <div className="stack" style={{ gap: 4 }}>
+          {UK_STARTER_STATEMENTS.map((s) => (
+            <label key={s} className="radio"><input type="radio" name="starter" checked={starter === s} onChange={() => setStarter(s)} /><span className="dot" />{UK_STARTER_STATEMENT_LABELS[s]}</label>
+          ))}
+        </div>
+      </div>
+      <div className="field">
+        <label>Student loans (tick any you are repaying)</label>
+        <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
+          {UK_STUDENT_LOAN_PLANS.map((p) => (
+            <label key={p} className="radio"><input type="checkbox" checked={plans.includes(p)} onChange={() => togglePlan(p)} /><span className="dot" style={{ borderRadius: 3 }} />{UK_STUDENT_LOAN_LABELS[p]}</label>
+          ))}
+          <label className="radio"><input type="checkbox" checked={pgl} onChange={(e) => setPgl(e.target.checked)} /><span className="dot" style={{ borderRadius: 3 }} />Postgraduate loan</label>
+        </div>
+      </div>
+      <label className="radio"><input type="checkbox" checked={hasP45} onChange={(e) => setHasP45(e.target.checked)} /><span className="dot" style={{ borderRadius: 3 }} />I have a P45 from a job earlier in this tax year</label>
+      {hasP45 && (
+        <>
+          <div className="form-grid">
+            <div className="field"><label htmlFor="p45p">Total pay to date (£)</label><input id="p45p" className="input tnum" inputMode="decimal" value={p45Pay} onChange={(e) => setP45Pay(e.target.value)} /></div>
+            <div className="field"><label htmlFor="p45t">Total tax to date (£)</label><input id="p45t" className="input tnum" inputMode="decimal" value={p45Tax} onChange={(e) => setP45Tax(e.target.value)} /></div>
+          </div>
+          <div className="field"><label>P45 (optional)</label><FileDrop file={p45File} onFile={setP45File} accept=".pdf,image/*" /></div>
+        </>
+      )}
+      {err && <div className="field-error" role="alert">{err}</div>}
+      <button className="btn btn-primary" disabled={busy || v.holderName.trim().length < 2 || sortDigits.length !== 6 || v.accountNumber.length !== 8 || !!mismatch || !v.confirmAccountNumber || niBad || !starter} onClick={() => void submit()}>{busy ? 'Saving…' : UK_COPY.bank!.cta}</button>
+      <div className="faint" style={{ fontSize: 11.5 }}>Your account and NI numbers are encrypted; HR and Payroll see only the last 4 characters. Your starting tax code comes from the checklist; Payroll updates it when HMRC sends a new one.</div>
+    </div>
+  );
+}
+
 function KitStep({ ob, onDone }: { ob: OnboardingDto; onDone: (d: OnboardingDto) => void }) {
   const prev = (ob.steps.find((s) => s.key === 'kit')?.data ?? {}) as Record<string, any>;
   const [size, setSize] = useState<(typeof TSHIRT_SIZES)[number] | null>((prev.tshirtSize as never) ?? null);
   const [delivery, setDelivery] = useState<'HANDOVER' | 'SHIPPED'>((prev.delivery as never) ?? (ob.workMode === 'REMOTE' ? 'SHIPPED' : 'HANDOVER'));
   const [address, setAddress] = useState<string>((prev.address as string) ?? '');
   const qc = useQueryClient();
+  const copy = useCopy();
   const fin = useAction(() => peopleApi.finish({ tshirtSize: size!, delivery, address: delivery === 'SHIPPED' ? address : null }), {
     success: 'Onboarding complete · HR notified, ID card queued',
     invalidate: [peopleKeys.vault],
@@ -486,7 +723,7 @@ function KitStep({ ob, onDone }: { ob: OnboardingDto; onDone: (d: OnboardingDto)
       <Seg value={delivery} onChange={setDelivery} options={[{ value: 'HANDOVER', label: 'Hand over on day one' }, { value: 'SHIPPED', label: 'Ship to my address' }]} />
       {delivery === 'SHIPPED' && <textarea className="input" placeholder="Delivery address" value={address} onChange={(e) => setAddress(e.target.value)} />}
       {blocked.length > 0 && <div className="note" style={{ fontSize: 12.5 }}>Complete {blocked.map((k) => ONBOARDING_STEP_LABELS[k]).join(', ')} first.</div>}
-      <button className="btn btn-primary" disabled={!size || blocked.length > 0 || fin.isPending || (delivery === 'SHIPPED' && address.trim().length < 5)} onClick={() => fin.mutate(undefined)}>{fin.isPending ? 'Finishing…' : COPY.kit.cta}</button>
+      <button className="btn btn-primary" disabled={!size || blocked.length > 0 || fin.isPending || (delivery === 'SHIPPED' && address.trim().length < 5)} onClick={() => fin.mutate(undefined)}>{fin.isPending ? 'Finishing…' : copy.kit.cta}</button>
     </div>
   );
 }
@@ -614,8 +851,30 @@ function HrDetail({ employeeId, onClose }: { employeeId: string; onClose: () => 
               ))
             )}
           </div>
+          {ob.bank.uk && (
+            <div>
+              <div className="kicker" style={{ marginBottom: 4 }}>Right to work</div>
+              <div className="pp-kv">
+                <div>Nationality</div><div>{ob.bank.uk.nationality ?? 'Not given yet'}</div>
+                <div>Share code</div><div className="tnum">{ob.bank.uk.shareCode ?? '—'}</div>
+              </div>
+              <button className="btn btn-ghost btn-sm" style={{ paddingLeft: 0, marginTop: 4 }} onClick={() => nav(`/right-to-work?employee=${employeeId}`)}>Record the check on the Right to work page</button>
+            </div>
+          )}
           <div>
             <div className="kicker" style={{ marginBottom: 4 }}>Bank & tax</div>
+            {ob.bank.uk ? (
+              <div className="pp-kv">
+                <div>Account holder</div><div>{ob.bank.holder ?? '—'}</div>
+                <div>Account</div><div>{ob.bank.account || '—'}</div>
+                <div>Sort code</div><div>{ob.bank.uk.sortCode ?? '—'}</div>
+                <div>NI number</div><div>{ob.bank.uk.niNumber}</div>
+                <div>Starter checklist</div><div>{ob.bank.uk.starterStatement ?? '—'}</div>
+                <div>Tax code</div><div>{ob.bank.uk.taxCode ?? '—'}</div>
+                <div>Student loans</div><div>{ob.bank.uk.studentLoans}</div>
+                <div>P45</div><div>{ob.bank.uk.p45 ?? 'None'}</div>
+              </div>
+            ) : (
             <div className="pp-kv">
               <div>Account holder</div><div>{ob.bank.holder ?? '—'}</div>
               <div>Account</div><div>{ob.bank.account || '—'}{ob.bank.bank ? ` · ${ob.bank.bank}` : ''}</div>
@@ -624,6 +883,7 @@ function HrDetail({ employeeId, onClose }: { employeeId: string; onClose: () => 
               <div>Tax regime</div><div>{ob.bank.taxRegime === 'OLD' ? 'Old regime' : 'New regime'}</div>
               <div>UAN</div><div>{ob.bank.uan ?? '—'}</div>
             </div>
+            )}
             <div className="row" style={{ gap: 8, marginTop: 8 }}>
               {ob.bankVerified ? (
                 <Tag tone="accent">Bank verified</Tag>
@@ -632,7 +892,7 @@ function HrDetail({ employeeId, onClose }: { employeeId: string; onClose: () => 
                   <Tag tone="danger">Rejected · waiting for employee</Tag>
                   {ob.steps.find((s) => s.key === 'bank')?.note && <span className="faint" style={{ fontSize: 12.5 }}>{ob.steps.find((s) => s.key === 'bank')?.note}</span>}
                 </span>
-              ) : ob.bank.ifsc && open ? (
+              ) : (ob.bank.uk ? ob.bank.uk.sortCode : ob.bank.ifsc) && open ? (
                 <>
                   <button className="btn btn-secondary btn-sm" disabled={bank.isPending} onClick={() => bank.mutate('VERIFIED')}>Verify bank details</button>
                   <button className="btn btn-ghost btn-sm" onClick={() => setRejectBank(true)}>Reject</button>

@@ -51,7 +51,7 @@ export class BrandingService {
   }
 
   async get(): Promise<BrandingDto> {
-    const [t, plan, versions] = await Promise.all([this.tenant(), this.plan(), this.prisma.brandingVersion.findMany({ orderBy: { version: 'desc' }, take: 12 })]);
+    const [t, plan, versions] = await Promise.all([this.tenant(), this.plan(), this.prisma.brandingVersion.findMany({ orderBy: { version: 'desc' }, take: 8 })]);
     const current = versions.find((v) => v.status === 'PUBLISHED') ?? null;
     return {
       presetKey: presetFor(t.brandAccent, t.brandAccent2) ?? (current && current.primaryHex === t.brandAccent ? current.presetKey : null),

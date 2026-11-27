@@ -12,6 +12,8 @@ export type BillOcrResult = {
   rawText: string;
   vendorName?: string;
   vendorGstin?: string;
+  /** UK VAT registration number (only parsed with `{ vat: true }`). */
+  vendorVatNumber?: string;
   invoiceNo?: string;
   invoiceDate?: string; // YYYY-MM-DD
   totalPaise?: number;
@@ -23,8 +25,11 @@ export type BillOcrResult = {
   confidence: number;
 };
 
+/** `vat`: also read UK VAT labels ("VAT @ 20%", "Total VAT", "VAT Reg No") — UK tenants. */
+export type BillOcrOptions = { vat?: boolean };
+
 export interface BillOcrAdapter {
-  extract(file: { buffer: Buffer; mime: string }): Promise<BillOcrResult>;
+  extract(file: { buffer: Buffer; mime: string }, opts?: BillOcrOptions): Promise<BillOcrResult>;
 }
 
 // ── PDF text layer ──────────────────────────────────────────────────────────
@@ -123,7 +128,7 @@ export function extractPdfText(buf: Buffer): string {
 
 // ── Rule-based parser ───────────────────────────────────────────────────────
 
-const AMOUNT = '(?:₹|Rs\\.?|INR)?\\s*([0-9][0-9,]*(?:\\.[0-9]{1,2})?)';
+const AMOUNT = '(?:₹|Rs\\.?|INR|£|GBP)?\\s*([0-9][0-9,]*(?:\\.[0-9]{1,2})?)';
 const toPaise = (s: string | undefined) => (s ? Math.round(Number(s.replace(/,/g, '')) * 100) : undefined);
 const MONTHS: Record<string, string> = { jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06', jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12' };
 
@@ -135,7 +140,7 @@ function lastAmount(text: string, label: RegExp): number | undefined {
   return found;
 }
 
-export function parseBillText(text: string): Omit<BillOcrResult, 'textFound' | 'rawText'> {
+export function parseBillText(text: string, opts: BillOcrOptions = {}): Omit<BillOcrResult, 'textFound' | 'rawText'> {
   const t = text.replace(/ /g, ' ');
   const gstin = /\b(\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z])\b/.exec(t)?.[1];
   const invoiceNo = /(?:Invoice|Bill|Order)\s*(?:No\.?|Number|#)\s*[:\-]?\s*([A-Z0-9][A-Z0-9\-\/]{2,})/i.exec(t)?.[1];
@@ -151,18 +156,28 @@ export function parseBillText(text: string): Omit<BillOcrResult, 'textFound' | '
   let gstPaise: number | undefined;
   if (cgstPaise || sgstPaise || igstPaise) gstPaise = (cgstPaise ?? 0) + (sgstPaise ?? 0) + (igstPaise ?? 0);
   else gstPaise = lastAmount(t, /(?:Total\s+GST|GST\s+Amount|Total\s+Tax|Tax\s+Amount|GST(?!IN))(?:\s*@?\s*\d+(?:\.\d+)?\s*%)?/);
+  let vendorVatNumber: string | undefined;
+  if (opts.vat) {
+    // UK VAT: "VAT @ 20%", "Total VAT", "VAT amount"; GST labels above still win when present.
+    if (gstPaise === undefined) gstPaise = lastAmount(t, /(?:Total\s+VAT|VAT\s+Amount|VAT\s+Total|VAT(?!\s*(?:Reg|No|Number|registration))(?:\s*@?\s*\d+(?:\.\d+)?\s*%)?)/);
+    const m = /VAT\s*(?:Reg(?:istration)?\.?\s*)?(?:No\.?|Number|#)?\s*[:\-]?\s*((?:GB|XI)?\s?\d{3}\s?\d{4}\s?\d{2}(?:\s?\d{3})?)\b/i.exec(t);
+    if (m) {
+      const raw = m[1]!.toUpperCase().replace(/\s+/g, '');
+      vendorVatNumber = /^(GB|XI)/.test(raw) ? raw : `GB${raw}`;
+    }
+  }
   const vendorName = /^(?:Sold\s+by|Seller|From|Vendor)\s*[:\-]\s*(.+)$/im.exec(t)?.[1]?.trim() ?? t.split('\n').map((s) => s.trim()).find((s) => /[A-Za-z]{3,}/.test(s) && !/invoice|bill|tax/i.test(s));
-  const expected = [gstin, invoiceNo, invoiceDate, totalPaise, gstPaise];
+  const expected = [opts.vat ? (gstin ?? vendorVatNumber) : gstin, invoiceNo, invoiceDate, totalPaise, gstPaise];
   const confidence = Math.round((expected.filter((x) => x !== undefined).length / expected.length) * 100) / 100;
-  return { vendorName, vendorGstin: gstin, invoiceNo, invoiceDate, totalPaise, gstPaise, cgstPaise, sgstPaise, igstPaise, confidence };
+  return { vendorName, vendorGstin: gstin, ...(vendorVatNumber ? { vendorVatNumber } : {}), invoiceNo, invoiceDate, totalPaise, gstPaise, cgstPaise, sgstPaise, igstPaise, confidence };
 }
 
 /** Default adapter: PDF text layer + parser (images → no text). */
 export class TextLayerBillOcr implements BillOcrAdapter {
-  async extract(file: { buffer: Buffer; mime: string }): Promise<BillOcrResult> {
+  async extract(file: { buffer: Buffer; mime: string }, opts: BillOcrOptions = {}): Promise<BillOcrResult> {
     const rawText = file.mime === 'application/pdf' ? extractPdfText(file.buffer) : '';
     if (!rawText.trim()) return { textFound: false, rawText: '', confidence: 0 };
-    return { textFound: true, rawText: rawText.slice(0, 20_000), ...parseBillText(rawText) };
+    return { textFound: true, rawText: rawText.slice(0, 20_000), ...parseBillText(rawText, opts) };
   }
 }
 

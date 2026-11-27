@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Empty, Loading } from './ui';
+import { rt, Empty, Loading } from './ui';
 
 export type Column<T> = {
   key: string;
@@ -66,7 +66,7 @@ export function DataTable<T>({
               const unlabelled = c.header === '' || c.header === null || c.header === undefined;
               return (
                 <div key={c.key} className={`dt-card-row${unlabelled ? ' full' : ''}`}>
-                  {!unlabelled && <span className="dt-card-label">{c.header}</span>}
+                  {!unlabelled && <span className="dt-card-label">{rt(c.header)}</span>}
                   <span className={`dt-card-value${c.num ? ' num' : ''}`}>{c.render(r)}</span>
                 </div>
               );
@@ -85,7 +85,7 @@ export function DataTable<T>({
           <tr>
             {columns.map((c) => (
               <th key={c.key} className={c.num ? 'num' : undefined} style={c.width ? { width: c.width } : undefined}>
-                {c.header}
+                {rt(c.header)}
               </th>
             ))}
           </tr>

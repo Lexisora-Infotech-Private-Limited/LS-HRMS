@@ -9,6 +9,13 @@ import {
   finMonthLabel,
   finPlaceOfSupply,
   formatINR,
+  formatSortCode,
+  isUkVatTreatment,
+  ukComputeInvoiceVat,
+  ukDeriveVatTreatment,
+  ukTreatmentFromRate,
+  ukVatLabel,
+  type UkVatTreatment,
   type FinCreateInvoiceInput,
   type FinInvoiceDetail,
   type FinInvoiceFormOptions,
@@ -38,13 +45,26 @@ import { SpineReader, type SpineClient } from './spine';
 import { renderInvoicePdf, type InvoicePdfData } from './invoice-pdf';
 import { addDays, currentMonthKey, dateKeyOf, dateOnly, fyOf, monthRange, recentMonths, todayDate, CREDIT_NOTE_SEQUENCE, INVOICE_SEQUENCE } from './lib/money';
 import { InvoiceRuleError, invoiceDisplayStatus, isInvoiceOverdue, OPEN_INVOICE_STATUSES, paymentOutcome } from './lib/invoice-rules';
+import { currentRegion } from '../../core/region/region-cache';
 
 type InvoiceBody = z.infer<typeof finUpdateInvoiceSchema>;
 type ListQuery = z.infer<typeof finInvoiceListQuery>;
 type EmailInput = z.infer<typeof finEmailInvoiceSchema>;
 type PaymentInput = z.infer<typeof finRecordPaymentSchema>;
 
-export type BuyerSnapshot = { name: string; displayName: string; gstin: string | null; pan: string | null; address: string | null; stateCode: string | null; emails: string[] };
+/**
+ * Buyer as invoiced. UK (GB) tenants also store the customer's country and the invoice's VAT
+ * treatment + note here (no schema change: STANDARD / REDUCED / ZERO / EXEMPT / OUTSIDE_SCOPE /
+ * NOT_REGISTERED; the VAT amount is in the IGST column, the rate in gstRateBp).
+ */
+export type BuyerSnapshot = { name: string; displayName: string; gstin: string | null; pan: string | null; address: string | null; stateCode: string | null; emails: string[]; countryCode?: string | null; vatTreatment?: UkVatTreatment | null; vatNote?: string | null };
+
+const isGb = () => currentRegion() === 'GB';
+/** VAT treatment of a stored UK invoice. */
+export function invoiceVatTreatment(inv: { gstRateBp: number; buyerSnapshot: unknown }): UkVatTreatment {
+  const t = (inv.buyerSnapshot as BuyerSnapshot | null)?.vatTreatment;
+  return isUkVatTreatment(t) ? t : ukTreatmentFromRate(inv.gstRateBp);
+}
 export type SellerSnapshot = InvoicePdfData['seller'];
 
 const fullInclude = {
@@ -181,7 +201,8 @@ export class InvoiceService {
     );
     return {
       sellerStateCode: tenant.stateCode,
-      clients: clients.map((c) => ({ id: c.id, name: c.name, stateCode: c.stateCode, gstin: c.gstin, billingEmails: c.billingEmails ?? [], defaultRatePaise: c.defaultRatePerHourPaise, paymentTermsDays: c.paymentTermsDays })),
+      ...(isGb() ? { vatRegistered: !!tenant.gstin?.trim() } : {}),
+      clients: clients.map((c) => ({ id: c.id, name: c.name, stateCode: c.stateCode, gstin: c.gstin, billingEmails: c.billingEmails ?? [], defaultRatePaise: c.defaultRatePerHourPaise, paymentTermsDays: c.paymentTermsDays, ...(isGb() ? { countryCode: c.countryCode ?? 'GB' } : {}) })),
       projects: billable.map((p) => ({ id: p.id, clientId: p.clientId!, name: p.name, ratePaise: p.ratePerHourPaise, status: String(p.status), unbilled: unbilled.get(p.id) ?? [] })),
       periods: months.map((m) => ({ value: m, label: finMonthLabel(m) })),
     };
@@ -251,6 +272,26 @@ export class InvoiceService {
     } else if (a.pendingTimesheets) {
       guidance = `${finHoursLabel(a.pendingMinutes)} more hours are waiting in ${a.pendingTimesheets} ${a.pendingTimesheets === 1 ? 'timesheet' : 'timesheets'} pending approval`;
     }
+    if (isGb()) {
+      const vat = ukDeriveVatTreatment({ vatRegistered: !!tenant.gstin?.trim(), clientCountryCode: client.countryCode });
+      return {
+        approvedMinutes: a.approvedMinutes,
+        approvedHours: finHoursLabel(a.approvedMinutes),
+        pendingMinutes: a.pendingMinutes,
+        pendingTimesheets: a.pendingTimesheets,
+        cellCount: a.cells.length,
+        ratePaise,
+        supplyType: 'INTER',
+        gstLabel: ukVatLabel(vat.treatment, vat.rateBp),
+        placeOfSupply: '',
+        emailTo: client.billingEmails ?? [],
+        paymentTermsDays: client.paymentTermsDays,
+        tax: ukComputeInvoiceVat({ minutes: a.approvedMinutes, ratePaise, treatment: vat.treatment }),
+        guidance,
+        vatTreatment: vat.treatment,
+        vatNote: vat.note,
+      };
+    }
     return {
       approvedMinutes: a.approvedMinutes,
       approvedHours: finHoursLabel(a.approvedMinutes),
@@ -279,6 +320,7 @@ export class InvoiceService {
     if (adjusted && !note) {
       throw new AppError(422, 'ADJUSTMENT_NOTE', `Approved hours are ${finHoursLabel(a.approvedMinutes)}. Add an adjustment note to bill ${finHoursLabel(minutes)} hours`, { fieldErrors: { adjustmentNote: ['Explain the difference from approved hours'] } });
     }
+    if (isGb()) return this.prepareUk(input, { client, project, tenant, settings, a, minutes, adjusted, note });
     const derived = finDeriveSupplyType(tenant.stateCode, client.stateCode);
     let supply: FinSupplyKind = derived;
     let overrideReason: string | null = null;
@@ -346,6 +388,90 @@ export class InvoiceService {
       projectId: project?.id ?? null,
     };
     return { data, line, a, adjusted, overridden: !!overrideReason, derived };
+  }
+
+  /**
+   * UK (GB) figures: VAT via the UK engine (20% default, or the picked rate; outside the scope
+   * for overseas customers; none when the company isn't VAT registered). The VAT amount is
+   * stored in the IGST column (CGST/SGST 0), supplyType INTER, no place of supply, no SAC.
+   */
+  private prepareUk(
+    input: InvoiceBody,
+    c: {
+      client: SpineClient;
+      project: Awaited<ReturnType<InvoiceService['clientAndProject']>>['project'];
+      tenant: Awaited<ReturnType<InvoiceService['tenant']>>;
+      settings: Awaited<ReturnType<LedgerService['financeSettings']>>;
+      a: Awaited<ReturnType<InvoiceService['available']>>;
+      minutes: number;
+      adjusted: boolean;
+      note: string | null;
+    },
+  ) {
+    const { client, project, tenant, settings, a, minutes, adjusted, note } = c;
+    const vat = ukDeriveVatTreatment({ vatRegistered: !!tenant.gstin?.trim(), clientCountryCode: client.countryCode, requested: input.vatTreatment ?? null });
+    const tax = ukComputeInvoiceVat({ minutes, ratePaise: input.ratePaise, treatment: vat.treatment, rateBp: vat.rateBp });
+    const label = finMonthLabel(input.period);
+    const description = `Software development services — ${project?.name ?? client.name} — ${label} (${finHoursLabel(minutes)} hrs @ ${formatINR(input.ratePaise)}/hr)`;
+    const { start, end } = monthRange(input.period);
+    const buyer: BuyerSnapshot = {
+      name: client.legalName || client.name,
+      displayName: client.name,
+      gstin: client.gstin,
+      pan: null,
+      address: [client.address, client.city, client.pincode].filter(Boolean).join(', ') || null,
+      stateCode: null,
+      emails: client.billingEmails ?? [],
+      countryCode: client.countryCode ?? 'GB',
+      vatTreatment: vat.treatment,
+      vatNote: vat.note,
+    };
+    const tenantId = requireContext().tenantId;
+    const data = {
+      clientId: client.id,
+      clientName: client.name,
+      projectId: project?.id ?? null,
+      projectName: project?.name ?? null,
+      period: input.period,
+      periodStart: start,
+      periodEnd: end,
+      paymentTermsDays: client.paymentTermsDays ?? settings.defaultPaymentTermsDays,
+      placeOfSupply: null,
+      supplyType: 'INTER' as FinSupplyKind,
+      gstRateBp: vat.rateBp,
+      taxOverrideReason: null,
+      buyerSnapshot: buyer as unknown as Prisma.InputJsonValue,
+      minutes,
+      sourceMinutes: a.approvedMinutes,
+      adjustmentNote: adjusted ? note : null,
+      ratePaise: input.ratePaise,
+      subtotalPaise: tax.taxablePaise,
+      cgstPaise: 0,
+      sgstPaise: 0,
+      igstPaise: tax.igstPaise,
+      roundOffPaise: 0,
+      totalPaise: tax.totalPaise,
+      balancePaise: tax.totalPaise,
+      emailTo: input.emailTo.length ? input.emailTo : (client.billingEmails ?? []),
+      emailCc: input.emailCc ?? [],
+      notes: input.notes?.trim() || null,
+    };
+    const line = {
+      tenantId,
+      sortOrder: 0,
+      description,
+      sac: '',
+      minutes,
+      ratePaise: input.ratePaise,
+      taxablePaise: tax.taxablePaise,
+      gstRateBp: vat.rateBp,
+      cgstPaise: 0,
+      sgstPaise: 0,
+      igstPaise: tax.igstPaise,
+      lineTotalPaise: tax.taxablePaise + tax.igstPaise,
+      projectId: project?.id ?? null,
+    };
+    return { data, line, a, adjusted, overridden: false, derived: 'INTER' as FinSupplyKind };
   }
 
   /** Lock the approved cells to this invoice (unique per cell — a concurrent invoice loses). */
@@ -430,9 +556,17 @@ export class InvoiceService {
     if (!inv) throw notFound('Invoice');
     if (inv.status !== 'DRAFT') throw conflict(`${inv.number ?? 'This invoice'} is already issued`, 'NOT_DRAFT');
     const tenant = await this.tenant();
-    if (!tenant.gstin || !tenant.stateCode) throw new AppError(422, 'SELLER_GST_MISSING', 'Add the company GSTIN and state (Branding) before issuing invoices');
-    const buyer = inv.buyerSnapshot as unknown as BuyerSnapshot;
-    if (!buyer?.stateCode) throw new AppError(422, 'BUYER_STATE_MISSING', `${inv.clientName} has no GST state — update the client before issuing`);
+    if (isGb()) {
+      // UK: a VAT number is needed only when the company is VAT registered; a draft prepared
+      // under the other status must be re-saved so its VAT is recalculated.
+      const registered = !!tenant.gstin?.trim();
+      const treatment = invoiceVatTreatment(inv);
+      if (registered !== (treatment !== 'NOT_REGISTERED')) throw new AppError(422, 'VAT_STATUS_CHANGED', registered ? 'The company is now VAT registered — open the draft and save it to add VAT before issuing' : 'The company has no VAT number — open the draft and save it to remove VAT, or add the VAT number (Branding)');
+    } else {
+      if (!tenant.gstin || !tenant.stateCode) throw new AppError(422, 'SELLER_GST_MISSING', 'Add the company GSTIN and state (Branding) before issuing invoices');
+      const buyer = inv.buyerSnapshot as unknown as BuyerSnapshot;
+      if (!buyer?.stateCode) throw new AppError(422, 'BUYER_STATE_MISSING', `${inv.clientName} has no GST state — update the client before issuing`);
+    }
     if (inv.minutes <= 0 || inv.ratePaise <= 0 || inv.totalPaise <= 0) throw new AppError(422, 'EMPTY_INVOICE', 'Billable hours and rate must be more than zero');
     const today = todayDate();
     await this.ledger.assertOpen(today);
@@ -478,7 +612,14 @@ export class InvoiceService {
     if (!inv || !inv.number || inv.status === 'DRAFT') return null;
     if (inv.salesVoucherId) return inv.salesVoucherId;
     const ar = await this.ledger.clientAccount(inv.clientId, inv.clientName);
-    const lines: PostLine[] = [
+    const lines: PostLine[] = isGb()
+      ? [
+          { accountId: ar, debitPaise: inv.totalPaise, narration: `${inv.number} · ${inv.clientName}` },
+          { accountId: '', systemKey: 'SALES_SERVICES', creditPaise: inv.subtotalPaise, narration: `${inv.projectName ?? inv.clientName} · ${finMonthLabel(inv.period)}` },
+          { accountId: '', systemKey: 'VAT_OUTPUT', creditPaise: inv.cgstPaise + inv.sgstPaise + inv.igstPaise, narration: 'VAT on sales' },
+          inv.roundOffPaise >= 0 ? { accountId: '', systemKey: 'ROUND_OFF', creditPaise: inv.roundOffPaise } : { accountId: '', systemKey: 'ROUND_OFF', debitPaise: -inv.roundOffPaise },
+        ]
+      : [
       { accountId: ar, debitPaise: inv.totalPaise, narration: `${inv.number} · ${inv.clientName}` },
       { accountId: '', systemKey: 'SALES_SERVICES', creditPaise: inv.subtotalPaise, narration: `${inv.projectName ?? inv.clientName} · ${finMonthLabel(inv.period)}` },
       { accountId: '', systemKey: 'GST_OUTPUT_CGST', creditPaise: inv.cgstPaise },
@@ -523,6 +664,7 @@ export class InvoiceService {
       notes: inv.notes,
       bank: settings.bank,
       signatory: settings.signatory,
+      ...(isGb() ? { uk: { treatment: invoiceVatTreatment(inv), note: buyer?.vatNote ?? null, buyerCountry: buyer?.countryCode ?? 'GB' } } : {}),
     };
   }
 
@@ -610,7 +752,22 @@ export class InvoiceService {
     const settings = await this.ledger.financeSettings();
     const buyer = inv.buyerSnapshot as unknown as BuyerSnapshot;
     const due = inv.dueDate ? dateKeyOf(inv.dueDate) : '';
-    const lines = [
+    const gb = isGb();
+    const ukTreatment = gb ? invoiceVatTreatment(inv) : null;
+    const lines = gb
+      ? [
+          `Dear ${buyer?.displayName ?? inv.clientName} team,`,
+          '',
+          `Please find attached ${ukTreatment === 'NOT_REGISTERED' ? 'invoice' : 'VAT invoice'} ${inv.number} dated ${inv.invoiceDate ? dateKeyOf(inv.invoiceDate) : ''} for ${inv.projectName ?? 'our services'} — ${finMonthLabel(inv.period)} (${finHoursLabel(inv.minutes)} hours).`,
+          `Amount payable: ${formatINR(inv.balancePaise || inv.totalPaise, { decimals: true })}${ukTreatment === 'STANDARD' || ukTreatment === 'REDUCED' ? ' (incl. VAT)' : ''}${due ? ` · due by ${due}` : ''}.`,
+          ...(buyer?.vatNote ? [buyer.vatNote] : []),
+          ...(input.message?.trim() ? ['', input.message.trim()] : []),
+          '',
+          ...(settings.bank.accountNo ? [`Bank: ${[settings.bank.bankName, settings.bank.accountName && `account name ${settings.bank.accountName}`, settings.bank.sortCode && `sort code ${formatSortCode(settings.bank.sortCode)}`, `account no. ${settings.bank.accountNo}`].filter(Boolean).join(', ')}`, ''] : []),
+          'Kind regards,',
+          `Accounts · ${seller.legalName}`,
+        ]
+      : [
       `Dear ${buyer?.displayName ?? inv.clientName} team,`,
       '',
       `Please find attached tax invoice ${inv.number} dated ${inv.invoiceDate ? dateKeyOf(inv.invoiceDate) : ''} for ${inv.projectName ?? 'our services'} — ${finMonthLabel(inv.period)} (${finHoursLabel(inv.minutes)} hours).`,
@@ -621,7 +778,7 @@ export class InvoiceService {
       '',
       'Regards,',
       `Accounts · ${seller.legalName}`,
-    ];
+        ];
     const ok = await this.mail.send({
       to,
       cc: input.cc?.length ? input.cc : undefined,
@@ -653,6 +810,7 @@ export class InvoiceService {
     if (!OPEN_INVOICE_STATUSES.includes(inv.status as (typeof OPEN_INVOICE_STATUSES)[number])) throw conflict(inv.status === 'PAID' ? 'This invoice is already paid in full' : 'Payments can only be recorded on issued invoices', 'NOT_OPEN');
     const date = dateOnly(input.date);
     if (inv.invoiceDate && date.getTime() < inv.invoiceDate.getTime()) throw new AppError(422, 'BEFORE_INVOICE', 'Payment date cannot be before the invoice date');
+    if (isGb() && input.tdsPaise) throw new AppError(422, 'NO_TDS', 'Tax deducted at source does not apply in the UK — record the amount received only', { fieldErrors: { tdsPaise: ['Not used in the UK'] } });
     let out: ReturnType<typeof paymentOutcome>;
     try {
       out = paymentOutcome(inv.totalPaise, inv.balancePaise, input.amountPaise, input.tdsPaise);
@@ -754,7 +912,14 @@ export class InvoiceService {
       number,
       date: today,
       narration: `Credit note ${number} against ${inv.number}: ${reason}`.slice(0, 500),
-      lines: [
+      lines: isGb()
+        ? [
+            { accountId: '', systemKey: 'SALES_SERVICES', debitPaise: inv.subtotalPaise },
+            { accountId: '', systemKey: 'VAT_OUTPUT', debitPaise: inv.cgstPaise + inv.sgstPaise + inv.igstPaise, narration: 'VAT on sales reversed' },
+            inv.roundOffPaise >= 0 ? { accountId: '', systemKey: 'ROUND_OFF', debitPaise: inv.roundOffPaise } : { accountId: '', systemKey: 'ROUND_OFF', creditPaise: -inv.roundOffPaise },
+            { accountId: ar, creditPaise: inv.totalPaise },
+          ]
+        : [
         { accountId: '', systemKey: 'SALES_SERVICES', debitPaise: inv.subtotalPaise },
         { accountId: '', systemKey: 'GST_OUTPUT_CGST', debitPaise: inv.cgstPaise },
         { accountId: '', systemKey: 'GST_OUTPUT_SGST', debitPaise: inv.sgstPaise },
@@ -821,8 +986,8 @@ export class InvoiceService {
       receivedPaise: inv.receivedPaise,
       tdsPaise: inv.tdsPaise,
       gstRateBp: inv.gstRateBp,
-      gstLabel: finGstLabel(inv.supplyType as FinSupplyKind, inv.gstRateBp),
-      placeOfSupply: inv.placeOfSupply,
+      gstLabel: isGb() ? ukVatLabel(invoiceVatTreatment(inv), inv.gstRateBp) : finGstLabel(inv.supplyType as FinSupplyKind, inv.gstRateBp),
+      placeOfSupply: isGb() ? null : inv.placeOfSupply,
       taxOverrideReason: inv.taxOverrideReason,
       adjustmentNote: inv.adjustmentNote,
       sourceMinutes: inv.sourceMinutes,
@@ -842,6 +1007,7 @@ export class InvoiceService {
       salesVoucher: inv.salesVoucherId ? { id: inv.salesVoucherId, number: vNo.get(inv.salesVoucherId) ?? '' } : null,
       hasPdf: inv.status !== 'DRAFT',
       filingDocumentId: doc?.id ?? null,
+      ...(isGb() ? { vatTreatment: invoiceVatTreatment(inv), vatNote: buyer?.vatNote ?? null } : {}),
     };
   }
 

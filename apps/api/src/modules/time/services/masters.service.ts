@@ -12,7 +12,8 @@ import type {
   ShiftInput,
   ShiftRow,
 } from '@lexisora/shared';
-import { holidayLocationsOverlap } from '@lexisora/shared';
+import { holidayLocationsOverlap, isUkHolidayCalendar, REGIONS, UK_HOLIDAY_CALENDARS, type HolidayImportResult, type UkHolidayCalendar } from '@lexisora/shared';
+import { currentRegion } from '../../../core/region/region-cache';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { AuditService } from '../../../core/audit/audit.service';
 import { NotificationsService } from '../../../core/notifications/notifications.service';
@@ -23,7 +24,7 @@ import { requireContext } from '../../../core/context/request-context';
 import { AppError, badRequest, notFound } from '../../../core/http/errors';
 import { shiftDurationMinutes } from '../lib/day-calc';
 import { addDays, dateOf, dayLabel, dm, DOW_SHORT, fmtMinute, istKeyOf, keyOf, parseHm, weeklyOffLabel } from '../lib/time-utils';
-import { BUILTIN_HOLIDAYS } from '../lib/holiday-lists';
+import { BUILTIN_HOLIDAYS, ukBankHolidays, ukCalendarLocations } from '../lib/holiday-lists';
 import { PeriodLockService } from './period-lock.service';
 import { PolicyService } from './policy.service';
 
@@ -338,6 +339,8 @@ export class MastersService {
         lng: input.lng ?? null,
         geoFenceWebPunch: input.geoFenceWebPunch ?? false,
         isRemote: false,
+        // UK tenants: UK time and the nation whose bank holidays apply. India keeps the column defaults.
+        ...(currentRegion() === 'GB' ? { timezone: REGIONS.GB.timezone, ukNation: input.ukNation ?? null } : {}),
       } as any,
     });
     await this.audit.record({ action: 'location.created', entity: 'WorkLocation', entityId: l.id, meta: { name: l.name, punchMode: l.punchMode } });
@@ -359,10 +362,11 @@ export class MastersService {
         ...(input.lat !== undefined ? { lat: input.lat } : {}),
         ...(input.lng !== undefined ? { lng: input.lng } : {}),
         ...(input.geoFenceWebPunch !== undefined ? { geoFenceWebPunch: input.geoFenceWebPunch } : {}),
+        ...(currentRegion() === 'GB' && input.ukNation !== undefined ? { ukNation: input.ukNation } : {}),
       },
     });
     const diff: Record<string, unknown> = {};
-    for (const k of ['name', 'address', 'geoRadiusM', 'punchMode', 'lat', 'lng', 'geoFenceWebPunch'] as const) if (l[k] !== saved[k]) diff[k] = { from: l[k], to: saved[k] };
+    for (const k of ['name', 'address', 'geoRadiusM', 'punchMode', 'lat', 'lng', 'geoFenceWebPunch', 'ukNation'] as const) if (l[k] !== saved[k]) diff[k] = { from: l[k], to: saved[k] };
     await this.audit.record({ action: 'location.updated', entity: 'WorkLocation', entityId: id, meta: diff as any });
     if (diff.punchMode || diff.geoFenceWebPunch || diff.geoRadiusM) {
       const ctx = requireContext();
@@ -471,7 +475,13 @@ export class MastersService {
     return { ok: true };
   }
 
-  async importHolidays(year: number, calendar: 'National' | 'Gujarat' | 'Maharashtra') {
+  async importHolidays(year: number, calendar: 'National' | 'Gujarat' | 'Maharashtra' | UkHolidayCalendar): Promise<HolidayImportResult> {
+    // UK tenants get the UK bank holiday lists only; India tenants the India lists only.
+    const uk = currentRegion() === 'GB';
+    if (uk !== isUkHolidayCalendar(calendar)) {
+      throw new AppError(422, 'HOLIDAY_LIST_REGION', uk ? `Choose a UK bank holiday list: ${UK_HOLIDAY_CALENDARS.join(', ')}` : `${calendar} is a UK bank holiday list`, { fieldErrors: { calendar: ['Not available for this company'] } });
+    }
+    if (isUkHolidayCalendar(calendar)) return this.importUkHolidays(year, calendar);
     const list = (BUILTIN_HOLIDAYS[year] ?? []).filter((h) => h.calendars.includes(calendar));
     if (!list.length) throw new AppError(404, 'NO_LIST', `No built-in ${calendar} list for ${year}`);
     let n = 0;
@@ -487,6 +497,44 @@ export class MastersService {
     }
     await this.audit.record({ action: 'holiday.imported', entity: 'Holiday', meta: { year, calendar, added: n, skipped } });
     return { ok: true, count: n, skipped };
+  }
+
+  /**
+   * UK bank holidays (GB tenants): applied to the work locations in that nation. With no
+   * location nations set yet they apply to every location. A holiday with the same name and
+   * date already imported for another nation (e.g. Christmas Day) gets these locations added.
+   */
+  private async importUkHolidays(year: number, calendar: UkHolidayCalendar): Promise<HolidayImportResult> {
+    const list = ukBankHolidays(year, calendar);
+    if (!list.length) throw new AppError(404, 'NO_LIST', `No built-in ${calendar} bank holiday list for ${year}`);
+    const locs = await this.prisma.workLocation.findMany({ where: { archivedAt: null }, select: { id: true, name: true, ukNation: true } });
+    const target = ukCalendarLocations(calendar, locs);
+    if (target.mode === 'NONE') {
+      throw new AppError(422, 'NO_LOCATION_IN_NATION', `No work location is in ${calendar}. Set the nation of your locations in Work locations first.`, { fieldErrors: { calendar: [`No location in ${calendar}`] } });
+    }
+    const locationIds: string[] = target.locationIds;
+    let n = 0;
+    let skipped = 0;
+    for (const h of list) {
+      const same = await this.prisma.holiday.findMany({ where: { date: dateOf(h.date) } });
+      // One holiday per date and location: dates that already have one there are kept.
+      if (same.some((x) => holidayLocationsOverlap(x.locationIds, locationIds))) {
+        skipped++;
+        continue;
+      }
+      const twin = same.find((x) => x.name === h.name);
+      if (twin) await this.prisma.holiday.update({ where: { id: twin.id }, data: { locationIds: [...twin.locationIds, ...locationIds] } });
+      else await this.prisma.holiday.create({ data: { date: dateOf(h.date), name: h.name, type: 'MANDATORY', calendar, locationIds } as any });
+      n++;
+    }
+    await this.audit.record({ action: 'holiday.imported', entity: 'Holiday', meta: { year, calendar, added: n, skipped, locationIds } });
+    if (n) await this.recomputeIfPast(list[0]!.date, list.at(-1)!.date);
+    const names = locs.filter((l) => locationIds.includes(l.id)).map((l) => l.name);
+    const message =
+      target.mode === 'ALL'
+        ? `No work location has a UK nation yet, so these ${calendar} bank holidays apply to every location. Set each location's nation in Work locations, then delete and re-import to limit them.`
+        : `Applied to ${names.length === 1 ? 'the' : names.length} ${calendar} location${names.length === 1 ? '' : 's'}: ${names.join(', ')}.`;
+    return { ok: true, count: n, skipped, message };
   }
 
   async copyHolidays(fromYear: number, toYear: number) {
@@ -568,6 +616,7 @@ export function toLocationRow(l: WorkLocation, employees: number): LocationRow {
     lat: l.lat,
     lng: l.lng,
     geoFenceWebPunch: l.geoFenceWebPunch,
+    ukNation: l.ukNation,
   };
 }
 

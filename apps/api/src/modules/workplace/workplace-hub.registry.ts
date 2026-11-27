@@ -11,6 +11,7 @@ import { ChatService } from './chat/chat.service';
 import { LmsService } from './lms/lms.service';
 import { FacilityService } from './facility/facility.service';
 import { CctvService } from './cctv/cctv.service';
+import { tenantsForCron } from '../../core/region/region-cache';
 
 /**
  * Registrations and schedules for the comms hub, learning, rooms & visitors and CCTV:
@@ -54,7 +55,7 @@ export class WorkplaceHubRegistry implements OnModuleInit {
   }
 
   private async forEachTenant(name: string, fn: () => Promise<unknown>) {
-    const tenants = await this.prisma.raw.tenant.findMany({ select: { id: true } }).catch(() => [] as { id: string }[]);
+    const tenants = tenantsForCron(await this.prisma.raw.tenant.findMany({ select: { id: true } }).catch(() => [] as { id: string }[]));
     for (const t of tenants) {
       try {
         await runAsTenant(t.id, fn);

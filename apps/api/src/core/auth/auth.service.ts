@@ -146,6 +146,7 @@ export class AuthService {
         accent2: t.brandAccent2,
         logoUrl: t.logoFileId ? `/api/v1/files/${t.logoFileId}/public` : null,
       },
+      region: t.region === 'GB' ? 'GB' : 'IN',
     };
   }
 

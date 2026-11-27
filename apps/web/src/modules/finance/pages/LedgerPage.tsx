@@ -1,25 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import {
-  FIN_VOUCHER_SOURCE_LABEL,
-  FIN_VOUCHER_TYPE_LABEL,
-  FIN_VOUCHER_TYPES,
-  formatDate,
-  formatDayMonth,
-  formatINR,
-  formatINRKpi,
-  type FinAccountRow,
-  type LedgerLineRow,
-  type TrialBalanceRow,
-  type VoucherRow,
-} from '@lexisora/shared';
+import { FIN_VOUCHER_SOURCE_LABEL, FIN_VOUCHER_TYPE_LABEL, FIN_VOUCHER_TYPES, formatDate, formatDayMonth, formatINR, formatINRKpi, type FinAccountRow, type LedgerLineRow, type TrialBalanceRow, type VoucherRow, currencySymbol, formatSortCode } from '@lexisora/shared';
 import { ErrorBlock, Kpis, Loading, Modal, PageHeader, Tabs, Tag } from '@/components/ui';
 import { DataTable, Pager, type Column } from '@/components/table';
 import { FileDrop, FormModal, type FieldDef } from '@/components/form';
 import { useLookups, opts as lookupOpts } from '@/components/lookups';
 import { fileUrl, uploadFile } from '@/lib/api';
-import { useCan } from '@/lib/auth';
+import { useCan, useMe } from '@/lib/auth';
 import { useAction } from '@/lib/query';
 import { useToast } from '@/lib/toast';
 import { FIN_ALL, finApi, finKeys, fyStartKey, monthKeyNow, rupeesToPaise, todayKey } from '../api';
@@ -33,6 +21,8 @@ const SOURCES = Object.keys(FIN_VOUCHER_SOURCE_LABEL);
 
 /** Ledger (GEN.ledger): month KPIs, day book / income / expenses / HR vouchers, trial balance, vouchers. */
 export default function LedgerPage() {
+  const gb = useMe().region === 'GB';
+  const [bank, setBank] = useState(false);
   const can = useCan();
   const full = can('ledger.manage');
   const tabs: Tab[] = full ? ['daybook', 'income', 'expenses', 'hr', 'trial'] : ['hr'];
@@ -60,6 +50,7 @@ export default function LedgerPage() {
           <>
             {full && <button className="btn btn-ghost" onClick={() => setLock(true)}>Lock books</button>}
             {full && <button className="btn btn-secondary" onClick={() => setCoa(true)}>Chart of accounts</button>}
+            {full && gb && <button className="btn btn-ghost" onClick={() => setBank(true)}>Bank details</button>}
             <button className="btn btn-secondary" onClick={() => exportCsv.mutate(undefined)}>Export CSV</button>
             <button className="btn btn-primary" onClick={() => setNewVoucher(true)}>New voucher</button>
           </>
@@ -93,7 +84,43 @@ export default function LedgerPage() {
       {statementId && <StatementModal accountId={statementId} onClose={() => setStatementId(null)} onOpenVoucher={(id) => (setStatementId(null), setVoucherId(id))} />}
       {coa && <ChartOfAccountsModal onClose={() => setCoa(false)} onOpenAccount={(id) => (setCoa(false), setStatementId(id))} />}
       {lock && <LockBooksDialog current={k?.booksLockedUpTo ?? null} onClose={() => setLock(false)} />}
+      {bank && <UkBankDetailsDialog onClose={() => setBank(false)} />}
     </div>
+  );
+}
+
+/** UK (GB): bank details printed on invoices — sort code and account number (no IFSC / UPI). */
+function UkBankDetailsDialog({ onClose }: { onClose: () => void }) {
+  const q = useQuery({ queryKey: finKeys.ledgerSettings, queryFn: finApi.ledgerSettings });
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  if (!q.data) return <Modal title="Bank details" onClose={onClose}>{q.error ? <ErrorBlock error={q.error} /> : <Loading />}</Modal>;
+  const b = q.data.bank;
+  return (
+    <FormModal
+      title="Bank details on invoices"
+      fields={[
+        { name: 'bankName', label: 'Bank', type: 'text', placeholder: 'e.g. Barclays' },
+        { name: 'accountName', label: 'Account name', type: 'text' },
+        { name: 'sortCode', label: 'Sort code', type: 'text', placeholder: '20-00-00' },
+        { name: 'accountNo', label: 'Account number', type: 'text', placeholder: '8 digits' },
+        { name: 'iban', label: 'IBAN (optional)', type: 'text', span: 2 },
+        { name: 'signatory', label: 'Signed for the company by', type: 'text', span: 2 },
+        { name: 'defaultPaymentTermsDays', label: 'Default payment terms (days)', type: 'number' },
+      ]}
+      submitLabel="Save"
+      initial={{ bankName: b.bankName ?? '', accountName: b.accountName ?? '', sortCode: b.sortCode ? formatSortCode(b.sortCode) : '', accountNo: b.accountNo ?? '', iban: b.iban ?? '', signatory: q.data.signatory ?? '', defaultPaymentTermsDays: q.data.defaultPaymentTermsDays }}
+      onSubmit={async (v) => {
+        await finApi.saveLedgerSettings({
+          bank: { bankName: String(v.bankName ?? ''), accountName: String(v.accountName ?? ''), sortCode: String(v.sortCode ?? ''), accountNo: String(v.accountNo ?? ''), iban: String(v.iban ?? '') },
+          signatory: String(v.signatory ?? ''),
+          defaultPaymentTermsDays: Number(v.defaultPaymentTermsDays) || 30,
+        });
+        void qc.invalidateQueries({ queryKey: finKeys.ledgerSettings });
+        toast('Saved');
+      }}
+      onClose={onClose}
+    />
   );
 }
 
@@ -584,7 +611,7 @@ function LockBooksDialog({ current, onClose }: { current: string | null; onClose
         </>
       }
     >
-      <div className="dialog-body">No voucher, invoice, payment or purchase can be dated on or before this day once the books are locked (e.g. after filing GSTR-3B).</div>
+      <div className="dialog-body">No voucher, invoice, payment or purchase can be dated on or before this day once the books are locked (e.g. after filing {useMe().region === 'GB' ? 'the VAT return' : 'GSTR-3B'}).</div>
       <Field label="Lock up to" htmlFor="lock-date" hint={current ? `Currently locked up to ${formatDate(current)}` : 'Books are open'}>
         <input id="lock-date" type="date" className="input" max={todayKey()} value={upTo} onChange={(e) => setUpTo(e.target.value)} />
       </Field>
@@ -740,7 +767,7 @@ function VoucherForm({ full, onClose, onPosted }: { full: boolean; onClose: () =
                 {ledgerSelect('v-ledger', accountId, setAccountId, !!errors.accountId)}
               </Field>
               <Field label="Amount" htmlFor="v-amt" error={errors.amountPaise}>
-                <input id="v-amt" className="input" inputMode="decimal" placeholder="₹" value={amount} onChange={(e) => setAmount(e.target.value)} />
+                <input id="v-amt" className="input" inputMode="decimal" placeholder={currencySymbol()} value={amount} onChange={(e) => setAmount(e.target.value)} />
               </Field>
               {type === 'HR' && (
                 <Field label="Employee" htmlFor="v-emp" hint="Optional — a reimbursement to this employee">

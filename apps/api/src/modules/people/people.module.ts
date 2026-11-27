@@ -20,6 +20,8 @@ import { CandidatesService } from './recruitment/candidates.service';
 import { InterviewsService } from './recruitment/interviews.service';
 import { JobsService } from './recruitment/jobs.service';
 import { CandidatesController, InterviewsController, JobsController } from './recruitment/recruitment.controller';
+import { RtwController } from './rtw/rtw.controller';
+import { RtwService } from './rtw/rtw.service';
 import { VcardService } from './vcard/vcard.service';
 
 /**
@@ -44,6 +46,7 @@ import { VcardService } from './vcard/vcard.service';
     WelcomeKitsController,
     IdCardsController,
     VcardController,
+    RtwController,
   ],
   providers: [
     PeopleAccess,
@@ -61,6 +64,7 @@ import { VcardService } from './vcard/vcard.service';
     CandidatesService,
     InterviewsService,
     AppraisalsService,
+    RtwService,
     PeopleJobs,
   ],
   exports: [EmployeesService, IdCardsService, VaultService],

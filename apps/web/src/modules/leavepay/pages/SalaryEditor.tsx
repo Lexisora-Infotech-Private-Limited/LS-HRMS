@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { formatINR, type SalaryRevisionInput } from '@lexisora/shared';
+import { formatINR, type SalaryRevisionInput, currencySymbol } from '@lexisora/shared';
 import { useAction } from '@/lib/query';
 import { Check, ErrorBlock, Loading, Modal, Seg, Tag } from '@/components/ui';
 import { lpApi, lpKeys } from '../api';
+import { useMe } from '@/lib/auth';
+import { UkEmployeePayroll } from './UkPayroll';
 import '../leavepay.css';
 
 const REASONS: { value: SalaryRevisionInput['reason']; label: string }[] = [
@@ -18,13 +20,14 @@ const REASONS: { value: SalaryRevisionInput['reason']; label: string }[] = [
 export function SalaryEditor({ employeeId, onClose }: { employeeId: string; onClose: () => void }) {
   const q = useQuery({ queryKey: lpKeys.salary(employeeId), queryFn: () => lpApi.salary(employeeId) });
   const s = q.data;
+  const uk = useMe().region === 'GB';
   const [mode, setMode] = useState<'CTC' | 'GROSS'>('CTC');
   const [amount, setAmount] = useState('');
   const [from, setFrom] = useState('');
   const [reason, setReason] = useState<SalaryRevisionInput['reason']>('APPRAISAL');
   const [note, setNote] = useState('');
   const payType = s?.payType ?? 'SALARY';
-  const paise = Math.round(Number(amount.replace(/[,₹\s]/g, '')) * 100) || 0;
+  const paise = Math.round(Number(amount.replace(/[,₹£\s]/g, '')) * 100) || 0;
   // With no amount typed, preview the CURRENT CTC under the employee's current PF / ESI settings, so ticking a box shows its
   // effect straight away (the saved structure only changes when a revision is saved).
   const baseCtc = s?.ctcAnnualPaise ?? 0;
@@ -92,7 +95,7 @@ export function SalaryEditor({ employeeId, onClose }: { employeeId: string; onCl
                   <Seg options={[{ value: 'CTC', label: s.payType === 'STIPEND' ? 'Annual' : 'Annual CTC' }, { value: 'GROSS', label: 'Monthly gross' }]} value={mode} onChange={setMode} />
                 </div>
                 <div className="field">
-                  <label htmlFor="sal-amt">Amount (₹)</label>
+                  <label htmlFor="sal-amt">Amount ({currencySymbol()})</label>
                   <input id="sal-amt" className="input" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder={mode === 'CTC' ? '10,29,600' : '84,000'} />
                 </div>
                 <div className="field">
@@ -113,6 +116,16 @@ export function SalaryEditor({ employeeId, onClose }: { employeeId: string; onCl
               <div className="row" style={{ justifyContent: 'flex-end' }}>
                 <button className="btn btn-primary" disabled={!paise || !from || revise.isPending} onClick={() => revise.mutate(undefined)}>Save revision</button>
               </div>
+              {uk ? (
+                <>
+                  <UkEmployeePayroll employeeId={employeeId} />
+                  <span className="row" style={{ gap: 6, fontSize: 13.5, alignItems: 'center' }}>
+                    <Check checked={s.profile.payrollHold} onChange={(x: boolean) => profile.mutate({ payrollHold: x, holdReason: x ? 'Held by HR' : null })} label="Hold salary" />
+                    <span>Hold salary</span>
+                  </span>
+                </>
+              ) : (
+              <>
               <h4 style={{ margin: 0 }}>Statutory &amp; tax</h4>
               <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
                 <label className="row" style={{ gap: 6, fontSize: 13.5 }}>
@@ -146,6 +159,8 @@ export function SalaryEditor({ employeeId, onClose }: { employeeId: string; onCl
               <div className="faint" style={{ fontSize: 12.5 }}>
                 UAN {s.statutory.uan ?? '—'} · PT {s.statutory.ptState} · ESI {s.statutory.esiCovered ? 'covered' : 'not applicable'} · PAN {s.statutory.panMasked ?? '—'} · Bank {s.bank.accountMasked ?? 'missing'}
               </div>
+              </>
+              )}
             </div>
           )}
 

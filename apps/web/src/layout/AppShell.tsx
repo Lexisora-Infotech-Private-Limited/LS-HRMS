@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { NAV, canSee } from '@lexisora/shared';
+import { navFor } from '@lexisora/shared';
 import { useAuth, useMe } from '@/lib/auth';
 import { get } from '@/lib/api';
 import { onRealtime } from '@/lib/socket';
@@ -54,7 +54,7 @@ export function AppShell() {
     return () => document.removeEventListener('mousedown', close);
   }, []);
 
-  const groups = NAV.map((g) => ({ ...g, items: g.items.filter((i) => canSee(i, granted)) })).filter((g) => g.items.length);
+  const groups = navFor(granted, me.region);
 
   return (
     <div className="shell">
@@ -64,7 +64,16 @@ export function AppShell() {
           <NavLink to="/dashboard" className="brand" onClick={() => setOpen(false)}>
             {me.branding?.logoUrl && <img className="brand-logo" src={me.branding.logoUrl} alt="" />}
             <span className="brand-name">{me.tenantName}</span>
-            <span className="brand-sub">People &amp; Operations</span>
+            <span className="brand-sub">
+              People &amp; Operations
+              <span
+                className={`region-badge${me.region === 'GB' ? ' region-badge-uk' : ''}`}
+                title={me.region === 'GB' ? 'Running as United Kingdom: pounds (£), UK time, PAYE payroll and UK rules' : 'Running as India: rupees (₹), IST, Indian payroll and rules'}
+                aria-label={me.region === 'GB' ? 'Region: United Kingdom' : 'Region: India'}
+              >
+                {me.region === 'GB' ? 'UK' : 'IND'}
+              </span>
+            </span>
           </NavLink>
           {/* Small screens only: close the menu (it also closes on any link, outside tap or Escape). */}
           <button className="sidebar-close" aria-label="Close menu" title="Close menu" onClick={() => setOpen(false)}>

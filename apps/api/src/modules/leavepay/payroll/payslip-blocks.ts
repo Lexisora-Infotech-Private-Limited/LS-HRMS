@@ -1,3 +1,4 @@
+import { activeRegion } from '@lexisora/shared';
 import type { PayslipBlock, PayslipDesign, PayslipDetail, PayslipStyle } from '@lexisora/shared';
 import { PDF_COLORS, type Pdf, type PdfService } from '../../../core/pdf/pdf.service';
 import { customFontName } from '../../../core/pdf/fonts';
@@ -5,7 +6,7 @@ import { periodLabel } from '../common/dates';
 import { fmtHm } from './payroll-calc';
 
 /** "Rs. 78,420.00" — built-in PDF fonts have no ₹ glyph. */
-const money = (paise: number) => `Rs. ${(paise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const money = (paise: number) => (activeRegion() === 'GB' ? `£${(paise / 100).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : `Rs. ${(paise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
 
 const FONTS = {
   HELVETICA: ['Helvetica', 'Helvetica-Bold', 'Helvetica-Oblique', 'Helvetica-BoldOblique'],
@@ -30,6 +31,7 @@ function tint(hex: string, ratio: number): string {
 
 /** Everything a design can insert as {{field}}, for one employee's payslip. */
 export function fieldValues(d: PayslipDetail): Record<string, string> {
+  if (d.uk) return ukFieldValues(d);
   const regime = d.taxRegime === 'NEW' ? 'New' : d.taxRegime === 'OLD' ? 'Old' : '';
   return {
     'company.name': d.company.name,
@@ -60,9 +62,58 @@ export function fieldValues(d: PayslipDetail): Record<string, string> {
   };
 }
 
+/** UK payslip: the same merge fields filled with PAYE details (labels are swapped by ukLabels). */
+function ukFieldValues(d: PayslipDetail): Record<string, string> {
+  const u = d.uk!;
+  return {
+    'company.name': d.company.name,
+    'company.address': d.company.address ?? '',
+    'company.pan': d.company.pan ?? '',
+    'employee.name': d.employee.name,
+    'employee.code': d.employee.code,
+    'employee.designation': d.employee.designation ?? '',
+    'employee.department': d.employee.department ?? '',
+    'employee.joiningDate': d.employee.joiningDate ?? '',
+    'employee.pan': u.niNumberMasked,
+    'employee.uan': `${u.taxCode}${u.taxBasis === 'NON_CUMULATIVE' ? ' M1' : ''}`,
+    'employee.bank': d.employee.bankMasked ? `${d.employee.bankMasked}${u.sortCode ? ` · ${u.sortCode}` : ''}` : '',
+    'pay.period': periodLabel(d.period, true),
+    'pay.date': d.payDate ?? '',
+    'pay.workingDays': String(d.workingDays),
+    'pay.paidDays': String(d.paidDays),
+    'pay.lopDays': String(d.lopDays),
+    'pay.leave': d.leave ?? '',
+    'pay.taxRegime': `NI category ${u.niCategory}`,
+    'pay.gross': money(d.totalEarningsPaise),
+    'pay.deductions': money(d.totalDeductionsPaise),
+    'pay.net': money(d.netPaise),
+    'pay.netInWords': d.netInWords,
+    'note.employer': d.employer.length ? `Employer contributions (not part of net pay): ${d.employer.map((e) => `${e.label} ${money(e.amountPaise)}`).join(' · ')}` : '',
+    'note.ytd': `Tax year ${u.taxYearLabel} to date: taxable pay ${money(u.ytd.taxablePayPence)} · tax ${money(u.ytd.taxPence)} · NI ${money(u.ytd.niEmployeePence)} · pension ${money(u.ytd.pensionEmployeePence)}${u.ytd.studentLoanPence ? ` · student loan ${money(u.ytd.studentLoanPence)}` : ''}`,
+    'note.idle': '',
+  };
+}
+
+/** UK payslips: India field captions in a design become their UK equivalents. */
+const UK_CAPTIONS: [RegExp, string][] = [
+  [/\bPAN\b/g, 'NI number'],
+  [/\bUAN\b/g, 'Tax code'],
+  [/\bIFSC\b/g, 'Sort code'],
+  [/\bTDS\b/g, 'PAYE'],
+  [/\bLOP\b/g, 'Unpaid'],
+  [/Tax regime/g, 'NI category'],
+  [/\bRs\.\s?/g, '£'],
+];
+export function ukLabels(text: string): string {
+  let s = text;
+  for (const [re, to] of UK_CAPTIONS) s = s.replace(re, to);
+  return s;
+}
+
 /** Replace {{field}} with the employee's value; an unknown field becomes blank. */
 export function fillFields(text: string, values: Record<string, string>): string {
-  return text.replace(/\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g, (_, k: string) => values[k] ?? '');
+  const out = text.replace(/\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g, (_, k: string) => values[k] ?? '');
+  return activeRegion() === 'GB' ? ukLabels(out) : out;
 }
 
 function drawLogo(doc: Pdf, logo: Buffer | null, x: number, y: number, fit: [number, number]): boolean {

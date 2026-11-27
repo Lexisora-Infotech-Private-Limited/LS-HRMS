@@ -8,3 +8,8 @@ export * from './platform';
 export * from './payslip-design';
 export * from './payslip-canvas';
 export * from './text-case';
+export * from './region';
+export * from './uk-payroll';
+export * from './uk-leave';
+export * from './uk-people';
+export * from './uk-finance';

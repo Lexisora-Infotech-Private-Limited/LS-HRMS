@@ -13,6 +13,7 @@ import {
   leaveTypePatchSchema,
   leaveTypeSchema,
   manualCreditSchema,
+  ukLeavePackSchema,
   yearEndSchema,
   type CompOffRequestInput,
   type CreditRuleInput,
@@ -204,6 +205,20 @@ export class LeaveController {
   @RequirePerm('leave.manage')
   createType(@Body(new ZodPipe(leaveTypeSchema)) body: LeaveTypeInput) {
     return this.admin.createType(body);
+  }
+
+  /** UK companies: add the UK holiday & absence leave types (idempotent). */
+  @Post('types/uk-pack')
+  @RequirePerm('leave.manage')
+  addUkPack(@Body(new ZodPipe(ukLeavePackSchema)) body: z.output<typeof ukLeavePackSchema>) {
+    return this.admin.addUkPack(body);
+  }
+
+  /** UK companies: annual leave + bank holidays against the 5.6-week minimum. */
+  @Get('uk/annual-leave-check')
+  @RequirePerm('leave.manage')
+  ukAnnualLeaveCheck(@Query(new ZodPipe(yearQuery)) q: { year?: number }) {
+    return this.admin.ukAnnualLeaveCheck(q.year ?? yearOf(todayKey()));
   }
 
   @Patch('types/:id')

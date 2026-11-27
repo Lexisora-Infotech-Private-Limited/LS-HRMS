@@ -91,6 +91,8 @@ model WorkLocation {
   /// The system "Remote" row cannot be deleted.
   isSystem         Boolean   @default(false)
   timezone         String    @default("Asia/Kolkata")
+  /// UK tenants: nation whose bank holidays apply (ENG_WLS | SCT | NIR). Null for India.
+  ukNation         String?
   archivedAt       DateTime?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt

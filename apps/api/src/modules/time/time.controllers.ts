@@ -456,7 +456,7 @@ export class HolidaysController {
 
   @Post('import')
   @RequirePerm('holidays.manage')
-  import(@Body(new ZodPipe(holidayImportSchema)) body: { year: number; calendar: 'National' | 'Gujarat' | 'Maharashtra' }) {
+  import(@Body(new ZodPipe(holidayImportSchema)) body: z.infer<typeof holidayImportSchema>) {
     return this.masters.importHolidays(body.year, body.calendar);
   }
 

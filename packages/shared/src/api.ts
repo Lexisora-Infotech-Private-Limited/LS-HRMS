@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { RegionCode } from './region';
 
 /** All API routes live under this prefix. */
 export const API_PREFIX = '/api/v1';
@@ -67,6 +68,8 @@ export type SessionUser = {
   isPlatformAdmin: boolean;
   workMode: 'OFFICE' | 'REMOTE' | 'HYBRID' | null;
   branding: { accent: string; accent2: string; logoUrl: string | null } | null;
+  /** Country the tenant runs in: drives currency, time zone, payroll rules and wording. */
+  region: RegionCode;
 };
 
 export type LoginResponse = {

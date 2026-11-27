@@ -1,3 +1,4 @@
+import { activeTimezone } from '@lexisora/shared';
 import type {
   AccountStatement,
   BillExtraction,
@@ -10,6 +11,8 @@ import type {
   FinComplianceItem,
   FinCreateInvoiceInput,
   FinGstReturnRow,
+  FinVatReturnRow,
+  UkVatReturn,
   FinInvoiceDetail,
   FinInvoiceFormOptions,
   FinInvoiceKpis,
@@ -64,6 +67,10 @@ export const finKeys = {
   docSearch: (q: Q) => ['finance', 'filing', 'search', q] as const,
   compliance: ['finance', 'filing', 'compliance'] as const,
   gstReturns: ['finance', 'filing', 'gst-returns'] as const,
+  /** UK (GB) */
+  vatReturn: (period?: string) => ['finance', 'purchases', 'vat-return', period ?? ''] as const,
+  vatReturns: ['finance', 'filing', 'vat-returns'] as const,
+  ukCompliance: ['finance', 'filing', 'uk-settings'] as const,
 };
 
 /** Invalidate everything finance after a posting (ledger, invoices, purchases and filing are linked). */
@@ -81,6 +88,7 @@ export const finApi = {
   exportLedger: (kind: 'daybook' | 'trial', from?: string, to?: string) => download(`/ledger/export?kind=${kind}${from ? `&from=${from}` : ''}${to ? `&to=${to}` : ''}`),
   lockBooks: (upTo: string) => post<{ booksLockedUpTo: string; draftInvoicesInPeriod: number }>('/ledger/lock', { upTo }),
   ledgerSettings: () => get<{ booksLockedUpTo: string | null; defaultPaymentTermsDays: number; bank: Record<string, string>; signatory: string }>('/ledger/settings'),
+  saveLedgerSettings: (body: { bank?: Record<string, string>; signatory?: string; defaultPaymentTermsDays?: number }) => patch('/ledger/settings', body),
   accounts: () => get<FinAccountRow[]>('/accounts'),
   createAccount: (body: { code: string; name: string; type: string; parentId?: string | null; openingPaise?: number }) => post('/accounts', body),
   updateAccount: (id: string, body: { name?: string; isActive?: boolean }) => patch(`/accounts/${id}`, body),
@@ -137,12 +145,20 @@ export const finApi = {
   markFiled: (body: FinMarkFiledInput) => post('/filing/compliance/filed', body),
   unmarkFiled: (form: string, period: string) => post('/filing/compliance/unfiled', { form, period }),
   gstReturns: () => get<FinGstReturnRow[]>('/filing/gst-returns'),
+
+  // UK (GB) VAT return & calendar settings
+  vatReturn: (period?: string) => get<UkVatReturn>('/purchases/vat-return', { period }),
+  vatReturnCsv: (period: string) => download(`/purchases/vat-return/csv?period=${period}`),
+  fileVatReturn: (period: string) => post<{ documentId: string; folderId: string; title: string; payable: string }>('/purchases/vat-return/file', { period }),
+  vatReturns: () => get<FinVatReturnRow[]>('/filing/vat-returns'),
+  ukComplianceSettings: () => get<{ vatStaggerEndMonth: number; yearEndMonth: number; yearEndDay: number; confirmationMonth: number | null; confirmationDay: number | null }>('/filing/compliance/uk-settings'),
+  saveUkComplianceSettings: (body: { vatStaggerEndMonth?: number; yearEndMonth?: number; yearEndDay?: number; confirmationMonth?: number | null; confirmationDay?: number | null }) => patch('/filing/compliance/uk-settings', body),
 };
 
 /** Rupee text → paise (accepts "1,42,000", "₹ 8,460.50"). Returns NaN for junk. */
 export function rupeesToPaise(v: string | number | null | undefined): number {
   if (v === null || v === undefined || v === '') return NaN;
-  const n = Number(String(v).replace(/[,₹\s]/g, ''));
+  const n = Number(String(v).replace(/[,₹£\s]/g, ''));
   return Number.isFinite(n) ? Math.round(n * 100) : NaN;
 }
 /** Paise → editable rupee text ("8460" / "8460.5"). */
@@ -150,7 +166,7 @@ export const paiseToRupeesText = (p: number | null | undefined) => (p === null |
 
 /** "2026-09-29" in IST. */
 export function todayKey(): string {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  return new Intl.DateTimeFormat('en-CA', { timeZone: activeTimezone(), year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 }
 export const monthKeyNow = () => todayKey().slice(0, 7);
 /** Newest-first month keys: ("2026-09", 6) → 2026-09 … 2026-04. */

@@ -16,6 +16,14 @@ import { FilingService } from './filing.service';
 import { ComplianceService } from './compliance.service';
 import { sendBytes } from './ledger.controller';
 
+const dayOfMonth = z.number().int().min(1).max(31);
+const ukComplianceSettingsSchema = z.object({
+  vatStaggerEndMonth: z.number().int().min(1).max(3).optional(),
+  yearEndMonth: z.number().int().min(1).max(12).optional(),
+  yearEndDay: dayOfMonth.optional(),
+  confirmationMonth: z.number().int().min(1).max(12).optional().nullable(),
+  confirmationDay: dayOfMonth.optional().nullable(),
+});
 const unfileSchema = z.object({ form: z.enum(FIN_COMPLIANCE_FORMS), period: z.string().trim().min(4).max(20) });
 
 /** Filing cabinet (spec-workfin Module J) — admin (`filing.manage`). */
@@ -94,5 +102,22 @@ export class FilingController {
   @Get('gst-returns')
   gstReturns() {
     return this.compliance.gstReturns(6);
+  }
+
+  /** UK (GB): VAT returns register (last 4 quarters). */
+  @Get('vat-returns')
+  vatReturns() {
+    return this.compliance.vatReturns(4);
+  }
+
+  /** UK (GB): company year end, VAT quarter stagger and confirmation statement date. */
+  @Get('compliance/uk-settings')
+  ukSettings() {
+    return this.compliance.ukSettings();
+  }
+
+  @Patch('compliance/uk-settings')
+  updateUkSettings(@Body(new ZodPipe(ukComplianceSettingsSchema)) dto: z.infer<typeof ukComplianceSettingsSchema>) {
+    return this.compliance.setUkSettings(dto);
   }
 }

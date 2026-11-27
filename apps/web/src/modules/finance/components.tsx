@@ -1,3 +1,4 @@
+import { moneyText } from '@/components/form';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { finMonthLabel, formatINR } from '@lexisora/shared';
@@ -148,7 +149,7 @@ export function Field({ label, htmlFor, error, hint, span2, badge, low, children
   return (
     <div className={`field${span2 ? ' span-2' : ''}${low ? ' low' : ''}`}>
       <label htmlFor={htmlFor}>
-        {label}
+        {typeof label === 'string' ? moneyText(label) : label}
         {badge}
       </label>
       {children}
@@ -222,7 +223,7 @@ export const amt = (paise: number | null | undefined) => (paise ? formatINR(pais
 /** ₹ with paise (detail views). */
 export const inr2 = (paise: number | null | undefined) => formatINR(paise ?? 0, { decimals: true });
 /** Debit-positive balance → "₹ 1,20,000 Dr" / "₹ 45,000 Cr". */
-export const drCr = (paise: number) => (paise === 0 ? '₹ 0' : `${formatINR(Math.abs(paise))} ${paise > 0 ? 'Dr' : 'Cr'}`);
+export const drCr = (paise: number) => (paise === 0 ? formatINR(0) : `${formatINR(Math.abs(paise))} ${paise > 0 ? 'Dr' : 'Cr'}`);
 
 /** Small uppercase badge next to labels ("from bill 92%", "estimated"). */
 export function Badge({ children, low, title }: { children: ReactNode; low?: boolean; title?: string }) {

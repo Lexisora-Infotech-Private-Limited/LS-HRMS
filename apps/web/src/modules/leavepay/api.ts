@@ -1,3 +1,4 @@
+import { zoneOffsetMinutes } from '@lexisora/shared';
 import { useQuery } from '@tanstack/react-query';
 import type {
   AdjustmentRow,
@@ -38,6 +39,11 @@ import type {
   SalaryView,
   TeamRequestRow,
   UpcomingItem,
+  HolidayImportResult,
+  UkAnnualLeaveCheck,
+  UkHolidayCalendar,
+  UkLeavePackInput,
+  UkLeavePackResult,
 } from '@lexisora/shared';
 import { del, download, get, patch, post, postBlob, put } from '@/lib/api';
 
@@ -68,6 +74,7 @@ export const lpKeys = {
   payslips: ['leavepay', 'payslips'] as const,
   payslip: (id: string) => ['leavepay', 'payslip', id] as const,
   adjustments: ['leavepay', 'adjustments'] as const,
+  ukCheck: (year: number) => ['leavepay', 'uk-annual-leave-check', year] as const,
 };
 
 /** Every leave query (invalidate after a leave mutation). */
@@ -75,7 +82,8 @@ export const LEAVE_ALL = ['leavepay'] as const;
 
 /** Built-in holiday lists the API can import (time/lib/holiday-lists.ts). */
 export const HOLIDAY_CALENDARS = ['National', 'Gujarat', 'Maharashtra'] as const;
-export type HolidayCalendar = (typeof HOLIDAY_CALENDARS)[number];
+/** India lists, or (UK tenants) the UK bank holiday lists. */
+export type HolidayCalendar = (typeof HOLIDAY_CALENDARS)[number] | UkHolidayCalendar;
 /** Holiday edits change attendance, timesheets, leave counts and the Policies holiday list. */
 export const HOLIDAY_DEPENDENTS = [LEAVE_ALL, ['time'], ['workplace']];
 
@@ -118,7 +126,10 @@ export const lpApi = {
   updateHoliday: (id: string, body: Partial<HolidayInput>) => patch<{ ok: boolean }>(`/holidays/${id}`, body),
   deleteHoliday: (id: string) => del<{ ok: boolean }>(`/holidays/${id}`),
   /** `skipped`: dates that already had a holiday (one holiday per date and location). */
-  importHolidays: (body: { year: number; calendar: HolidayCalendar }) => post<{ ok: boolean; count: number; skipped: number }>('/holidays/import', body),
+  importHolidays: (body: { year: number; calendar: HolidayCalendar }) => post<HolidayImportResult>('/holidays/import', body),
+  // UK (region GB) holiday & absence
+  addUkPack: (body: UkLeavePackInput) => post<UkLeavePackResult>('/leave/types/uk-pack', body),
+  ukAnnualLeaveCheck: (year: number) => get<UkAnnualLeaveCheck>('/leave/uk/annual-leave-check', { year }),
   copyHolidays: (body: { fromYear: number; toYear: number }) => post<{ ok: boolean; count: number; skipped: number }>('/holidays/copy', body),
   // payroll
   period: (period: string, refresh = false) => get<PayrollPeriodView>(`/payroll/period/${period}`, refresh ? { refresh: true } : undefined),
@@ -159,7 +170,7 @@ export const lpApi = {
 
 /** "2026-09" for today's IST month. */
 export function currentPeriod(): string {
-  const d = new Date(Date.now() + 330 * 60_000);
+  const d = new Date(Date.now() + zoneOffsetMinutes(new Date()) * 60_000);
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 

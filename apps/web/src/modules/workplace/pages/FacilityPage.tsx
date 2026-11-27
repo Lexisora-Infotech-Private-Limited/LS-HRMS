@@ -1,3 +1,4 @@
+import { zoneOffsetMinutes } from '@lexisora/shared';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
@@ -27,7 +28,7 @@ const toMin = (t: string) => {
 const toHHMM = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 /** Next quarter hour from now (IST), clamped to the bookable day. */
 function nextQuarter(): string {
-  const ist = new Date(Date.now() + 330 * 60_000);
+  const ist = new Date(Date.now() + zoneOffsetMinutes(new Date()) * 60_000);
   const m = Math.ceil((ist.getUTCHours() * 60 + ist.getUTCMinutes()) / SLOT_MIN) * SLOT_MIN;
   return toHHMM(Math.min(Math.max(m, DAY_FROM + 60), DAY_TO - 60));
 }
@@ -201,7 +202,7 @@ function DayCalendar({ date, onPick }: { date: string; onPick: (d: BookingDraft)
   const past = (m: number) => {
     if (date > istTodayKey()) return false;
     if (date < istTodayKey()) return true;
-    const ist = new Date(Date.now() + 330 * 60_000);
+    const ist = new Date(Date.now() + zoneOffsetMinutes(new Date()) * 60_000);
     return m + SLOT_MIN <= ist.getUTCHours() * 60 + ist.getUTCMinutes();
   };
 
@@ -444,7 +445,7 @@ function VisitorModal({ walkIn, manage, onClose, onDone }: { walkIn: boolean; ma
   const me = useMe();
   const lk = useLookups(['employees']);
   const hosts = opts(lk.data, 'employees');
-  const ist = new Date(Date.now() + 330 * 60_000);
+  const ist = new Date(Date.now() + zoneOffsetMinutes(new Date()) * 60_000);
   const nowHHMM = toHHMM(Math.ceil((ist.getUTCHours() * 60 + ist.getUTCMinutes()) / 5) * 5);
   const [v, setV] = useState({ name: '', company: '', hostEmployeeId: me.employeeId ?? '', date: istTodayKey(), expectedTime: walkIn ? nowHHMM : '10:00', phone: '', email: '', purpose: walkIn ? 'Walk-in' : 'Client visit', sendVia: 'WHATSAPP' as 'WHATSAPP' | 'EMAIL' | 'BOTH' });
   const [busy, setBusy] = useState(false);

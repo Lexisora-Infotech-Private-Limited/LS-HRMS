@@ -1,13 +1,5 @@
 import { useState } from 'react';
-import {
-  PEOPLE_BLOOD_GROUPS,
-  PEOPLE_EMPLOYMENT_TYPE_LABELS,
-  PEOPLE_EMPLOYMENT_TYPES,
-  formatDate,
-  type ProfileDocumentRow,
-  type ProfileDto,
-  type VaultRow,
-} from '@lexisora/shared';
+import { PEOPLE_BLOOD_GROUPS, PEOPLE_EMPLOYMENT_TYPE_LABELS, PEOPLE_EMPLOYMENT_TYPES, formatDate, type ProfileDocumentRow, type ProfileDto, type VaultRow, activeTimezone } from '@lexisora/shared';
 import { authUrl } from '@/lib/api';
 import { useAction } from '@/lib/query';
 import { FormModal, type FieldDef, type FormValues } from '@/components/form';
@@ -37,7 +29,7 @@ export function DocStatus({ status, label }: { status: string; label: string }) 
   return <Tag tone={statusTone(status)}>{label}</Tag>;
 }
 
-export const todayKey = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+export const todayKey = () => new Intl.DateTimeFormat('en-CA', { timeZone: activeTimezone() }).format(new Date());
 
 /** Add employee (FORMS.employee) or HR edit of an employee. */
 export function EmployeeFormModal({ profile, onClose, onCreated }: { profile?: ProfileDto | null; onClose: () => void; onCreated?: (id: string) => void }) {

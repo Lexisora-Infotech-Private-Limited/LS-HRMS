@@ -59,6 +59,7 @@ export const PERMISSIONS = {
   'employees.view': { label: 'View employee directory', group: 'People', roles: ['manager', 'hr', 'admin'] },
   'employees.manage': { label: 'Add & edit employees', group: 'People', roles: HRA },
   'employees.compensation': { label: 'View compensation', group: 'People', roles: HRA },
+  'rtw.manage': { label: 'Right to work checks (UK)', group: 'People', roles: HRA },
   'onboarding.self': { label: 'Complete own onboarding', group: 'People', roles: ALL },
   'onboarding.manage': { label: 'Manage onboarding & verify documents', group: 'People', roles: HRA },
   'shifts.manage': { label: 'Shifts', group: 'People', roles: HRA },
@@ -105,6 +106,7 @@ export const PERMISSIONS = {
   // Admin
   'roles.manage': { label: 'Roles & access', group: 'Admin', roles: ADM },
   'settings.attendance': { label: 'Attendance policy', group: 'Admin', roles: HRA },
+  'region.manage': { label: 'Region & compliance settings', group: 'Admin', roles: ADM },
   'alerts.view': { label: 'Alerts', group: 'Admin', roles: ALL },
   'audit.view': { label: 'Audit log', group: 'Admin', roles: ADM },
   'devices.manage': { label: 'Manage tracker devices', group: 'Admin', roles: HRA },

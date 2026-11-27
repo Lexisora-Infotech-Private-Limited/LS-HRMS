@@ -1,21 +1,8 @@
 import { useEffect, useState } from 'react';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import {
-  finComputeInvoiceTax,
-  finDeriveSupplyType,
-  finGstLabel,
-  finHoursLabel,
-  finMonthLabel,
-  finPlaceOfSupply,
-  formatDate,
-  formatINR,
-  formatINRKpi,
-  type FinInvoiceDetail,
-  type FinInvoiceFormOptions,
-  type FinInvoiceRow,
-  type FinSupplyKind,
-} from '@lexisora/shared';
+import { finComputeInvoiceTax, finDeriveSupplyType, finGstLabel, finHoursLabel, finMonthLabel, finPlaceOfSupply, formatDate, formatINR, formatINRKpi, type FinInvoiceDetail, type FinInvoiceFormOptions, type FinInvoiceRow, type FinSupplyKind, currencySymbol, ukComputeInvoiceVat, ukDeriveVatTreatment, ukVatLabel, UK_VAT_PICKABLE, UK_VAT_TREATMENT_LABELS, formatUkVatNumber, type UkVatTreatment } from '@lexisora/shared';
+import { useMe } from '@/lib/auth';
 import { ConfirmDialog, ErrorBlock, Kpis, Loading, Modal, PageHeader, Tabs, Tag } from '@/components/ui';
 import { DataTable, Pager, type Column } from '@/components/table';
 import { useAction } from '@/lib/query';
@@ -41,6 +28,7 @@ const gstSplit = (r: { supplyType: FinSupplyKind; cgstPaise: number; sgstPaise: 
 
 /** GST invoices (GEN.invoices): KPIs, status tabs, invoice list, generate form and invoice detail. */
 export default function InvoicesPage() {
+  const gb = useMe().region === 'GB';
   const [tab, setTab] = useState<Tab>('all');
   const [q, setQ] = useState('');
   const [page, setPage] = useState(1);
@@ -64,18 +52,18 @@ export default function InvoicesPage() {
       ),
     },
     { key: 'hours', header: 'Billable hours', num: true, render: (r) => r.hours },
-    { key: 'taxable', header: 'Taxable', num: true, render: (r) => formatINR(r.taxablePaise) },
-    { key: 'gst', header: 'GST 18%', num: true, render: (r) => <span title={gstSplit(r)}>{formatINR(r.gstPaise)}</span> },
+    { key: 'taxable', header: gb ? 'Net' : 'Taxable', num: true, render: (r) => formatINR(r.taxablePaise) },
+    gb ? { key: 'gst', header: 'VAT', num: true, render: (r) => formatINR(r.gstPaise) } : { key: 'gst', header: 'GST 18%', num: true, render: (r) => <span title={gstSplit(r)}>{formatINR(r.gstPaise)}</span> },
     { key: 'total', header: 'Total', num: true, render: (r) => formatINR(r.totalPaise) },
     { key: 'status', header: 'Status', render: (r) => <Tag tone={invoiceTone(r.displayStatus)} title={r.dueDate ? `Due ${formatDate(r.dueDate)}` : undefined}>{r.displayStatus}</Tag> },
   ];
 
   const k = kpis.data;
   return (
-    <div data-screen-label="GST invoices" className="stack" style={{ gap: 18 }}>
+    <div data-screen-label={gb ? 'VAT invoices' : 'GST invoices'} className="stack" style={{ gap: 18 }}>
       <PageHeader
-        title="GST invoices"
-        sub="Invoices generated from client billable hours with GST applied, emailed from here."
+        title={gb ? 'VAT invoices' : 'GST invoices'}
+        sub={gb ? 'Invoices generated from client billable hours with UK VAT applied, emailed from here.' : 'Invoices generated from client billable hours with GST applied, emailed from here.'}
         actions={<button className="btn btn-primary" onClick={() => setForm({})}>Generate invoice</button>}
       />
       {k && (
@@ -83,7 +71,7 @@ export default function InvoicesPage() {
           items={[
             { label: 'Outstanding', value: formatINRKpi(k.outstandingPaise), sub: 'issued, awaiting payment' },
             { label: 'Overdue', value: formatINRKpi(k.overduePaise), sub: `${k.overdueCount} ${k.overdueCount === 1 ? 'invoice' : 'invoices'} past due` },
-            { label: `Invoiced (${k.monthLabel.slice(0, 3)})`, value: formatINRKpi(k.invoicedMonthPaise), sub: `${k.invoicedMonthCount} ${k.invoicedMonthCount === 1 ? 'invoice' : 'invoices'} incl. GST` },
+            { label: `Invoiced (${k.monthLabel.slice(0, 3)})`, value: formatINRKpi(k.invoicedMonthPaise), sub: `${k.invoicedMonthCount} ${k.invoicedMonthCount === 1 ? 'invoice' : 'invoices'} incl. ${gb ? 'VAT' : 'GST'}` },
           ]}
         />
       )}
@@ -133,6 +121,7 @@ export default function InvoicesPage() {
 type Client = FinInvoiceFormOptions['clients'][number];
 
 function InvoiceForm({ edit, onClose, onSaved }: { edit?: FinInvoiceDetail; onClose: () => void; onSaved: (d: FinInvoiceDetail) => void }) {
+  const gb = useMe().region === 'GB';
   const qc = useQueryClient();
   const { toast, toastError } = useToast();
   const opts = useQuery({ queryKey: finKeys.invoiceOptions, queryFn: finApi.invoiceOptions });
@@ -149,6 +138,8 @@ function InvoiceForm({ edit, onClose, onSaved }: { edit?: FinInvoiceDetail; onCl
   const [emailTo, setEmailTo] = useState<string[]>(edit?.emailTo ?? []);
   const [emailCc, setEmailCc] = useState<string[]>(edit?.emailCc ?? []);
   const [notes, setNotes] = useState(edit?.notes ?? '');
+  /** UK: VAT rate picked for a UK customer (overseas customers are always outside the scope). */
+  const [vatPick, setVatPick] = useState<UkVatTreatment>((UK_VAT_PICKABLE as readonly string[]).includes(edit?.vatTreatment ?? '') ? (edit!.vatTreatment as UkVatTreatment) : 'STANDARD');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState<'draft' | 'issue_and_email' | null>(null);
@@ -207,7 +198,10 @@ function InvoiceForm({ edit, onClose, onSaved }: { edit?: FinInvoiceDetail; onCl
   const gstMode: 'AUTO' | 'INTRA' | 'INTER' = override && override !== derived ? override : 'AUTO';
   const minutes = Math.round((Number(hours) || 0) * 60);
   const ratePaise = rupeesToPaise(rate);
-  const tax = finComputeInvoiceTax({ minutes, ratePaise: Number.isFinite(ratePaise) ? ratePaise : 0, supply });
+  const ukVat = ukDeriveVatTreatment({ vatRegistered: !!o?.vatRegistered, clientCountryCode: client?.countryCode, requested: vatPick });
+  const tax = gb
+    ? ukComputeInvoiceVat({ minutes, ratePaise: Number.isFinite(ratePaise) ? ratePaise : 0, treatment: ukVat.treatment })
+    : finComputeInvoiceTax({ minutes, ratePaise: Number.isFinite(ratePaise) ? ratePaise : 0, supply });
   const approvedMinutes = pv?.approvedMinutes ?? 0;
   const adjusted = minutes !== approvedMinutes;
 
@@ -235,6 +229,7 @@ function InvoiceForm({ edit, onClose, onSaved }: { edit?: FinInvoiceDetail; onCl
       emailTo,
       emailCc,
       notes: notes.trim() || null,
+      ...(gb ? { gstMode: 'AUTO' as const, overrideReason: null, vatTreatment: (UK_VAT_PICKABLE as readonly string[]).includes(vatPick) ? (vatPick as (typeof UK_VAT_PICKABLE)[number]) : null } : {}),
     };
     try {
       let d: FinInvoiceDetail;
@@ -268,7 +263,7 @@ function InvoiceForm({ edit, onClose, onSaved }: { edit?: FinInvoiceDetail; onCl
   return (
     <Modal
       wide
-      title={edit ? 'Edit draft invoice' : 'Generate GST invoice'}
+      title={edit ? 'Edit draft invoice' : gb ? (o && !o.vatRegistered ? 'Generate invoice' : 'Generate VAT invoice') : 'Generate GST invoice'}
       onClose={onClose}
       actions={
         <>
@@ -355,7 +350,7 @@ function InvoiceForm({ edit, onClose, onSaved }: { edit?: FinInvoiceDetail; onCl
               id="inv-rate"
               className="input"
               inputMode="decimal"
-              placeholder="₹"
+              placeholder={currencySymbol()}
               value={rate}
               aria-invalid={!!errors.ratePaise || undefined}
               onChange={(e) => {
@@ -364,6 +359,23 @@ function InvoiceForm({ edit, onClose, onSaved }: { edit?: FinInvoiceDetail; onCl
               }}
             />
           </Field>
+          {gb ? (
+            <Field
+              label="VAT"
+              htmlFor="inv-vat"
+              hint={!o.vatRegistered ? 'The company has no VAT number (Branding) — no VAT is charged' : ukVat.treatment === 'OUTSIDE_SCOPE' ? 'Overseas business customer — reverse charge, no UK VAT' : 'Pick the VAT rate for this supply'}
+            >
+              {ukVat.treatment === 'OUTSIDE_SCOPE' || ukVat.treatment === 'NOT_REGISTERED' ? (
+                <input id="inv-vat" className="input" readOnly value={ukVatLabel(ukVat.treatment)} />
+              ) : (
+                <select id="inv-vat" className="input" value={vatPick} onChange={(e) => setVatPick(e.target.value as UkVatTreatment)}>
+                  {UK_VAT_PICKABLE.map((t) => (
+                    <option key={t} value={t}>{UK_VAT_TREATMENT_LABELS[t]}</option>
+                  ))}
+                </select>
+              )}
+            </Field>
+          ) : (
           <Field
             label="GST"
             htmlFor="inv-gst"
@@ -385,7 +397,8 @@ function InvoiceForm({ edit, onClose, onSaved }: { edit?: FinInvoiceDetail; onCl
               <input id="inv-gst" className="input" readOnly value={finGstLabel(derived)} />
             )}
           </Field>
-          {override && (
+          )}
+          {!gb && override && (
             <Field
               span2
               label="Reason for overriding the derived GST"
@@ -425,10 +438,16 @@ function InvoiceForm({ edit, onClose, onSaved }: { edit?: FinInvoiceDetail; onCl
             <input id="inv-notes" className="input" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional — printed on the PDF" />
           </Field>
           {projectId && pv?.guidance && <div className="fin-guidance span-2">{pv.guidance}</div>}
+          {gb && ukVat.note && <div className="fin-guidance span-2">{ukVat.note}</div>}
           <div className="fin-preview span-2" aria-live="polite">
-            <span>Taxable value</span>
+            <span>{gb ? 'Net amount' : 'Taxable value'}</span>
             <span>{inr2(tax.taxablePaise)}</span>
-            {supply === 'INTRA' ? (
+            {gb ? (
+              <>
+                <span>{ukVatLabel(ukVat.treatment)}</span>
+                <span>{inr2(tax.igstPaise)}</span>
+              </>
+            ) : supply === 'INTRA' ? (
               <>
                 <span>CGST 9%</span>
                 <span>{inr2(tax.cgstPaise)}</span>
@@ -463,6 +482,8 @@ function InvoiceForm({ edit, onClose, onSaved }: { edit?: FinInvoiceDetail; onCl
 type Dialog = 'issue' | 'email' | 'pay' | 'cancel' | 'delete' | null;
 
 function InvoiceDetailModal({ id, onClose, onEdit }: { id: string; onClose: () => void; onEdit: (d: FinInvoiceDetail) => void }) {
+  const gb = useMe().region === 'GB';
+  const tax = gb ? 'VAT' : 'GST';
   const navigate = useNavigate();
   const q = useQuery({ queryKey: finKeys.invoice(id), queryFn: () => finApi.invoice(id) });
   const d = q.data;
@@ -521,17 +542,34 @@ function InvoiceDetailModal({ id, onClose, onEdit }: { id: string; onClose: () =
                 <span>Bill to</span>
                 <span>
                   {d.buyer.name}
-                  {d.buyer.gstin && <div className="fin-muted fin-small">GSTIN {d.buyer.gstin}</div>}
+                  {d.buyer.gstin && <div className="fin-muted fin-small">{gb ? `VAT no. ${formatUkVatNumber(d.buyer.gstin)}` : `GSTIN ${d.buyer.gstin}`}</div>}
                 </span>
-                <span>Place of supply</span>
-                <span>{d.placeOfSupply ?? '—'} · {d.gstLabel}</span>
+                {gb ? (
+                  <>
+                    <span>VAT</span>
+                    <span>
+                      {d.gstLabel}
+                      {d.vatNote && <div className="fin-muted fin-small">{d.vatNote}</div>}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span>Place of supply</span>
+                    <span>{d.placeOfSupply ?? '—'} · {d.gstLabel}</span>
+                  </>
+                )}
                 <span>Project · period</span>
                 <span>{[d.projectName, d.periodLabel].filter(Boolean).join(' · ')}</span>
                 <span>Hours × rate</span>
                 <span>{d.hours} h × {formatINR(d.ratePaise)}</span>
-                <span>Taxable</span>
+                <span>{gb ? 'Net' : 'Taxable'}</span>
                 <span className="tnum">{inr2(d.taxablePaise)}</span>
-                {d.supplyType === 'INTRA' ? (
+                {gb ? (
+                  <>
+                    <span>VAT</span>
+                    <span className="tnum">{inr2(d.gstPaise)}</span>
+                  </>
+                ) : d.supplyType === 'INTRA' ? (
                   <>
                     <span>CGST + SGST</span>
                     <span className="tnum">{inr2(d.cgstPaise)} + {inr2(d.sgstPaise)}</span>
@@ -552,8 +590,8 @@ function InvoiceDetailModal({ id, onClose, onEdit }: { id: string; onClose: () =
                 <span className="tnum" style={{ fontWeight: 600 }}>{inr2(d.totalPaise)}</span>
                 {d.status !== 'DRAFT' && (
                   <>
-                    <span>Received · TDS</span>
-                    <span className="tnum">{inr2(d.receivedPaise)} · {inr2(d.tdsPaise)}</span>
+                    <span>{gb ? 'Received' : 'Received · TDS'}</span>
+                    <span className="tnum">{gb ? inr2(d.receivedPaise) : `${inr2(d.receivedPaise)} · ${inr2(d.tdsPaise)}`}</span>
                     <span>Balance due</span>
                     <span className="tnum">{inr2(d.balancePaise)}</span>
                     <span>Invoice · due date</span>
@@ -621,7 +659,7 @@ function InvoiceDetailModal({ id, onClose, onEdit }: { id: string; onClose: () =
                         <th>Date</th>
                         <th>Mode</th>
                         <th className="num">Received</th>
-                        <th className="num">TDS</th>
+                        {!gb && <th className="num">TDS</th>}
                         <th>Voucher</th>
                         <th />
                       </tr>
@@ -632,7 +670,7 @@ function InvoiceDetailModal({ id, onClose, onEdit }: { id: string; onClose: () =
                           <td>{formatDate(p.date)}</td>
                           <td>{p.mode}{p.reference ? ` · ${p.reference}` : ''}</td>
                           <td className="num">{formatINR(p.amountPaise)}</td>
-                          <td className="num">{amt(p.tdsPaise)}</td>
+                          {!gb && <td className="num">{amt(p.tdsPaise)}</td>}
                           <td>{p.voucherNumber ?? '—'}</td>
                           <td className="num">
                             {d.status !== 'CANCELLED' && (
@@ -669,7 +707,7 @@ function InvoiceDetailModal({ id, onClose, onEdit }: { id: string; onClose: () =
       {d && dialog === 'issue' && (
         <ConfirmDialog
           title={`Issue the ${d.clientName} invoice?`}
-          body="It gets the next invoice number, posts the sale and output GST to the ledger, and the PDF is filed under Bills & receipts › Sales invoices. Issued invoices can't be edited."
+          body={`It gets the next invoice number, posts the sale and output ${tax} to the ledger, and the PDF is filed under Bills & receipts › Sales invoices. Issued invoices can't be edited.`}
           confirmLabel={issue.isPending ? 'Issuing…' : 'Issue invoice'}
           busy={issue.isPending}
           onConfirm={() => issue.mutate(undefined)}
@@ -692,7 +730,7 @@ function InvoiceDetailModal({ id, onClose, onEdit }: { id: string; onClose: () =
       {d && dialog === 'cancel' && (
         <ReasonDialog
           title={`Cancel ${d.label} with a credit note`}
-          body="A credit note reverses the sale and the output GST in the ledger. The billed hours become available for a new invoice."
+          body={`A credit note reverses the sale and the output ${tax} in the ledger. The billed hours become available for a new invoice.`}
           confirmLabel="Issue credit note"
           danger
           onConfirm={(reason) => cancel.mutateAsync(reason)}
@@ -730,7 +768,7 @@ function EmailDialog({ d, onClose }: { d: FinInvoiceDetail; onClose: () => void 
         </>
       }
     >
-      <div className="dialog-body">The tax invoice PDF is attached. Bank and UPI details are included in the message.</div>
+      <div className="dialog-body">{useMe().region === 'GB' ? 'The invoice PDF is attached. Bank details (sort code and account number) are included in the message.' : 'The tax invoice PDF is attached. Bank and UPI details are included in the message.'}</div>
       <div className="form-grid">
         <Field span2 label="To" htmlFor="em-to" error={err ?? undefined}>
           <ChipsInput id="em-to" value={to} onChange={setTo} placeholder="accounts@client.com" />
@@ -747,6 +785,7 @@ function EmailDialog({ d, onClose }: { d: FinInvoiceDetail; onClose: () => void 
 }
 
 function PaymentDialog({ d, onClose }: { d: FinInvoiceDetail; onClose: () => void }) {
+  const gb = useMe().region === 'GB';
   const [date, setDate] = useState(todayKey());
   const [amount, setAmount] = useState(paiseToRupeesText(d.balancePaise));
   const [tds, setTds] = useState('');
@@ -794,7 +833,7 @@ function PaymentDialog({ d, onClose }: { d: FinInvoiceDetail; onClose: () => voi
         <Field label="Mode" htmlFor="pay-mode">
           <select id="pay-mode" className="input" value={mode} onChange={(e) => setMode(e.target.value)}>
             <option value="BANK">Bank transfer</option>
-            <option value="UPI">UPI</option>
+            {!gb && <option value="UPI">UPI</option>}
             <option value="CHEQUE">Cheque</option>
             <option value="CASH">Cash</option>
           </select>
@@ -802,11 +841,13 @@ function PaymentDialog({ d, onClose }: { d: FinInvoiceDetail; onClose: () => voi
         <Field label="Amount received (₹)" htmlFor="pay-amt" error={errors.amountPaise}>
           <input id="pay-amt" className="input" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} />
         </Field>
-        <Field label="TDS deducted by client (₹)" htmlFor="pay-tds" error={errors.tdsPaise} hint="Sec 194J — claimable against tax">
-          <input id="pay-tds" className="input" inputMode="decimal" value={tds} placeholder="0" onChange={(e) => setTds(e.target.value)} />
-        </Field>
+        {!gb && (
+          <Field label="TDS deducted by client (₹)" htmlFor="pay-tds" error={errors.tdsPaise} hint="Sec 194J — claimable against tax">
+            <input id="pay-tds" className="input" inputMode="decimal" value={tds} placeholder="0" onChange={(e) => setTds(e.target.value)} />
+          </Field>
+        )}
         <Field span2 label="Reference" htmlFor="pay-ref">
-          <input id="pay-ref" className="input" value={reference} placeholder="UTR / cheque no." onChange={(e) => setReference(e.target.value)} />
+          <input id="pay-ref" className="input" value={reference} placeholder={gb ? 'Bank reference / cheque no.' : 'UTR / cheque no.'} onChange={(e) => setReference(e.target.value)} />
         </Field>
       </div>
       {formError && <div className="field-error" role="alert">{formError}</div>}

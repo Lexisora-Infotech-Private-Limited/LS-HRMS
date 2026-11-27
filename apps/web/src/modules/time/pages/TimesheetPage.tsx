@@ -1,3 +1,4 @@
+import { zoneOffsetMinutes } from '@lexisora/shared';
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { CompOffRules, OutsideHoursDto, SubmitResult, TimesheetCellDto, TimesheetLineDto, TimesheetLineTask, TimesheetWeek } from '@lexisora/shared';
@@ -392,7 +393,7 @@ function OutsideHoursForm({ week, onClose, onSaved }: { week: TimesheetWeek; onC
     { name: 'to', label: 'To', type: 'time', span: 1, required: true },
     { name: 'reason', label: 'Reason', type: 'area', span: 2, required: true },
   ];
-  const today = new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10);
+  const today = new Date(Date.now() + zoneOffsetMinutes(new Date()) * 60_000).toISOString().slice(0, 10);
   const lastDay = week.weekEnd < today ? week.weekEnd : today;
   if (opts.isLoading) return null;
   return (

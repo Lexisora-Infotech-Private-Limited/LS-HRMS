@@ -1,3 +1,4 @@
+import { activeTimezone, zoneOffsetMinutes } from '@lexisora/shared';
 import type {
   BadgeRow,
   BadgeUpsertInput,
@@ -201,7 +202,7 @@ export function withFileTokens(html: string): string {
 /** "29 Sep 2026" (IST) */
 export function longDay(iso: string | null | undefined): string {
   if (!iso) return '—';
-  const s = new Date(new Date(iso).getTime() + 330 * 60_000);
+  const s = new Date(new Date(iso).getTime() + zoneOffsetMinutes(new Date(iso)) * 60_000);
   return `${s.getUTCDate()} ${MONTHS_SHORT[s.getUTCMonth()]} ${s.getUTCFullYear()}`;
 }
 
@@ -222,7 +223,7 @@ const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'S
 /** "27 Sep" (IST) from an ISO instant. */
 export function dayMonthOf(iso: string | null | undefined): string {
   if (!iso) return '—';
-  const s = new Date(new Date(iso).getTime() + 330 * 60_000);
+  const s = new Date(new Date(iso).getTime() + zoneOffsetMinutes(new Date(iso)) * 60_000);
   return `${s.getUTCDate()} ${MONTHS_SHORT[s.getUTCMonth()]}`;
 }
 
@@ -231,14 +232,14 @@ export function dayMonthTime(iso: string | null | undefined): string {
   if (!iso) return '—';
   const d = new Date(iso);
   const dm = dayMonthOf(iso);
-  const t = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' }).format(d);
+  const t = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: activeTimezone() }).format(d);
   return `${dm}, ${t}`;
 }
 
 /** ISO instant → value for <input type="datetime-local"> in IST. */
 export function toLocalInput(iso: string | null | undefined): string {
   if (!iso) return '';
-  const d = new Date(new Date(iso).getTime() + 330 * 60_000);
+  const d = new Date(new Date(iso).getTime() + zoneOffsetMinutes(new Date(iso)) * 60_000);
   return d.toISOString().slice(0, 16);
 }
 

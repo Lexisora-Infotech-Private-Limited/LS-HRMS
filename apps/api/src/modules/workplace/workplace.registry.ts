@@ -17,6 +17,7 @@ import { NoticesService } from './notices/notices.service';
 import { FeedService } from './feed/feed.service';
 import { HelpdeskService } from './helpdesk/helpdesk.service';
 import { PoliciesService } from './policies/policies.service';
+import { tenantsForCron } from '../../core/region/region-cache';
 
 const OPEN_TICKET = ['OPEN', 'IN_PROGRESS', 'WAITING'] as const;
 
@@ -102,7 +103,7 @@ export class WorkplaceRegistry implements OnModuleInit {
   }
 
   private async forEachTenant(name: string, fn: () => Promise<unknown>) {
-    const tenants = await this.prisma.raw.tenant.findMany({ select: { id: true } }).catch(() => [] as { id: string }[]);
+    const tenants = tenantsForCron(await this.prisma.raw.tenant.findMany({ select: { id: true } }).catch(() => [] as { id: string }[]));
     for (const t of tenants) {
       try {
         await runAsTenant(t.id, fn);

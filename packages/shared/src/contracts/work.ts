@@ -90,8 +90,8 @@ const optDate = z.union([dateStr, z.literal(''), z.null()]).optional().transform
 const optText = (max = 500) => z.union([z.string().trim().max(max), z.null()]).optional().transform((v) => (v ? v : null));
 
 // ── Clients ────────────────────────────────────────────────────────────────
-export const clientInput = z
-  .object({
+/** Client fields without the India GST refinements (UK clients reuse it in uk-finance.ts). */
+export const clientInputBase = z.object({
     name: z.string().trim().min(2, 'Client name is required').max(120),
     legalName: optText(200),
     isInternal: z.boolean().optional().default(false),
@@ -108,7 +108,8 @@ export const clientInput = z
     paymentTermsDays: z.number().int().min(0).max(180).default(15),
     contactName: optText(120),
     contactPhone: optText(30),
-  })
+  });
+export const clientInput = clientInputBase
   .superRefine((v, ctx) => {
     if (v.gstin && !isValidClientGstin(v.gstin)) ctx.addIssue({ code: 'custom', path: ['gstin'], message: 'Enter a valid GSTIN' });
     if (v.gstin && v.stateCode && v.gstin.slice(0, 2) !== v.stateCode) ctx.addIssue({ code: 'custom', path: ['gstin'], message: 'GSTIN state mismatch' });

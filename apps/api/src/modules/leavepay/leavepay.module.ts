@@ -19,6 +19,7 @@ import { PayrollEngineService } from './payroll/payroll-engine.service';
 import { PayrollService } from './payroll/payroll.service';
 import { PayslipService } from './payroll/payslip.service';
 import { PeriodLockPort } from './payroll/period-lock.port';
+import { UkPayrollController, UkPayrollService } from './payroll/uk/uk-payroll.service';
 import { PayrollController, PayslipsController, PayslipTemplateController, SalaryController, SalaryTemplatesController } from './payroll/payroll.controller';
 import { periodLabel } from './common/dates';
 
@@ -28,8 +29,8 @@ import { periodLabel } from './common/dates';
  */
 @Module({
   imports: [TimeModule],
-  controllers: [LeaveController, PayrollController, PayslipsController, SalaryController, SalaryTemplatesController, PayslipTemplateController],
-  providers: [WorkCalendarService, LeaveLedgerService, LeaveRequestsService, LeaveAdminService, LeaveLateArrivalService, LeaveJobs, SalaryService, PayrollEngineService, PayrollService, PayslipService, PeriodLockPort],
+  controllers: [LeaveController, PayrollController, PayslipsController, SalaryController, SalaryTemplatesController, PayslipTemplateController, UkPayrollController],
+  providers: [WorkCalendarService, LeaveLedgerService, LeaveRequestsService, LeaveAdminService, LeaveLateArrivalService, LeaveJobs, SalaryService, PayrollEngineService, PayrollService, PayslipService, PeriodLockPort, UkPayrollService],
   exports: [LeaveRequestsService, SalaryService],
 })
 export class LeavepayModule implements OnModuleInit {

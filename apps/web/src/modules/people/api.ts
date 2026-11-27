@@ -59,6 +59,11 @@ import type {
   VCardAccessDto,
   VCardDto,
   EmployeeRow,
+  RtwCheckInput,
+  RtwHistory,
+  RtwList,
+  UkBankStepInput,
+  UkDocsStepInput,
 } from '@lexisora/shared';
 import { api, del, get, patch, post, put } from '@/lib/api';
 
@@ -66,7 +71,9 @@ import { api, del, get, patch, post, put } from '@/lib/api';
 
 export type EmployeeList = Paginated<EmployeeRow> & { counts: EmployeeCounts };
 export type MastersDto = { departments: PeopleMasterRow[]; designations: PeopleMasterRow[]; branches: PeopleMasterRow[] };
-export type OnboardingDetail = OnboardingDto & { bank: { holder: string | null; account: string; ifsc: string | null; bank: string | null; taxRegime: string; uan: string | null; pan: string } };
+/** UK (region GB) bank & tax details on the HR onboarding view. */
+export type UkOnboardingBank = { sortCode: string | null; niNumber: string; starterStatement: string | null; studentLoans: string; p45: string | null; taxCode: string | null; nationality: string | null; shareCode: string | null };
+export type OnboardingDetail = OnboardingDto & { bank: { holder: string | null; account: string; ifsc: string | null; bank: string | null; taxRegime: string; uan: string | null; pan: string; uk?: UkOnboardingBank } };
 export type QueueRow = VaultRow & { employeeId: string; employee: string; empCode: string; captured: string | null };
 export type MasterKind = 'departments' | 'designations' | 'branches';
 
@@ -115,6 +122,8 @@ export const peopleKeys = {
   vcard: ['people', 'vcard'] as const,
   vcardAccess: ['people', 'vcard', 'access'] as const,
   companyProfile: ['people', 'vcard', 'company'] as const,
+  rtw: ['people', 'rtw'] as const,
+  rtwHistory: (id: string) => ['people', 'rtw', 'history', id] as const,
 };
 
 export const peopleApi = {
@@ -163,6 +172,9 @@ export const peopleApi = {
   decline: (reason: string) => post<unknown>('/onboarding/me/decline', { reason }),
   submitDocs: (b: DocsStepInput) => post<OnboardingDto>('/onboarding/me/docs', b),
   submitBank: (b: BankStepInput) => post<OnboardingDto>('/onboarding/me/bank', b),
+  // UK tenants post the UK step bodies to the same endpoints (the API picks the schema by region).
+  submitUkDocs: (b: UkDocsStepInput) => post<OnboardingDto>('/onboarding/me/docs', b),
+  submitUkBank: (b: UkBankStepInput) => post<OnboardingDto>('/onboarding/me/bank', b),
   finish: (b: KitStepInput) => post<OnboardingDto>('/onboarding/me/finish', b),
   envelope: (id: string) => get<EnvelopeDto>(`/esign/${id}`),
 
@@ -262,6 +274,11 @@ export const peopleApi = {
   revokeCard: (id: string, reason: string) => post<unknown>(`/id-cards/${id}/revoke`, { reason }),
   reissueCard: (employeeId: string, reason: string) => post<IdCardRow>(`/id-cards/employee/${employeeId}/reissue`, { reason }),
   myIdCard: () => get<IdCardRow | null>('/id-cards/mine'),
+
+  // Right to work (UK)
+  rtwList: () => get<RtwList>('/right-to-work'),
+  rtwHistory: (employeeId: string) => get<RtwHistory>(`/right-to-work/${employeeId}`),
+  rtwCreate: (b: RtwCheckInput) => post<RtwHistory>('/right-to-work', b),
 
   // Visiting card
   vcard: () => get<VCardFull>('/vcard'),

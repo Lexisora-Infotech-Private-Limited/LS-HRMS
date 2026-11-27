@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import { CALLS_NOT_SET_UP, CHAT_EDIT_WINDOW_MIN, type CallJoin, type ChatChannelRow, type ChatChannelsResponse, type ChatMessageRow, type ChatPerson } from '@lexisora/shared';
+import { CALLS_NOT_SET_UP, CHAT_EDIT_WINDOW_MIN, type CallJoin, type ChatChannelRow, type ChatChannelsResponse, type ChatMessageRow, type ChatPerson, activeTimezone } from '@lexisora/shared';
 import { fileUrl, uploadFile } from '@/lib/api';
 import { useMe } from '@/lib/auth';
 import { useAction } from '@/lib/query';
@@ -17,7 +17,7 @@ import '../hub.css';
 
 const MAX_FILES = 10;
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
-const istKey = (iso: string) => new Date(iso).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+const istKey = (iso: string) => new Date(iso).toLocaleDateString('en-CA', { timeZone: activeTimezone() });
 const draftKey = (id: string) => `wp.chat.draft.${id}`;
 const readDraft = (id: string) => {
   try {

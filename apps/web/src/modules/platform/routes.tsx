@@ -13,6 +13,7 @@ const BrandingPage = lazy(() => import('./pages/BrandingPage'));
 const TenantsPage = lazy(() => import('./pages/TenantsPage'));
 const PrivacyPage = lazy(() => import('./pages/PrivacyPage'));
 const SupportPage = lazy(() => import('./pages/SupportPage'));
+const RegionPage = lazy(() => import('./pages/RegionPage'));
 
 const s = (el: ReactNode) => <Suspense fallback={<Loading />}>{el}</Suspense>;
 
@@ -31,4 +32,6 @@ export const routes: RouteObject[] = [
   { path: 'tenants', element: guard('tenants.manage', s(<TenantsPage />)) },
   { path: 'privacy', element: guard('privacy.view', s(<PrivacyPage />)) },
   { path: 'support', element: guard('support.use', s(<SupportPage />)) },
+  // Admin → Region & compliance (India / United Kingdom).
+  { path: 'region', element: guard('region.manage', s(<RegionPage />)) },
 ];

@@ -8,6 +8,7 @@ import { currentTenantId, requireContext } from '../../../core/context/request-c
 import { AppError, conflict, notFound } from '../../../core/http/errors';
 import { paginated } from '../../../core/http/paginate';
 import { WorkDocsService } from '../projects/work-docs.service';
+import { currentRegion } from '../../../core/region/region-cache';
 
 type ClientWithCounts = Prisma.ClientGetPayload<{ include: { projects: { select: { id: true; status: true } } } }>;
 
@@ -76,6 +77,29 @@ export class ClientsService {
   }
 
   private normalize(input: ClientInput) {
+    if (currentRegion() === 'GB') {
+      // UK: VAT number (gstin column) optional, country kept as entered (default GB);
+      // gstRegType REGULAR (VAT registered) / UNREGISTERED / OVERSEAS; no PAN or state.
+      const country = (input.countryCode || 'GB').toUpperCase();
+      return {
+        name: input.name,
+        legalName: input.legalName ?? input.name,
+        isInternal: input.isInternal,
+        gstRegType: input.isInternal ? 'UNREGISTERED' : country !== 'GB' ? 'OVERSEAS' : input.gstin ? 'REGULAR' : 'UNREGISTERED',
+        gstin: input.gstin,
+        pan: null,
+        address: input.address,
+        city: input.city,
+        pincode: input.pincode,
+        stateCode: null,
+        countryCode: country,
+        billingEmails: [...new Set(input.billingEmails)],
+        defaultRatePerHourPaise: input.defaultRatePerHourPaise ?? null,
+        paymentTermsDays: input.paymentTermsDays,
+        contactName: input.contactName,
+        contactPhone: input.contactPhone,
+      };
+    }
     const pan = input.pan ?? (input.gstin ? input.gstin.slice(2, 12) : null);
     return {
       name: input.name,
@@ -100,7 +124,7 @@ export class ClientsService {
   private async gstinWarning(gstin: string | null, excludeId?: string) {
     if (!gstin) return null;
     const dup = await this.prisma.client.findFirst({ where: { gstin, ...(excludeId ? { id: { not: excludeId } } : {}) }, select: { name: true } });
-    return dup ? `GSTIN is also used by ${dup.name}` : null;
+    return dup ? `${currentRegion() === 'GB' ? 'VAT number' : 'GSTIN'} is also used by ${dup.name}` : null;
   }
 
   async create(input: ClientInput) {

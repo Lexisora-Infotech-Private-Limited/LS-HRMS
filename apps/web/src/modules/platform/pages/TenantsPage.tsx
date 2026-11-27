@@ -27,6 +27,17 @@ const STATE_OPTIONS = Object.entries(GST_STATE_NAMES).map(([value, label]) => ({
 /** Add tenant (wireframe FORMS "tenant"), with the spec's paid-plan reveals. */
 const tenantFields: FieldDef[] = [
   { name: 'company', label: 'Company', type: 'text', span: 2, required: true, placeholder: 'Nova Clinics' },
+  {
+    name: 'region',
+    label: 'Country',
+    type: 'select',
+    required: true,
+    options: [
+      { value: 'IN', label: 'India' },
+      { value: 'GB', label: 'United Kingdom' },
+    ],
+    hint: 'Currency, time zone, payroll and tax rules. The company admin can change it until the first pay run is finalised.',
+  },
   { name: 'domain', label: 'Login domain', type: 'text', required: true, placeholder: 'nova', hint: `Becomes nova.${ROOT_DOMAIN}` },
   {
     name: 'planCode',
@@ -53,8 +64,8 @@ const tenantFields: FieldDef[] = [
     showIf: (v) => v.planCode === 'GROWTH',
   },
   { name: 'seats', label: 'Seats', type: 'number', required: true, placeholder: '50', hint: 'Includes the 10 free seats', showIf: (v) => v.planCode !== 'FREE' },
-  { name: 'stateCode', label: 'State (place of supply)', type: 'select', required: true, options: STATE_OPTIONS, showIf: (v) => v.planCode !== 'FREE' },
-  { name: 'gstin', label: 'GSTIN', type: 'text', placeholder: 'Optional', showIf: (v) => v.planCode !== 'FREE' },
+  { name: 'stateCode', label: 'State (place of supply)', type: 'select', required: true, options: STATE_OPTIONS, showIf: (v) => v.planCode !== 'FREE' && v.region !== 'GB' },
+  { name: 'gstin', label: 'GSTIN', type: 'text', placeholder: 'Optional', showIf: (v) => v.planCode !== 'FREE' && v.region !== 'GB' },
 ];
 
 function NotOperator() {

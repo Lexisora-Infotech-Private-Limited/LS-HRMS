@@ -7,12 +7,14 @@ import { DataTable, type Column } from '@/components/table';
 import { ConfirmDialog, ErrorBlock, Kpis, Loading, Modal, PageHeader, Tabs, Tag, type Tone } from '@/components/ui';
 import { currentPeriod, fmtDays, fmtHm, lpApi, lpKeys } from '../api';
 import { SalaryEditor } from './SalaryEditor';
+import { UkFpsCard, UkRatesCard } from './UkPayroll';
+import { useMe } from '@/lib/auth';
 import '../leavepay.css';
 
 const ITEM_TONE: Record<string, Tone> = { READY: 'accent', FINALIZED: 'accent', PAID: 'accent', TIMESHEET_PENDING: 'outline', ON_HOLD: 'outline', STALE: 'outline', EXCLUDED: 'neutral', ERROR: 'danger' };
 const RUN_LABEL: Record<string, string> = { CALCULATING: 'Calculating', CALCULATED: 'Calculated · review', FINALIZED: 'Finalized', PAID: 'Paid', FAILED: 'Failed', DRAFT: 'Draft', CANCELLED: 'Voided' };
 
-type Tab = 'run' | 'salaries';
+type Tab = 'run' | 'salaries' | 'uk';
 
 export default function PayrollPage() {
   const [tab, setTab] = useState<Tab>('run');
@@ -28,12 +30,13 @@ export default function PayrollPage() {
   const [confirm, setConfirm] = useState<'finalize' | 'paid' | 'void' | null>(null);
   const run = v?.run ?? null;
   const editable = !run || ['CALCULATED', 'FAILED'].includes(run.status);
+  const uk = useMe().region === 'GB';
 
   return (
     <div data-screen-label="Payroll run" className="stack" style={{ gap: 18 }}>
       <PageHeader
-        title="Payroll run"
-        sub="Payroll uses RM-approved timesheets, leave and idle deductions. Lock attendance before running."
+        title={uk ? 'Pay run (PAYE)' : 'Payroll run'}
+        sub={uk ? 'PAYE tax, National Insurance, student loans, workplace pension and statutory pay from approved timesheets and absence. Lock attendance before running.' : 'Payroll uses RM-approved timesheets, leave and idle deductions. Lock attendance before running.'}
         actions={
           tab === 'run' && v ? (
             <>
@@ -51,15 +54,20 @@ export default function PayrollPage() {
           ) : undefined
         }
       />
-      <Tabs<Tab> tabs={[{ value: 'run', label: 'Run' }, { value: 'salaries', label: 'Salary structures' }]} value={tab} onChange={setTab} />
-      {tab === 'salaries' ? (
+      <Tabs<Tab> tabs={[{ value: 'run', label: 'Run' }, { value: 'salaries', label: uk ? 'Pay & PAYE details' : 'Salary structures' }, ...(uk ? [{ value: 'uk' as Tab, label: 'UK rates' }] : [])]} value={tab} onChange={setTab} />
+      {tab === 'uk' && uk ? (
+        <UkRatesCard />
+      ) : tab === 'salaries' ? (
         <SalariesTab />
       ) : q.isLoading ? (
         <Loading label="Calculating payroll preview…" />
       ) : q.error ? (
         <ErrorBlock error={q.error} retry={() => q.refetch()} />
       ) : v ? (
-        <RunView v={v} />
+        <>
+          <RunView v={v} />
+          {uk && run && ['FINALIZED', 'PAID'].includes(run.status) && <UkFpsCard runId={run.id} />}
+        </>
       ) : null}
       {form && v && <RunForm v={v} onClose={() => setForm(false)} />}
       {confirm && v && run && <RunConfirm kind={confirm} v={v} onClose={() => setConfirm(null)} />}
@@ -135,6 +143,7 @@ function RunView({ v }: { v: PayrollPeriodView }) {
 }
 
 function RunForm({ v, onClose }: { v: PayrollPeriodView; onClose: () => void }) {
+  const isUkRegion = useMe().region === 'GB';
   const run = v.run;
   const save = useAction(
     (x: Record<string, any>) => {
@@ -161,7 +170,7 @@ function RunForm({ v, onClose }: { v: PayrollPeriodView; onClose: () => void }) 
       fields={fields}
       initial={initial}
       submitLabel={run ? 'Re-run payroll' : 'Run payroll'}
-      intro={<span className="faint">Locks attendance and leave up to the lock date, then calculates PF, ESI, professional tax, TDS, LOP and idle deductions for every employee.</span>}
+      intro={<span className="faint">{isUkRegion ? 'Locks attendance and absence up to the lock date, then calculates PAYE tax, National Insurance, student loans, pension and statutory pay (SSP, SMP and others) for every employee.' : 'Locks attendance and leave up to the lock date, then calculates PF, ESI, professional tax, TDS, LOP and idle deductions for every employee.'}</span>}
       onSubmit={(x) => save.mutateAsync(x)}
       onClose={onClose}
     />
@@ -288,9 +297,10 @@ function ItemModal({ runId, runStatus, itemId, onClose }: { runId: string; runSt
 }
 
 function SalariesTab() {
+  const uk = useMe().region === 'GB';
   const q = useQuery({ queryKey: lpKeys.salaries, queryFn: lpApi.salaries });
   const [open, setOpen] = useState<SalaryListRow | null>(null);
-  const cols: Column<SalaryListRow>[] = [
+  const allCols: Column<SalaryListRow>[] = [
     { key: 'e', header: 'Employee', render: (r) => <div><div>{r.name} {r.hold && <Tag tone="outline">On hold</Tag>}</div><div className="faint" style={{ fontSize: 11.5 }}>{r.code}{r.department ? ` · ${r.department}` : ''}</div></div> },
     { key: 't', header: 'Pay type', render: (r) => (r.payType === 'STIPEND' ? 'Stipend' : 'Salary') },
     { key: 'c', header: 'CTC / year', num: true, render: (r) => (r.ctcAnnualPaise ? formatINR(r.ctcAnnualPaise) : <Tag tone="danger">No structure</Tag>) },
@@ -298,6 +308,7 @@ function SalariesTab() {
     { key: 'f', header: 'Effective from', render: (r) => r.effectiveFrom ?? '—' },
     { key: 'r', header: 'Tax regime', render: (r) => (r.payType === 'STIPEND' ? '—' : r.taxRegime === 'OLD' ? 'Old' : 'New') },
   ];
+  const cols = allCols.filter((c) => !(uk && c.key === 'r'));
   return (
     <>
       {q.error ? <ErrorBlock error={q.error} retry={() => q.refetch()} /> : <DataTable columns={cols} rows={q.data} loading={q.isLoading} rowKey={(r) => r.employeeId} onRowClick={setOpen} empty="No employees." />}

@@ -15,7 +15,12 @@ import {
   type ManualCreditInput,
   type ManualCreditRow,
   type YearEndPreviewRow,
+  UK_STATUTORY_HOLIDAY_DAYS,
+  type UkAnnualLeaveCheck,
+  type UkLeavePackResult,
 } from '@lexisora/shared';
+import { currentRegion } from '../../../core/region/region-cache';
+import { isWeekdayKey, ukAnnualLeaveMessage, ukAnnualLeaveShortfall, ukLeavePack } from './uk-leave-pack';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { requireContext } from '../../../core/context/request-context';
 import { hasPerm } from '../../../core/auth/decorators';
@@ -638,5 +643,115 @@ export class LeaveAdminService {
     }
     await this.ledger.post(entries);
     await this.ledger.ensureBalances(employeeId, year);
+  }
+
+  // ── UK holiday & absence pack (region GB only) ────────────────────────
+
+  private assertUk() {
+    if (currentRegion() !== 'GB') throw new AppError(422, 'UK_ONLY', 'This is only for companies in the United Kingdom');
+  }
+
+  /**
+   * Create the UK leave types (uk-leave-pack.ts). Idempotent: codes that already exist are
+   * skipped, as are names already used by another code, and TOIL when a comp-off type exists
+   * (the comp-off mechanism allows one such type).
+   */
+  async addUkPack(input: { annualLeaveDays: number; carryForwardDays: number }): Promise<UkLeavePackResult> {
+    this.assertHr();
+    this.assertUk();
+    const existing = await this.prisma.leaveType.findMany({ select: { code: true, name: true, isCompOff: true, displayOrder: true } });
+    const codes = new Set(existing.map((t) => t.code));
+    const names = new Map(existing.map((t) => [t.name.trim().toLowerCase(), t.code]));
+    const compOff = existing.find((t) => t.isCompOff);
+    let order = Math.max(0, ...existing.map((t) => t.displayOrder)) + 1;
+    const year = yearOf(todayKey());
+    const created: string[] = [];
+    const skipped: { code: string; reason: string }[] = [];
+    for (const d of ukLeavePack(input)) {
+      if (codes.has(d.code)) {
+        skipped.push({ code: d.code, reason: 'Already set up' });
+        continue;
+      }
+      const sameName = names.get(d.name.toLowerCase());
+      if (sameName) {
+        skipped.push({ code: d.code, reason: `A leave type named ${d.name} already exists with code ${sameName}` });
+        continue;
+      }
+      if (d.isCompOff && compOff) {
+        skipped.push({ code: d.code, reason: `${compOff.name} (${compOff.code}) already works as time off in lieu` });
+        continue;
+      }
+      const t = await this.prisma.leaveType.create({
+        data: {
+          code: d.code,
+          name: d.name,
+          shortLabel: d.code,
+          displayOrder: order++,
+          annualQuota: d.annualQuota,
+          accrualFrequency: d.accrualFrequency,
+          prorateOnJoin: true,
+          carryForwardMax: d.carryForwardMax,
+          encashable: false,
+          appliesTo: d.appliesTo,
+          isPaid: d.isPaid,
+          isCompOff: d.isCompOff,
+          expiryDays: d.expiryDays,
+          allowHalfDay: d.allowHalfDay,
+          sandwichWeeklyOffs: false,
+          sandwichHolidays: false,
+          minNoticeDays: d.minNoticeDays,
+          noticeEnforcement: d.noticeEnforcement,
+          backdateLimitDays: d.backdateLimitDays,
+          maxConsecutiveDays: d.maxConsecutiveDays,
+          documentRequiredAfterDays: d.documentRequiredAfterDays,
+          hidden: d.hidden,
+        } as any,
+      });
+      // Same as createType: a YEARLY type gets a credit rule per employment type (runs on the next credit run).
+      if (d.accrualFrequency === 'YEARLY' && d.annualQuota > 0) {
+        for (const et of d.appliesTo) {
+          await this.prisma.leaveCreditRule.create({ data: { leaveTypeId: t.id, employmentType: et, frequency: 'YEARLY', daysPerPeriod: d.annualQuota, effectiveFrom: dd(`${year}-01-01`) } as any });
+        }
+      }
+      created.push(d.code);
+    }
+    await this.audit.record({ action: 'leave.uk_pack.added', entity: 'LeaveType', meta: { created, skipped: skipped.map((s) => s.code), annualLeaveDays: input.annualLeaveDays, carryForwardDays: input.carryForwardDays } });
+    const check = await this.ukAnnualLeaveCheck(year);
+    const message = created.length
+      ? `Added ${created.length} UK leave type${created.length === 1 ? '' : 's'}: ${created.join(', ')}${skipped.length ? ` · ${skipped.length} already set up` : ''}.${created.includes('AL') ? ' Run the annual leave credit from Basic credit to credit this year now.' : ''}`
+      : 'Every UK leave type is already set up.';
+    return { created, skipped, message, check };
+  }
+
+  /**
+   * 5.6-week check: AL quota + the paid (mandatory) weekday holidays of the location with the
+   * fewest of them, against 28 days for full-time staff. Locations without people are ignored.
+   */
+  async ukAnnualLeaveCheck(year = yearOf(todayKey())): Promise<UkAnnualLeaveCheck> {
+    this.assertUk();
+    const [al, hols, locs, staffed] = await Promise.all([
+      this.prisma.leaveType.findFirst({ where: { code: 'AL', active: true }, select: { annualQuota: true } }),
+      this.prisma.holiday.findMany({ where: { type: 'MANDATORY', date: { gte: dd(`${year}-01-01`), lte: dd(`${year}-12-31`) } }, select: { date: true, locationIds: true } }),
+      this.prisma.workLocation.findMany({ where: { archivedAt: null }, select: { id: true, name: true, isRemote: true } }),
+      this.prisma.employee.groupBy({ by: ['workLocationId'], where: { status: { in: ['ACTIVE', 'NOTICE_PERIOD'] } }, _count: { _all: true } }),
+    ]);
+    const weekdays = hols.filter((h) => isWeekdayKey(dk(h.date)));
+    const withStaff = new Set(staffed.map((s) => s.workLocationId).filter(Boolean));
+    const candidates = locs.filter((l) => withStaff.has(l.id)).length ? locs.filter((l) => withStaff.has(l.id)) : locs.filter((l) => !l.isRemote);
+    let bankHolidays = weekdays.filter((h) => !h.locationIds.length).length;
+    let location: string | null = null;
+    if (candidates.length) {
+      const counts = candidates.map((l) => ({ name: l.name, n: weekdays.filter((h) => !h.locationIds.length || h.locationIds.includes(l.id)).length }));
+      const min = counts.reduce((a, b) => (b.n < a.n ? b : a));
+      bankHolidays = min.n;
+      // Name the location only when locations get different numbers of bank holidays.
+      location = counts.some((c) => c.n !== min.n) ? min.name : null;
+    }
+    const minimumDays = UK_STATUTORY_HOLIDAY_DAYS;
+    if (!al) {
+      return { year, annualLeaveDays: null, bankHolidays, location, totalDays: bankHolidays, minimumDays, ok: false, message: 'No annual leave type (code AL) yet. Add the UK holiday & absence pack to set up annual leave.' };
+    }
+    const s = ukAnnualLeaveShortfall(al.annualQuota, bankHolidays);
+    return { year, annualLeaveDays: al.annualQuota, bankHolidays, location, totalDays: s.totalDays, minimumDays, ok: s.ok, message: ukAnnualLeaveMessage(al.annualQuota, bankHolidays, location) };
   }
 }

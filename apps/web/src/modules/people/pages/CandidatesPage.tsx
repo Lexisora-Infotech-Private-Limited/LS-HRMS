@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
+  isUk,
   APPLICATION_STAGE_LABELS,
   APPLICATION_STAGE_TRANSITIONS,
   CANDIDATE_SOURCE_LABELS,
@@ -124,8 +125,8 @@ function AddCandidateModal({ onClose, onAdded }: { onClose: () => void; onAdded:
     { name: 'jobId', label: 'Applied for', type: 'select', required: true, options: d.jobs ?? [] },
     { name: 'source', label: 'Source', type: 'select', required: true, options: CANDIDATE_SOURCES.map((s) => ({ value: s, label: CANDIDATE_SOURCE_LABELS[s] })) },
     { name: 'referredByEmployeeId', label: 'Referred by', type: 'select', options: d.employees ?? [], showIf: (v) => v.source === 'REFERRAL' },
-    { name: 'currentCtcPaise', label: 'Current CTC (₹ a year)', type: 'money' },
-    { name: 'expectedCtcPaise', label: 'Expected CTC (₹ a year)', type: 'money' },
+    { name: 'currentCtcPaise', label: isUk() ? 'Current salary (₹ a year)' : 'Current CTC (₹ a year)', type: 'money' },
+    { name: 'expectedCtcPaise', label: isUk() ? 'Expected salary (₹ a year)' : 'Expected CTC (₹ a year)', type: 'money' },
     { name: 'noticePeriodDays', label: 'Notice period (days)', type: 'number' },
     { name: 'totalExpYears', label: 'Total experience (years)', type: 'number' },
     { name: 'location', label: 'Location', type: 'text', placeholder: 'Ahmedabad' },
@@ -167,7 +168,7 @@ function CandidateDrawer({ id, onClose }: { id: string; onClose: () => void }) {
       actions={
         c?.canManage ? (
           <>
-            <button className="btn btn-ghost" onClick={() => setDialog({ kind: 'anonymise' })}>Anonymise (DPDP)</button>
+            <button className="btn btn-ghost" onClick={() => setDialog({ kind: 'anonymise' })}>{isUk() ? 'Anonymise (UK GDPR)' : 'Anonymise (DPDP)'}</button>
             <button className="btn btn-secondary" onClick={() => setDialog({ kind: 'apply' })}>Add to another job</button>
             <button className="btn btn-primary" onClick={onClose}>Done</button>
           </>
@@ -291,7 +292,7 @@ function CandidateDrawer({ id, onClose }: { id: string; onClose: () => void }) {
       {c && dialog?.kind === 'anonymise' && (
         <ConfirmDialog
           title={`Anonymise ${c.fullName}?`}
-          body="Name, email, phone and resume are erased on the candidate's request (DPDP). Scores and pipeline counts are kept. This cannot be undone."
+          body={`Name, email, phone and resume are erased on the candidate's request (${isUk() ? 'UK GDPR' : 'DPDP'}). Scores and pipeline counts are kept. This cannot be undone.`}
           confirmLabel="Anonymise"
           danger
           busy={anonymise.isPending}

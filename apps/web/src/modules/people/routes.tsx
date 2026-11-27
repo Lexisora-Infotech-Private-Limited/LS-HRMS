@@ -18,6 +18,7 @@ const WelcomeKitsPage = lazy(() => import('./pages/WelcomeKitsPage'));
 const IdCardPage = lazy(() => import('./pages/IdCardPage'));
 const VisitingCardPage = lazy(() => import('./pages/VisitingCardPage'));
 const VisitingCardDesignerPage = lazy(() => import('./pages/VisitingCardDesignerPage'));
+const RightToWorkPage = lazy(() => import('./pages/RightToWorkPage'));
 
 const s = (el: ReactNode) => <Suspense fallback={<Loading />}>{el}</Suspense>;
 
@@ -30,6 +31,8 @@ export const routes: RouteObject[] = [
   { path: 'masters', element: guard('masters.manage', s(<MastersPage />)) },
   { path: 'onboarding', element: guard(['onboarding.self', 'onboarding.manage'], s(<OnboardingPage />)) },
   { path: 'vault', element: guard('vault.self', s(<VaultPage />)) },
+  // UK only (the nav item is shown for region GB; the page and API refuse other regions).
+  { path: 'right-to-work', element: guard('rtw.manage', s(<RightToWorkPage />)) },
   // Recruitment
   { path: 'jobs', element: guard('jobs.manage', s(<JobsPage />)) },
   { path: 'candidates', element: guard(['candidates.view', 'candidates.manage'], s(<CandidatesPage />)) },

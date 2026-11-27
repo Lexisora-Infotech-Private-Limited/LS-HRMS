@@ -1,3 +1,4 @@
+import { activeRegion } from '@lexisora/shared';
 import type { PayslipCanvas, PayslipDesign, PayslipDetail, PayslipTemplate } from '@lexisora/shared';
 import { PDF_COLORS, type Pdf, type PdfService } from '../../../core/pdf/pdf.service';
 import { periodLabel } from '../common/dates';
@@ -7,7 +8,7 @@ import { renderBlocks } from './payslip-blocks';
 import { renderCanvas } from './payslip-canvas';
 
 /** "Rs. 78,420.00" — built-in PDF fonts have no ₹ glyph. */
-export const pdfMoney = (paise: number) => `Rs. ${(paise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+export const pdfMoney = (paise: number) => (activeRegion() === 'GB' ? `£${(paise / 100).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : `Rs. ${(paise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
 
 /** Mix a #rrggbb colour with white (ratio 0 = the colour, 1 = white). */
 export function tint(hex: string, ratio: number): string {

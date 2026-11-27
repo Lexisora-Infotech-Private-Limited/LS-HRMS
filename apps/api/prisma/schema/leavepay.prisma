@@ -434,6 +434,8 @@ model EmployeePayrollProfile {
   /// BANK_TRANSFER | CHEQUE | CASH
   paymentMode         String         @default("BANK_TRANSFER")
   bankVerified        Boolean        @default(true)
+  /// UK tenants only: PAYE / NI / student loan / pension settings (validated by ukPayrollProfileSchema).
+  ukProfile           Json?
   updatedAt           DateTime       @updatedAt
 
   @@index([tenantId])
@@ -539,6 +541,8 @@ model PayrollItem {
   roundingPaise          Int               @default(0)
   netPaise               Int               @default(0)
   taxableMonthlyPaise    Int               @default(0)
+  /// UK tenants only: {taxCode, niCategory, niEe, niEr, pensionEe, pensionEr, studentLoan, postgradLoan, statutoryPay, taxablePayYtd, taxYtd, niablePay, ...} in pence.
+  ukStatutory            Json?
   trace                  Json              @default("[]")
   errors                 Json              @default("[]")
   holdReason             String?

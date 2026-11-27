@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { paginationQuery, type Paginated } from '../api';
+import { activeCurrency, formatGBPCompact } from '../region';
 
 /**
  * Finance domain contracts: GST invoices, purchases & input GST, double-entry ledger,
@@ -105,6 +106,7 @@ export function finMonthLabel(month: string): string {
 
 /** KPI money: ₹ 42.6 L / ₹ 1.84 L / ₹ 28,140. */
 export function formatINRKpi(paise: number): string {
+  if (activeCurrency() === 'GBP') return formatGBPCompact(paise);
   const r = paise / 100;
   const a = Math.abs(r);
   const sign = r < 0 ? '- ' : '';
@@ -187,6 +189,28 @@ export const finCreateAccountSchema = z.object({
 });
 export const finUpdateAccountSchema = z.object({ name: z.string().trim().min(2).max(120).optional(), isActive: z.boolean().optional() });
 export const lockBooksSchema = z.object({ upTo: finDateKey });
+/** PATCH /ledger/settings: bank details on invoices (UK uses sortCode / iban), signatory, default terms. */
+export const financeSettingsSchema = z.object({
+  defaultPaymentTermsDays: z.number().int().min(0).max(180).optional(),
+  signatory: z.string().trim().max(120).optional(),
+  bank: z
+    .object({
+      bankName: z.string().trim().max(80).optional(),
+      accountName: z.string().trim().max(120).optional(),
+      accountNo: z.string().trim().max(34).optional(),
+      ifsc: z.string().trim().max(11).optional(),
+      branch: z.string().trim().max(80).optional(),
+      upiId: z.string().trim().max(80).optional(),
+      sortCode: z
+        .string()
+        .trim()
+        .transform((s) => s.replace(/[\s-]/g, ''))
+        .refine((s) => s === '' || /^\d{6}$/.test(s), 'Sort code is 6 digits, e.g. 20-00-00')
+        .optional(),
+      iban: z.string().trim().toUpperCase().max(34).optional(),
+    })
+    .optional(),
+});
 
 export type FinAccountRow = {
   id: string;
@@ -305,6 +329,8 @@ const finInvoiceBody = z.object({
   emailTo: z.array(z.string().trim().email('Enter valid email addresses')).max(10).default([]),
   emailCc: z.array(z.string().trim().email()).max(10).default([]),
   notes: optStr,
+  /** UK (GB) tenants only: VAT rate picked on the invoice (ignored for India). Default 20% standard. */
+  vatTreatment: z.enum(['STANDARD', 'REDUCED', 'ZERO', 'EXEMPT']).optional().nullable(),
 });
 export const finCreateInvoiceSchema = finInvoiceBody.extend({ action: z.enum(['draft', 'issue', 'issue_and_email']).default('issue_and_email') });
 export type FinCreateInvoiceInput = z.infer<typeof finCreateInvoiceSchema>;
@@ -377,6 +403,9 @@ export type FinInvoiceDetail = FinInvoiceRow & {
   salesVoucher: { id: string; number: string } | null;
   hasPdf: boolean;
   filingDocumentId: string | null;
+  /** UK (GB) only: VAT treatment (STANDARD, REDUCED, ZERO, EXEMPT, OUTSIDE_SCOPE, NOT_REGISTERED) and invoice note. */
+  vatTreatment?: string | null;
+  vatNote?: string | null;
 };
 export type FinInvoiceList = Paginated<FinInvoiceRow> & { counts: Record<(typeof finInvoiceTabs)[number], number> };
 export type FinInvoicePreview = {
@@ -393,10 +422,15 @@ export type FinInvoicePreview = {
   paymentTermsDays: number;
   tax: FinInvoiceTax;
   guidance: string | null;
+  /** UK (GB) only. */
+  vatTreatment?: string | null;
+  vatNote?: string | null;
 };
 export type FinInvoiceFormOptions = {
   sellerStateCode: string | null;
-  clients: { id: string; name: string; stateCode: string | null; gstin: string | null; billingEmails: string[]; defaultRatePaise: number | null; paymentTermsDays: number }[];
+  /** UK (GB) only: the company has a VAT number (otherwise invoices carry no VAT). */
+  vatRegistered?: boolean;
+  clients: { id: string; name: string; stateCode: string | null; gstin: string | null; billingEmails: string[]; defaultRatePaise: number | null; paymentTermsDays: number; countryCode?: string | null }[];
   /** `unbilled`: months (newest first, last 6) with approved billable hours not yet on an invoice. */
   projects: { id: string; clientId: string; name: string; ratePaise: number | null; status: string; unbilled: { period: string; minutes: number }[] }[];
   periods: { value: string; label: string }[];
@@ -576,7 +610,9 @@ export type FilingFolderDetail = {
 };
 
 // ── Compliance calendar & GST returns ──────────────────────────────────────
-export const FIN_COMPLIANCE_FORMS = ['GSTR1', 'GSTR3B', 'TDS_DEPOSIT', 'PF_ECR', 'PT', 'TDS_RETURN', 'ADVANCE_TAX', 'TAX_AUDIT', 'ITR', 'GSTR9'] as const;
+/** UK (GB) obligations: VAT, PAYE/RTI, employer year end, corporation tax, Companies House. */
+export const FIN_UK_COMPLIANCE_FORMS = ['VAT_RETURN', 'PAYE_PAYMENT', 'FPS', 'EPS', 'P60', 'P11D', 'CLASS_1A', 'CT_PAYMENT', 'CT600', 'CONFIRMATION_STATEMENT', 'ANNUAL_ACCOUNTS'] as const;
+export const FIN_COMPLIANCE_FORMS = ['GSTR1', 'GSTR3B', 'TDS_DEPOSIT', 'PF_ECR', 'PT', 'TDS_RETURN', 'ADVANCE_TAX', 'TAX_AUDIT', 'ITR', 'GSTR9', ...FIN_UK_COMPLIANCE_FORMS] as const;
 export type FinComplianceForm = (typeof FIN_COMPLIANCE_FORMS)[number];
 export type FinComplianceItem = {
   key: string;

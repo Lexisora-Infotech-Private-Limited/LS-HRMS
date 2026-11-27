@@ -1,7 +1,22 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { EMPLOYMENT_TYPE_LABEL, LEAVE_STATUS_LABEL, LEAVE_STATUS_TONE, holidayLocationsOverlap, type CreditRuleRow, type HolidayRow, type LeaveRequestRow, type LeaveTypeRow, type ManualCreditRow } from '@lexisora/shared';
-import { useCan } from '@/lib/auth';
+import {
+  EMPLOYMENT_TYPE_LABEL,
+  LEAVE_STATUS_LABEL,
+  LEAVE_STATUS_TONE,
+  UK_HOLIDAY_CALENDARS,
+  UK_MAX_CARRY_FORWARD_DAYS,
+  UK_STATUTORY_HOLIDAY_DAYS,
+  holidayLocationsOverlap,
+  isUk,
+  regionText,
+  type CreditRuleRow,
+  type HolidayRow,
+  type LeaveRequestRow,
+  type LeaveTypeRow,
+  type ManualCreditRow,
+} from '@lexisora/shared';
+import { useCan, useMe } from '@/lib/auth';
 import { useAction } from '@/lib/query';
 import { FormModal, type FieldDef } from '@/components/form';
 import { useLookups, opts } from '@/components/lookups';
@@ -19,7 +34,8 @@ export default function LeaveSetupPage() {
   // Roles & access can grant "Add & edit holidays" without the rest of leave setup.
   const leaveAdmin = can('leave.manage');
   const [tab, setTab] = useState<Tab>(leaveAdmin ? 'types' : 'holidays');
-  const [form, setForm] = useState<'credit' | 'type' | LeaveTypeRow | null>(null);
+  const [form, setForm] = useState<'credit' | 'type' | 'ukPack' | LeaveTypeRow | null>(null);
+  const uk = isUk(useMe().region);
   if (!leaveAdmin) {
     return (
       <div data-screen-label="Holidays" className="stack" style={{ gap: 18 }}>
@@ -31,10 +47,11 @@ export default function LeaveSetupPage() {
   return (
     <div data-screen-label="Leave setup" className="stack" style={{ gap: 18 }}>
       <PageHeader
-        title="Leave setup"
-        sub="Leave types, annual credit rules, manual credits and holidays."
+        title={regionText('Leave setup')}
+        sub={uk ? 'Holiday and absence types, annual leave credits, manual credits and bank holidays.' : 'Leave types, annual credit rules, manual credits and holidays.'}
         actions={
           <>
+            {uk && <button className="btn btn-secondary" onClick={() => setForm('ukPack')}>Add UK holiday & absence pack</button>}
             <button className="btn btn-secondary" onClick={() => setForm('type')}>Add leave type</button>
             <button className="btn btn-primary" onClick={() => setForm('credit')}>Credit leave</button>
           </>
@@ -51,12 +68,14 @@ export default function LeaveSetupPage() {
         value={tab}
         onChange={setTab}
       />
+      {tab === 'types' && uk && <UkAnnualLeaveWarning />}
       {tab === 'types' && <TypesTab onEdit={(t) => setForm(t)} />}
       {tab === 'basic' && <BasicTab />}
       {tab === 'manual' && <ManualTab />}
       {tab === 'requests' && <RequestsTab />}
       {tab === 'holidays' && <HolidaysTab />}
       {form === 'credit' && <CreditForm onClose={() => setForm(null)} />}
+      {form === 'ukPack' && <UkPackForm onClose={() => setForm(null)} />}
       {(form === 'type' || (form && typeof form === 'object')) && <TypeForm row={typeof form === 'object' ? form : null} onClose={() => setForm(null)} />}
     </div>
   );
@@ -67,9 +86,11 @@ function TypesTab({ onEdit }: { onEdit: (t: LeaveTypeRow) => void }) {
   const [removing, setRemoving] = useState<LeaveTypeRow | null>(null);
   const toggle = useAction((t: LeaveTypeRow) => lpApi.updateType(t.id, { active: !t.active }), { success: (r) => `${r.name} ${r.active ? 'activated' : 'deactivated'}`, invalidate: [LEAVE_ALL, ['lookups']] });
   const remove = useAction((t: LeaveTypeRow) => lpApi.deleteType(t.id), { success: 'Leave type deleted', invalidate: [LEAVE_ALL, ['lookups']], onSuccess: () => setRemoving(null) });
+  const uk = isUk(useMe().region);
   const cols: Column<LeaveTypeRow>[] = [
-    { key: 'n', header: 'Leave type', render: (t) => <div><div>{t.name} {!t.active && <Tag>Inactive</Tag>} {t.hidden && <Tag>HR only</Tag>}</div><div className="faint" style={{ fontSize: 11.5 }}>{t.code}{t.isPaid ? '' : ' · unpaid'}{t.allowHalfDay ? ' · half day' : ''}{t.sandwichWeeklyOffs ? ' · sandwich' : ''}{t.minNoticeDays ? ` · ${t.minNoticeDays}d notice` : ''}</div></div> },
-    { key: 'q', header: 'Annual quota', render: (t) => t.quotaLabel },
+    { key: 'n', header: 'Leave type', render: (t) => <div><div>{t.name} {!t.active && <Tag>Inactive</Tag>} {t.hidden && <Tag>HR only</Tag>}</div><div className="faint" style={{ fontSize: 11.5 }}>{t.code}{t.isPaid ? '' : ' · unpaid'}{t.allowHalfDay ? ' · half day' : ''}{t.sandwichWeeklyOffs ? ' · sandwich' : ''}{t.minNoticeDays ? ` · ${t.minNoticeDays}d notice` : ''}{uk && t.maxConsecutiveDays ? ` · max ${fmtDays(t.maxConsecutiveDays)} days` : ''}</div></div> },
+    // UK unpaid absence types (sickness, maternity…) have no quota: their days are unpaid and never blocked.
+    { key: 'q', header: 'Annual quota', render: (t) => (uk && !t.isPaid && t.accrualFrequency === 'NONE' && !t.annualQuota ? 'No limit' : t.quotaLabel) },
     { key: 'c', header: 'Carry forward', render: (t) => t.carryForwardLabel },
     { key: 'e', header: 'Encashable', render: (t) => (t.encashable ? 'Yes' : 'No') },
     { key: 'a', header: 'Applies to', render: (t) => t.appliesToLabel },
@@ -91,6 +112,51 @@ function TypesTab({ onEdit }: { onEdit: (t: LeaveTypeRow) => void }) {
       <DataTable columns={cols} rows={q.data} loading={q.isLoading} rowKey={(t) => t.id} onRowClick={onEdit} empty="No leave types yet — add one." />
       {removing && <ConfirmDialog title={`Delete ${removing.name}?`} body="It has no balances or requests yet, so it can be removed completely." confirmLabel="Delete" danger busy={remove.isPending} onConfirm={() => remove.mutate(removing)} onClose={() => setRemoving(null)} />}
     </>
+  );
+}
+
+/** UK: annual leave + bank holidays must reach 5.6 weeks (28 days) for full-time staff. */
+function UkAnnualLeaveWarning() {
+  const year = Number(currentPeriod().slice(0, 4));
+  const q = useQuery({ queryKey: lpKeys.ukCheck(year), queryFn: () => lpApi.ukAnnualLeaveCheck(year), retry: false });
+  if (!q.data || q.data.ok || !q.data.message) return null;
+  return (
+    <div className="note" role="alert" style={{ borderColor: 'var(--color-danger)', color: 'var(--color-danger)' }}>
+      <strong>5.6-week rule ({year}):</strong> {q.data.message}
+    </div>
+  );
+}
+
+function UkPackForm({ onClose }: { onClose: () => void }) {
+  const save = useAction((v: Record<string, any>) => lpApi.addUkPack({ annualLeaveDays: Number(v.annualLeaveDays), carryForwardDays: Number(v.carryForwardDays ?? 0) }), {
+    success: (r) => r.message + (r.check.message ? ` ${r.check.message}` : ''),
+    invalidate: [LEAVE_ALL, ['lookups']],
+  });
+  const fields: FieldDef[] = [
+    { name: 'annualLeaveDays', label: 'Annual leave days (full-time)', type: 'number', required: true, min: 20, max: 60, hint: `On top of bank holidays. 20 + 8 bank holidays = ${UK_STATUTORY_HOLIDAY_DAYS} days, the legal minimum (5.6 weeks).` },
+    { name: 'carryForwardDays', label: 'Carry forward to next year (days)', type: 'number', min: 0, max: UK_MAX_CARRY_FORWARD_DAYS, hint: `0 = use it or lose it. At most ${UK_MAX_CARRY_FORWARD_DAYS} days (the extra 1.6 weeks).` },
+  ];
+  return (
+    <FormModal
+      title="Add UK holiday & absence pack"
+      intro={
+        <div className="stack" style={{ gap: 6 }}>
+          <div>Adds annual leave (AL) and the UK absence types: sickness, maternity, paternity, shared parental, adoption, neonatal care, parental bereavement, carer&apos;s leave, unpaid parental leave, time off for dependants, jury service and time off in lieu.</div>
+          <div className="faint">Statutory pay (SSP, SMP, SPP, ShPP, SAP, SPBP, SNCP) is added by payroll, so those absences are unpaid as salary. Types that already exist are skipped, so adding the pack twice is safe.</div>
+        </div>
+      }
+      fields={fields}
+      initial={{ annualLeaveDays: 20, carryForwardDays: 0 }}
+      submitLabel="Add pack"
+      onSubmit={(v) => {
+        const al = Number(v.annualLeaveDays);
+        const cf = Number(v.carryForwardDays ?? 0);
+        if (!(al >= 20 && al <= 60)) throw new Error('Annual leave must be 20–60 days');
+        if (!(cf >= 0 && cf <= UK_MAX_CARRY_FORWARD_DAYS)) throw new Error(`Carry forward must be 0–${UK_MAX_CARRY_FORWARD_DAYS} days`);
+        return save.mutateAsync(v);
+      }}
+      onClose={onClose}
+    />
   );
 }
 
@@ -275,6 +341,7 @@ const HOLIDAY_TYPES = [
 function HolidaysTab() {
   const can = useCan();
   const manage = can('holidays.manage');
+  const uk = isUk(useMe().region);
   const thisYear = Number(currentPeriod().slice(0, 4));
   const [year, setYear] = useState(thisYear);
   const [form, setForm] = useState<'add' | HolidayRow | null>(null);
@@ -365,7 +432,11 @@ function HolidaysTab() {
       {tool === 'copy' && (
         <ConfirmDialog
           title={`Copy ${year - 1} holidays to ${year}?`}
-          body={`Every ${year - 1} holiday is added on the same date in ${year}. Holidays already on the ${year} calendar are skipped. Festivals that move every year (Diwali, Holi, Eid…) need their dates corrected afterwards.`}
+          body={
+            uk
+              ? `Every ${year - 1} holiday is added on the same date in ${year}. Holidays already on the ${year} calendar are skipped. Bank holidays move every year (Easter, substitute days) — use Import list for the UK bank holidays instead.`
+              : `Every ${year - 1} holiday is added on the same date in ${year}. Holidays already on the ${year} calendar are skipped. Festivals that move every year (Diwali, Holi, Eid…) need their dates corrected afterwards.`
+          }
           confirmLabel="Copy holidays"
           busy={copy.isPending}
           onConfirm={() => copy.mutate(year)}
@@ -420,16 +491,25 @@ function HolidayForm({ row, onClose }: { row: HolidayRow | null; onClose: () => 
 }
 
 function HolidayImportForm({ year, onClose }: { year: number; onClose: () => void }) {
+  const uk = isUk(useMe().region);
   const run = useAction((v: { calendar: HolidayCalendar }) => lpApi.importHolidays({ year, calendar: v.calendar }), {
     success: (r) =>
-      (r.count ? `${r.count} holidays imported` : 'Every holiday in that list is already on the calendar') + (r.skipped && r.count ? ` · ${r.skipped} skipped (that date already has a holiday)` : ''),
+      (r.count ? `${r.count} ${uk ? 'bank ' : ''}holidays imported` : 'Every holiday in that list is already on the calendar') +
+      (r.skipped && r.count ? ` · ${r.skipped} skipped (that date already has a holiday)` : '') +
+      (uk && r.message ? ` · ${r.message}` : ''),
     invalidate: HOLIDAY_DEPENDENTS,
   });
-  const fields: FieldDef[] = [{ name: 'calendar', label: 'Holiday list', type: 'select', span: 2, required: true, options: HOLIDAY_CALENDARS.map((c) => ({ value: c, label: c === 'National' ? 'National (all India)' : `${c} (national + state)` })) }];
+  const fields: FieldDef[] = uk
+    ? [{ name: 'calendar', label: 'Bank holiday list', type: 'select', span: 2, required: true, options: UK_HOLIDAY_CALENDARS.map((c) => ({ value: c, label: c })) }]
+    : [{ name: 'calendar', label: 'Holiday list', type: 'select', span: 2, required: true, options: HOLIDAY_CALENDARS.map((c) => ({ value: c, label: c === 'National' ? 'National (all India)' : `${c} (national + state)` })) }];
   return (
     <FormModal
-      title={`Import ${year} holidays`}
-      intro="Adds the built-in list for the year. Holidays already on the calendar are skipped, so importing twice is safe."
+      title={uk ? `Import ${year} UK bank holidays` : `Import ${year} holidays`}
+      intro={
+        uk
+          ? "Adds the GOV.UK bank holidays for the year, with substitute days. They apply to the work locations set to that nation (Work locations → nation); if no location has a nation yet they apply to every location. Dates that already have a holiday are skipped, so importing twice is safe."
+          : 'Adds the built-in list for the year. Holidays already on the calendar are skipped, so importing twice is safe.'
+      }
       fields={fields}
       submitLabel="Import"
       onSubmit={(v) => run.mutateAsync(v as { calendar: HolidayCalendar })}

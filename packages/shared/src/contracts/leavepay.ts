@@ -687,6 +687,18 @@ export type PayslipDetail = PayslipRow & {
   totalDeductionsPaise: number;
   netInWords: string;
   ytd: { grossPaise: number; tdsPaise: number; pfPaise: number };
+  /** UK tenants only: PAYE details and tax-year-to-date figures (pence). */
+  uk?: {
+    niNumberMasked: string;
+    taxCode: string;
+    taxBasis: 'CUMULATIVE' | 'NON_CUMULATIVE';
+    niCategory: string;
+    sortCode: string;
+    taxYearLabel: string;
+    ytd: { taxablePayPence: number; taxPence: number; niEmployeePence: number; pensionEmployeePence: number; studentLoanPence: number };
+    employerNiPence: number;
+    employerPensionPence: number;
+  } | null;
 };
 
 export const payslipListQuery = z.object({ fy: z.string().regex(/^\d{4}-\d{2}$/).optional() });

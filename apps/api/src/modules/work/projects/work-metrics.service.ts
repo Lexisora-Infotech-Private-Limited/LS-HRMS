@@ -6,6 +6,7 @@ import { NotificationsService } from '../../../core/notifications/notifications.
 import { currentTenantId, runAsTenant } from '../../../core/context/request-context';
 import { computeHealth, computeProgress, crossedEstimate, type ProjectStatus, type TaskStatus } from '../work.rules';
 import { todayDate } from '../work.util';
+import { tenantsForCron } from '../../../core/region/region-cache';
 
 type Delegate = { findMany: (args: any) => Promise<any[]> } | undefined;
 type BillableSource = ProjectKpis['billableSource'];
@@ -197,7 +198,7 @@ export class WorkMetricsService {
   /** Nightly 02:00 IST: logged minutes, progress and health for every tenant. */
   @Cron('0 2 * * *', { timeZone: 'Asia/Kolkata' })
   async nightly() {
-    const tenants = await this.prisma.raw.tenant.findMany({ select: { id: true } });
+    const tenants = tenantsForCron(await this.prisma.raw.tenant.findMany({ select: { id: true } }));
     for (const t of tenants) {
       await runAsTenant(t.id, () => this.recomputeTenant()).catch((e) => this.log.error(`nightly ${t.id}: ${(e as Error).message}`));
     }

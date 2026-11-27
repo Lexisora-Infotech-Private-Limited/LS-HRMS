@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { HALF_DAY_OPTIONS, LEAVE_ATTACHMENT_ACCEPT, LEAVE_ATTACHMENT_MAX_BYTES, LEAVE_STATUS_TONE, type CompOffRow, type LeaveApplyInput, type LeaveRequestRow, type TeamRequestRow } from '@lexisora/shared';
+import { HALF_DAY_OPTIONS, LEAVE_ATTACHMENT_ACCEPT, LEAVE_ATTACHMENT_MAX_BYTES, LEAVE_STATUS_TONE, type CompOffRow, type LeaveApplyInput, type LeaveRequestRow, type TeamRequestRow, zoneOffsetMinutes } from '@lexisora/shared';
 import { uploadFile } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { useAction } from '@/lib/query';
@@ -211,7 +211,7 @@ const LEAVE_DOC_TYPES = LEAVE_ATTACHMENT_ACCEPT.split(',');
 /** The picked supporting document: uploaded as soon as it is chosen, so the preview and Submit know it's there. */
 type PickedDoc = { file: File; id: string | null; uploading: boolean; error: string | null };
 
-const istToday = () => new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10);
+const istToday = () => new Date(Date.now() + zoneOffsetMinutes(new Date()) * 60_000).toISOString().slice(0, 10);
 const addDaysKey = (key: string, n: number) => new Date(new Date(`${key}T00:00:00Z`).getTime() + n * 86_400_000).toISOString().slice(0, 10);
 
 function ApplyModal({ onClose }: { onClose: () => void }) {

@@ -11,12 +11,16 @@ import {
   gstr3bQuery,
   purchaseKpiQuery,
   purchaseListQuery,
+  ukCreatePurchaseSchema,
+  ukCreateVendorSchema,
+  ukVatReturnQuery,
   type CreatePurchaseInput,
 } from '@lexisora/shared';
 import { RequirePerm } from '../../core/auth/decorators';
 import { ZodPipe } from '../../core/http/zod.pipe';
 import { PurchaseService } from './purchase.service';
 import { sendBytes } from './ledger.controller';
+import { RegionZodPipe } from './region-pipe';
 
 /** Purchases & input GST (spec-workfin Module H) — admin (`purchases.manage`). */
 @Controller('purchases')
@@ -50,7 +54,7 @@ export class PurchasesController {
 
   @Post()
   @RequirePerm('purchases.manage')
-  create(@Body(new ZodPipe(createPurchaseSchema)) dto: CreatePurchaseInput) {
+  create(@Body(new RegionZodPipe(createPurchaseSchema, ukCreatePurchaseSchema)) dto: CreatePurchaseInput) {
     return this.purchases.create(dto);
   }
 
@@ -72,6 +76,27 @@ export class PurchasesController {
   @RequirePerm('purchases.manage', 'filing.manage')
   fileGstr3b(@Body(new ZodPipe(gstr3bQuery)) dto: z.infer<typeof gstr3bQuery>) {
     return this.purchases.fileGstr3b(dto.month);
+  }
+
+  /** UK (GB): HMRC VAT return (9 boxes) for the quarter ending `period` (YYYY-MM). */
+  @Get('vat-return')
+  @RequirePerm('purchases.manage', 'filing.manage')
+  vatReturn(@Query(new ZodPipe(ukVatReturnQuery)) q: z.infer<typeof ukVatReturnQuery>) {
+    return this.purchases.vatReturn(q.period);
+  }
+
+  @Get('vat-return/csv')
+  @RequirePerm('purchases.manage', 'filing.manage')
+  async vatReturnCsv(@Query(new ZodPipe(ukVatReturnQuery)) q: z.infer<typeof ukVatReturnQuery>, @Res() res: Response) {
+    const f = await this.purchases.vatReturnCsv(q.period);
+    sendBytes(res, `﻿${f.csv}`, f.filename, 'text/csv; charset=utf-8');
+  }
+
+  /** Save the VAT return working PDF into Filing cabinet › VAT returns. */
+  @Post('vat-return/file')
+  @RequirePerm('purchases.manage', 'filing.manage')
+  fileVatReturn(@Body(new ZodPipe(ukVatReturnQuery)) dto: z.infer<typeof ukVatReturnQuery>) {
+    return this.purchases.fileVatReturn(dto.period);
   }
 
   @Get('categories')
@@ -116,12 +141,12 @@ export class VendorsController {
   }
 
   @Post()
-  create(@Body(new ZodPipe(finCreateVendorSchema)) dto: z.infer<typeof finCreateVendorSchema>) {
+  create(@Body(new RegionZodPipe(finCreateVendorSchema, ukCreateVendorSchema)) dto: z.infer<typeof finCreateVendorSchema>) {
     return this.purchases.createVendor(dto);
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body(new ZodPipe(finCreateVendorSchema)) dto: z.infer<typeof finCreateVendorSchema>) {
+  update(@Param('id') id: string, @Body(new RegionZodPipe(finCreateVendorSchema, ukCreateVendorSchema)) dto: z.infer<typeof finCreateVendorSchema>) {
     return this.purchases.updateVendor(id, dto);
   }
 }

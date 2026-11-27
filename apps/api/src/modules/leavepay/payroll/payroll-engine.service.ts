@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import type { EsiSettings, PfSettings } from '@lexisora/shared';
-import type { PayrollItemStatus, Prisma } from '@prisma/client';
+import { taxMonthOfPeriod, taxYearStartOfPeriod, UK_STATUTORY_PAY_BY_LEAVE, ukPayrollProfileSchema, type EsiSettings, type PfSettings, type UkStatutory } from '@lexisora/shared';
+import { Prisma, type PayrollItemStatus } from '@prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { SettingsService } from '../../../core/settings/settings.service';
 import { currentTenantId } from '../../../core/context/request-context';
@@ -13,6 +13,13 @@ import { NOT_EMPTY_DRAFT } from '../../time/lib/timesheet-calc';
 import { calculateItem, type CalcAdjustment, type CalcResult } from './payroll-calc';
 import { classifyDays, GATE_OK, latePenaltyLabel, latePenaltySplit, NO_LATE_PENALTY, timesheetGate, type AttendanceOnDay, type DayClassResult, type LatePenalty, type LeaveOnDay } from './payroll-days';
 import { SalaryService, resolveProfile } from './salary.service';
+import { currentRegion } from '../../../core/region/region-cache';
+import { calculateItemUk, type UkCalcResult } from './uk/uk-calc';
+import { ukRatesFor } from './uk/uk-rates';
+import type { StatutoryDay } from './uk/uk-statutory';
+
+/** Setting key: tenant overrides of the UK rates table, `{ "2026": { ...partial UkRates } }`. */
+export const UK_RATES_SETTING = 'payroll.uk.rates';
 
 export type EngineOptions = { period: string; lockDate: DateKey; includeIdle: boolean; employeeIds?: string[]; today?: DateKey };
 
@@ -37,6 +44,8 @@ export type EngineRow = {
   idleAllowance: number;
   shiftNetMinutes: number;
   result: CalcResult | null;
+  /** UK tenants: statutory breakdown stored on the item. */
+  ukStatutory?: UkStatutory | null;
   errors: string[];
   holdReason: string | null;
   adjustmentIds: string[];
@@ -101,7 +110,7 @@ export class PayrollEngineService {
     const [salaries, calendars, leaveRows, attRows, trackerRows, policies, sheets, adjustments] = await Promise.all([
       this.salary.effectiveOn(ids, b.end),
       this.calendar.forEmployees(ids, b.start, b.end),
-      this.prisma.leaveRequestDay.findMany({ where: { employeeId: { in: ids }, active: true, date: { gte: dd(b.start), lte: dd(b.end) }, dayKind: 'WORKING' }, include: { request: { select: { leaveType: { select: { code: true } } } } } }),
+      this.prisma.leaveRequestDay.findMany({ where: { employeeId: { in: ids }, active: true, date: { gte: dd(b.start), lte: dd(b.end) }, dayKind: 'WORKING' }, include: { request: { select: { fromDate: true, leaveType: { select: { code: true } } } } } }),
       this.prisma.attendanceDay.findMany({ where: { employeeId: { in: ids }, date: { gte: dd(b.start), lte: dd(lock) } }, select: { employeeId: true, date: true, status: true, presentFraction: true, idleDeductibleMinutes: true, isLate: true, lateExcused: true, lateHalfDay: true } }),
       this.prisma.trackerDaySummary.findMany({ where: { employeeId: { in: ids }, workDate: { gte: dd(b.start), lte: dd(lock) } }, select: { employeeId: true, idleDeductedSec: true } }),
       this.prisma.attendancePolicy.findMany(),
@@ -114,8 +123,12 @@ export class PayrollEngineService {
     const prior = fyPriorPeriods(opts.period);
     const priorRuns = prior.length ? await this.prisma.payrollRun.findMany({ where: { period: { in: prior }, status: { in: ['FINALIZED', 'PAID'] }, runType: 'REGULAR' }, select: { id: true, period: true } }) : [];
     const priorItems = priorRuns.length
-      ? await this.prisma.payrollItem.findMany({ where: { runId: { in: priorRuns.map((r) => r.id) }, employeeId: { in: ids }, status: { in: ['FINALIZED', 'PAID'] } }, select: { employeeId: true, runId: true, taxableMonthlyPaise: true, tdsPaise: true, pfEePaise: true, ptPaise: true } })
+      ? await this.prisma.payrollItem.findMany({ where: { runId: { in: priorRuns.map((r) => r.id) }, employeeId: { in: ids }, status: { in: ['FINALIZED', 'PAID'] } }, select: { employeeId: true, runId: true, taxableMonthlyPaise: true, tdsPaise: true, pfEePaise: true, ptPaise: true, ukStatutory: true } })
       : [];
+    // UK tenants: PAYE / NI / pension / statutory pay instead of PF / ESI / PT / TDS.
+    const uk = currentRegion() === 'GB';
+    const taxYear = taxYearStartOfPeriod(opts.period);
+    const ukRates = uk ? ukRatesFor(taxYear, await this.settings.get<unknown>(UK_RATES_SETTING, {})) : null;
     const runPeriod = new Map(priorRuns.map((r) => [r.id, r.period]));
 
     // Late-mark penalties come out of CL first, then LOP (spec-time B5).
@@ -165,7 +178,42 @@ export class PayrollEngineService {
       const adj: CalcAdjustment[] = adjustments.filter((a) => a.employeeId === e.id).map((a) => ({ id: a.id, type: a.type, label: `${ADJ_LABEL[a.type] ?? a.type}${a.reason ? ` · ${a.reason}` : ''}`.slice(0, 80), amountPaise: adjSigned(a.type, a.amountPaise), taxable: a.taxable, pfApplicable: a.pfApplicable, esiApplicable: a.esiApplicable }));
 
       let result: CalcResult | null = null;
-      if (!errors.length) {
+      let ukStatutory: UkStatutory | null = null;
+      const ukProfile = uk ? ukPayrollProfileSchema.safeParse(e.leavepayPayrollProfile?.ukProfile ?? null) : null;
+      if (uk && !ukProfile?.success) errors.push('UK payroll details missing: set the tax code and NI category');
+      if (uk && !errors.length) {
+        const statutoryDays: StatutoryDay[] = leaveRows
+          .filter((l) => l.employeeId === e.id && UK_STATUTORY_PAY_BY_LEAVE[l.request.leaveType.code])
+          .map((l) => ({ date: dk(l.date), code: UK_STATUTORY_PAY_BY_LEAVE[l.request.leaveType.code]!, units: l.units, absenceStart: dk(l.request.fromDate) }));
+        const ytdUk = mine.map((i) => (i.ukStatutory ?? null) as UkStatutory | null).filter((x): x is UkStatutory => !!x);
+        const r: UkCalcResult = calculateItemUk({
+          period: opts.period,
+          periodEnd: b.end,
+          taxYear,
+          taxMonth: taxMonthOfPeriod(opts.period),
+          structure,
+          customDeductions,
+          grossFixedPaise: sal!.grossMonthlyPaise,
+          days: { workingDays: days.workingDays, eligibleDays: days.eligibleDays, paidLeaveDays: days.paidLeaveDays, unpaidLeaveDays: days.unpaidLeaveDays, absentDays: days.absentDays, projectedDays: days.projectedDays, latePenaltyLopDays: late.lopDays },
+          profile: ukProfile!.data!,
+          dateOfBirth: e.dateOfBirth ? dk(e.dateOfBirth) : null,
+          // Only earlier UK runs count (a tenant switched from India keeps its rupee runs out of PAYE).
+          ytd: {
+            taxablePayPence: ytdUk.reduce((s, x) => s + x.taxablePayPence, 0),
+            taxPence: ytdUk.reduce((s, x) => s + x.taxPence, 0),
+            niablePayPence: ytdUk.reduce((s, x) => s + x.niablePayPence, 0),
+            niEmployeePence: ytdUk.reduce((s, x) => s + x.niEmployeePence, 0),
+            niEmployerPence: ytdUk.reduce((s, x) => s + x.niEmployerPence, 0),
+          },
+          statutoryDays,
+          shiftNetMinutes: cal.shiftNetMinutes,
+          adjustments: adj,
+          rates: ukRates!,
+        });
+        result = r;
+        ukStatutory = r.ukStatutory;
+        errors.push(...r.errors);
+      } else if (!uk && !errors.length) {
         result = calculateItem({
           period: opts.period,
           payType: sal!.payType,
@@ -215,6 +263,7 @@ export class PayrollEngineService {
         idleAllowance: allowance,
         shiftNetMinutes: cal.shiftNetMinutes,
         result,
+        ukStatutory: uk ? ukStatutory : undefined,
         errors,
         holdReason: prof.payrollHold ? (prof.holdReason ?? 'On hold') : null,
         adjustmentIds: adj.map((a) => a.id),
@@ -275,6 +324,8 @@ export class PayrollEngineService {
         errors: r.errors as unknown as Prisma.InputJsonValue,
         holdReason: r.holdReason,
         lastCalculatedAt: new Date(),
+        // UK tenants only; India items never touch the column.
+        ...(r.ukStatutory !== undefined ? { ukStatutory: r.ukStatutory ? (r.ukStatutory as unknown as Prisma.InputJsonValue) : Prisma.DbNull } : {}),
       };
       const item = await this.prisma.payrollItem.upsert({
         where: { runId_employeeId: { runId, employeeId: r.employeeId } },

@@ -1,7 +1,7 @@
-import { finGstLabel, finHoursLabel, finMonthLabel, finPlaceOfSupply } from '@lexisora/shared';
+import { finGstLabel, finHoursLabel, finMonthLabel, finPlaceOfSupply, formatSortCode, formatUkVatNumber, ukCountryName, ukVatAnalysis, ukVatLabel, type UkVatTreatment } from '@lexisora/shared';
 import QRCode from 'qrcode';
 import { PDF_COLORS, PdfService, type Pdf } from '../../core/pdf/pdf.service';
-import { amountInWords, dateKeyOf, pdfINR } from './lib/money';
+import { amountInWords, amountInWordsGBP, dateKeyOf, pdfGBP, pdfINR } from './lib/money';
 import type { FinanceSettings } from './ledger.service';
 
 export type InvoicePdfData = {
@@ -27,6 +27,8 @@ export type InvoicePdfData = {
   signatory: string;
   kind?: 'TAX INVOICE' | 'CREDIT NOTE';
   reference?: string;
+  /** UK (GB) tenants: render a UK VAT invoice instead of the GST tax invoice. */
+  uk?: { treatment: UkVatTreatment; note: string | null; buyerCountry: string | null };
 };
 
 const fmtDate = (d: Date | null) => (d ? new Date(`${dateKeyOf(d)}T00:00:00Z`).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '—');
@@ -34,6 +36,7 @@ const pdfText = (s: string) => s.replace(/₹\s?/g, 'Rs. ').replace(/[–—]/g,
 
 /** GST tax invoice (Rule 46): seller/buyer, place of supply, SAC table, tax split, words, bank + UPI QR. */
 export async function renderInvoicePdf(pdf: PdfService, d: InvoicePdfData): Promise<Buffer> {
+  if (d.uk) return renderUkInvoicePdf(pdf, d, d.uk);
   const upi = `upi://pay?pa=${encodeURIComponent(d.bank.upiId)}&pn=${encodeURIComponent(d.seller.legalName)}&am=${(d.totalPaise / 100).toFixed(2)}&cu=INR&tn=${encodeURIComponent(d.number ?? 'Invoice')}`;
   const qr = await QRCode.toBuffer(upi, { type: 'png', margin: 1, width: 180 });
   return pdf.render((doc: Pdf) => {
@@ -125,6 +128,129 @@ export async function renderInvoicePdf(pdf: PdfService, d: InvoicePdfData): Prom
     doc.moveDown(2.2);
     doc.text(pdfText(d.signatory), { width, align: 'right' });
     doc.font('Helvetica').fontSize(7.5).fillColor(PDF_COLORS.muted).text('Authorised signatory · This is a computer-generated invoice.', { width, align: 'right' });
+    if (d.status === 'DRAFT') {
+      doc.save().rotate(-30, { origin: [doc.page.width / 2, doc.page.height / 2] }).font('Helvetica-Bold').fontSize(90).fillColor('#b68235').opacity(0.08).text('DRAFT', 80, doc.page.height / 2 - 60).restore();
+    }
+  });
+}
+
+/** PDF-safe text for UK documents (keeps £, which the WinAnsi built-in fonts can draw). */
+const ukText = (s: string) => s.replace(/[–—]/g, '-').replace(/[‘’]/g, "'").replace(/[^\x20-\x7e\n£]/g, '');
+
+/**
+ * UK VAT invoice (HMRC full VAT invoice fields): invoice number, date (= tax point), supplier
+ * name, address and VAT number, customer name and address, description, hours × rate, net per
+ * line, VAT rate and amount per rate, totals in £, amount in words (pounds/pence) and bank
+ * details (sort code + account number). No SAC, place of supply or UPI. A seller without a VAT
+ * number gets a plain "Invoice" with no VAT.
+ */
+async function renderUkInvoicePdf(pdf: PdfService, d: InvoicePdfData, uk: NonNullable<InvoicePdfData['uk']>): Promise<Buffer> {
+  const registered = uk.treatment !== 'NOT_REGISTERED';
+  const credit = d.kind === 'CREDIT NOTE';
+  const title = credit ? 'Credit note' : registered ? 'VAT invoice' : 'Invoice';
+  const vat = d.cgstPaise + d.sgstPaise + d.igstPaise;
+  const rateLabel = ukVatLabel(uk.treatment, d.gstRateBp);
+  return pdf.render((doc: Pdf) => {
+    const left = doc.page.margins.left;
+    const width = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+    pdf.header(doc, ukText(d.seller.legalName), title);
+    const topY = doc.y;
+    doc.font('Helvetica').fontSize(9).fillColor(PDF_COLORS.muted);
+    doc.text(ukText(d.seller.address || ' '), left, topY, { width: width * 0.55 });
+    if (registered && d.seller.gstin) doc.text(`VAT registration no.: ${formatUkVatNumber(d.seller.gstin)}`, { width: width * 0.55 });
+    if (d.seller.phone || d.seller.email) doc.text(ukText([d.seller.phone, d.seller.email].filter(Boolean).join(' · ')), { width: width * 0.55 });
+    const sellerBottom = doc.y;
+    const rx = left + width * 0.6;
+    doc.fillColor(PDF_COLORS.ink).font('Helvetica-Bold').fontSize(11).text(d.number ?? 'DRAFT', rx, topY, { width: width * 0.4, align: 'right' });
+    doc.font('Helvetica').fontSize(9).fillColor(PDF_COLORS.muted);
+    const meta: [string, string][] = [
+      [credit ? 'Credit note date' : 'Invoice date (tax point)', fmtDate(d.invoiceDate)],
+      ...(credit ? ([['Against invoice', d.reference ?? '—']] as [string, string][]) : ([['Due date', fmtDate(d.dueDate)]] as [string, string][])),
+      ['Billing period', finMonthLabel(d.period)],
+    ];
+    for (const [k, v] of meta) doc.text(ukText(`${k}: ${v}`), rx, doc.y, { width: width * 0.4, align: 'right' });
+    doc.y = Math.max(sellerBottom, doc.y) + 14;
+
+    // Customer
+    doc.x = left;
+    const overseas = !!uk.buyerCountry && uk.buyerCountry !== 'GB';
+    doc.font('Helvetica').fontSize(8).fillColor(PDF_COLORS.accent).text('BILL TO', left, doc.y, { characterSpacing: 1.2 });
+    doc.font('Helvetica-Bold').fontSize(11).fillColor(PDF_COLORS.ink).text(ukText(d.buyer.name));
+    doc.font('Helvetica').fontSize(9).fillColor(PDF_COLORS.muted);
+    if (d.buyer.address) doc.text(ukText(d.buyer.address), { width: width * 0.6 });
+    if (overseas) doc.text(ukText(ukCountryName(uk.buyerCountry)));
+    if (d.buyer.gstin) doc.text(`VAT no.: ${overseas ? ukText(d.buyer.gstin) : formatUkVatNumber(d.buyer.gstin)}`);
+    doc.moveDown(1);
+
+    // Lines
+    const head = registered ? ['Description', 'Hours', 'Rate', 'Net', 'VAT rate', 'VAT', 'Total'] : ['Description', 'Hours', 'Rate', 'Amount'];
+    const rows = d.lines.map((l) => {
+      const lineVat = l.cgstPaise + l.sgstPaise + l.igstPaise;
+      return registered
+        ? [ukText(l.description), finHoursLabel(l.minutes), pdfGBP(l.ratePaise, l.ratePaise % 100 !== 0), pdfGBP(l.taxablePaise), rateLabel.replace(' VAT', ''), pdfGBP(lineVat), pdfGBP(l.lineTotalPaise)]
+        : [ukText(l.description), finHoursLabel(l.minutes), pdfGBP(l.ratePaise, l.ratePaise % 100 !== 0), pdfGBP(l.taxablePaise)];
+    });
+    pdf.table(doc, head, rows, registered ? [0.36, 0.08, 0.1, 0.12, 0.12, 0.1, 0.12] : [0.6, 0.1, 0.14, 0.16], registered ? [1, 2, 3, 5, 6] : [1, 2, 3]);
+
+    // VAT analysis (net and VAT per rate) + totals
+    const tx = left + width * 0.5;
+    const tw = width * 0.5;
+    const analysis = ukVatAnalysis(d.lines.map((l) => ({ netPence: l.taxablePaise, vatPence: l.cgstPaise + l.sgstPaise + l.igstPaise, treatment: uk.treatment, rateBp: d.gstRateBp })));
+    const totals: [string, string][] = registered
+      ? [
+          ...analysis.flatMap((r): [string, string][] => [
+            [`Net at ${r.label}`, pdfGBP(r.netPence)],
+            [r.treatment === 'STANDARD' || r.treatment === 'REDUCED' || r.treatment === 'ZERO' ? `VAT @ ${r.label.replace(' VAT', '')}` : 'VAT', pdfGBP(r.vatPence)],
+          ]),
+          ['Total VAT', pdfGBP(vat)],
+        ]
+      : [['Subtotal', pdfGBP(d.subtotalPaise)]];
+    if (d.roundOffPaise) totals.push(['Rounding', pdfGBP(d.roundOffPaise)]);
+    for (const [k, v] of totals) {
+      const y = doc.y;
+      doc.font('Helvetica').fontSize(9.5).fillColor(PDF_COLORS.muted).text(ukText(k), tx, y, { width: tw * 0.6 });
+      doc.fillColor(PDF_COLORS.ink).text(v, tx + tw * 0.6, y, { width: tw * 0.4, align: 'right' });
+      doc.moveDown(0.3);
+    }
+    const y = doc.y + 2;
+    doc.moveTo(tx, y).lineTo(tx + tw, y).lineWidth(1).strokeColor(PDF_COLORS.accent).stroke();
+    doc.y = y + 5;
+    const ty = doc.y;
+    doc.font('Helvetica-Bold').fontSize(11).fillColor(PDF_COLORS.ink).text(credit ? 'Credit total' : 'Total due', tx, ty, { width: tw * 0.6 });
+    doc.text(pdfGBP(d.totalPaise), tx + tw * 0.6, ty, { width: tw * 0.4, align: 'right' });
+    doc.moveDown(0.8);
+    doc.x = left;
+    doc.font('Helvetica-Oblique').fontSize(9.5).fillColor(PDF_COLORS.ink).text(`Amount in words: ${amountInWordsGBP(d.totalPaise)}`, left, doc.y, { width });
+    doc.font('Helvetica').fontSize(8.5).fillColor(PDF_COLORS.muted);
+    if (uk.note) doc.moveDown(0.3).text(ukText(uk.note), { width });
+    else if (uk.treatment === 'EXEMPT') doc.moveDown(0.3).text('Exempt from VAT.', { width });
+    else if (uk.treatment === 'ZERO') doc.moveDown(0.3).text('Zero-rated supply (0% VAT).', { width });
+    else if (!registered) doc.moveDown(0.3).text('Not registered for VAT - no VAT has been charged.', { width });
+    if (d.notes) doc.moveDown(0.4).text(ukText(`Notes: ${d.notes}`), { width });
+    doc.moveDown(1.2);
+
+    // Bank details (sort code + account number)
+    const b = d.bank;
+    const bankLines = [
+      b.bankName && ukText(b.bankName),
+      b.accountName && `Account name: ${ukText(b.accountName)}`,
+      b.sortCode && `Sort code: ${formatSortCode(b.sortCode)}`,
+      b.accountNo && `Account no.: ${ukText(b.accountNo)}`,
+      b.iban && `IBAN: ${ukText(b.iban)}`,
+    ].filter((x): x is string => !!x);
+    if (bankLines.length) {
+      doc.font('Helvetica').fontSize(8).fillColor(PDF_COLORS.accent).text('PAY BY BANK TRANSFER', left, doc.y, { characterSpacing: 1.2 });
+      doc.font('Helvetica').fontSize(9).fillColor(PDF_COLORS.ink);
+      for (const line of bankLines) doc.text(line);
+      if (d.number && !credit) doc.text(`Payment reference: ${d.number}`);
+    }
+    doc.x = left;
+    doc.font('Helvetica').fontSize(9).fillColor(PDF_COLORS.ink).text(`For ${ukText(d.seller.legalName)}`, left, doc.y + 10, { width, align: 'right' });
+    if (d.signatory) {
+      doc.moveDown(2.2);
+      doc.text(ukText(d.signatory), { width, align: 'right' });
+    }
+    doc.font('Helvetica').fontSize(7.5).fillColor(PDF_COLORS.muted).text('This is a computer-generated document.', { width, align: 'right' });
     if (d.status === 'DRAFT') {
       doc.save().rotate(-30, { origin: [doc.page.width / 2, doc.page.height / 2] }).font('Helvetica-Bold').fontSize(90).fillColor('#b68235').opacity(0.08).text('DRAFT', 80, doc.page.height / 2 - 60).restore();
     }

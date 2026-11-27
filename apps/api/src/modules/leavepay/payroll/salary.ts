@@ -4,6 +4,7 @@
  *   PF_ER = 12% × min(BASIC, 15,000) (ceiling opted), CTC/month = G + PF_ER (+ ESI_ER if covered).
  * Interns: a single STIPEND component; CTC = stipend.
  */
+import { activeRegion } from '@lexisora/shared';
 import type { EsiSettings, PfSettings } from '@lexisora/shared';
 import { ESI_CONFIG, PF_CONFIG, esiCovered } from './statutory';
 
@@ -46,7 +47,11 @@ export function pfRates(pf?: PfSettings | null) {
 }
 
 /** Earnings + employer lines for a monthly gross. Returns lines (without CTC) and the CTC. */
+/** UK default structure: the whole gross is basic salary (no PF/ESI, no HRA). */
+export const UK_STANDARD: TemplateLine[] = [{ componentCode: 'BASIC', label: 'Basic salary', calc: 'BALANCING' }];
+
 export function structureFromGross(grossMonthlyPaise: number, opts: StructureOpts): { lines: StructureLine[]; ctcMonthlyPaise: number; warnings: string[] } {
+  if (activeRegion() === 'GB') return ukStructureFromGross(grossMonthlyPaise, opts);
   const warnings: string[] = [];
   const g = toRupee(grossMonthlyPaise);
   if (opts.payType === 'STIPEND') {
@@ -82,6 +87,35 @@ export function structureFromGross(grossMonthlyPaise: number, opts: StructureOpt
   return { lines, ctcMonthlyPaise: g + pfEr + esiEr, warnings };
 }
 
+/**
+ * UK tenants: earnings to the penny, no statutory employer lines in the structure (employer NI
+ * and pension are worked out per pay run), so the annual salary is 12 × monthly gross.
+ */
+function ukStructureFromGross(grossMonthlyPaise: number, opts: StructureOpts): { lines: StructureLine[]; ctcMonthlyPaise: number; warnings: string[] } {
+  const warnings: string[] = [];
+  const g = Math.round(grossMonthlyPaise);
+  if (opts.payType === 'STIPEND') return { lines: [line('STIPEND', g, 'Stipend')], ctcMonthlyPaise: g, warnings };
+  const tpl = (opts.template ?? UK_STANDARD).filter((t) => t.calc !== 'STATUTORY');
+  const isDeduction = (t: TemplateLine) => t.kind === 'DEDUCTION';
+  const vals: Record<string, number> = {};
+  let assigned = 0;
+  for (const t of tpl) {
+    if (t.calc === 'PERCENT_OF_GROSS') vals[t.componentCode] = Math.round((g * (t.value ?? 0)) / 100);
+    else if (t.calc === 'PERCENT_OF_COMPONENT') vals[t.componentCode] = Math.round(((vals[t.base ?? 'BASIC'] ?? 0) * (t.value ?? 0)) / 100);
+    else if (t.calc === 'FIXED') vals[t.componentCode] = Math.round((t.value ?? 0) * 100);
+    if (t.calc !== 'BALANCING' && !isDeduction(t)) assigned += vals[t.componentCode]!;
+  }
+  const bal = tpl.find((t) => t.calc === 'BALANCING' && !isDeduction(t));
+  if (bal) {
+    vals[bal.componentCode] = g - assigned;
+    if (vals[bal.componentCode]! < 0) warnings.push(`${bal.label ?? bal.componentCode} would be negative; gross is too low for this template`);
+  } else if (assigned !== g) warnings.push('The components do not add up to the gross; add a balancing component');
+  const label = (t: TemplateLine) => t.label ?? (t.componentCode === 'BASIC' ? 'Basic salary' : COMPONENT_LABELS[t.componentCode] ?? t.componentCode);
+  const earnings = tpl.filter((t) => !isDeduction(t)).map((t) => line(t.componentCode, vals[t.componentCode] ?? 0, label(t)));
+  const deductions = tpl.filter(isDeduction).map((t) => ({ ...line(t.componentCode, vals[t.componentCode] ?? 0, label(t)), kind: 'DEDUCTION' as const }));
+  return { lines: [...earnings, ...deductions], ctcMonthlyPaise: g, warnings };
+}
+
 export function pfEmployerMonthly(basicDaPaise: number, opts: { pfEnabled?: boolean; pfCeilingOpted?: boolean; pf?: PfSettings | null }): number {
   if (opts.pfEnabled === false) return 0;
   const r = pfRates(opts.pf);
@@ -92,6 +126,7 @@ export function pfEmployerMonthly(basicDaPaise: number, opts: { pfEnabled?: bool
 /** Solve G from annual CTC: G + PF_ER(G) + ESI_ER(G) = CTC / 12 (monotonic → bisection to the rupee). */
 export function grossFromCtc(ctcAnnualPaise: number, opts: StructureOpts): number {
   const target = ctcAnnualPaise / 12;
+  if (activeRegion() === 'GB') return Math.round(target);
   if (opts.payType === 'STIPEND') return toRupee(target);
   let lo = 0;
   let hi = Math.ceil(target / 100) * 100 + 100;
@@ -109,7 +144,7 @@ export function buildStructure(input: { grossMonthlyPaise?: number; ctcAnnualPai
   const gross = input.grossMonthlyPaise ?? grossFromCtc(input.ctcAnnualPaise ?? 0, opts);
   const s = structureFromGross(gross, opts);
   return {
-    grossMonthlyPaise: toRupee(gross),
+    grossMonthlyPaise: activeRegion() === 'GB' ? Math.round(gross) : toRupee(gross),
     ctcMonthlyPaise: s.ctcMonthlyPaise,
     ctcAnnualPaise: s.ctcMonthlyPaise * 12,
     lines: s.lines,

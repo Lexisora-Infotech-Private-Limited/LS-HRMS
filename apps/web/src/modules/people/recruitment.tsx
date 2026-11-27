@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
+  isUk,
+  regionText,
   CANDIDATE_REJECT_REASONS,
   INTERVIEW_MODE_LABELS,
   INTERVIEW_MODES,
@@ -102,7 +104,7 @@ export function OfferModal({ app, onClose }: { app: App; onClose: () => void }) 
     { name: 'departmentId', label: 'Department', type: 'select', options: d.departments ?? [], placeholder: 'From the job' },
     { name: 'branchId', label: 'Branch', type: 'select', options: d.branches ?? [], placeholder: 'From the job' },
     { name: 'employmentType', label: 'Employment type', type: 'select', required: true, options: PEOPLE_EMPLOYMENT_TYPES.map((t) => ({ value: t, label: PEOPLE_EMPLOYMENT_TYPE_LABELS[t] })) },
-    { name: 'annualCtcPaise', label: 'Annual CTC (₹)', type: 'money', required: true, placeholder: '9,00,000' },
+    { name: 'annualCtcPaise', label: `${regionText('Annual CTC')} (₹)`, type: 'money', required: true, placeholder: isUk() ? '45,000' : '9,00,000' },
     { name: 'joiningDate', label: 'Joining date', type: 'date', required: true },
     { name: 'expiresOn', label: 'Offer valid until', type: 'date', required: true },
   ];

@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { TASK_STATUS_LABELS, formatDate, type TaskDetail, type TaskStatusKey } from '@lexisora/shared';
+import { TASK_STATUS_LABELS, formatDate, type TaskDetail, type TaskStatusKey, activeTimezone } from '@lexisora/shared';
 import { useAction } from '@/lib/query';
 import { ConfirmDialog, ErrorBlock, Loading, StatusTag, Tag } from '@/components/ui';
 import { hours, workApi, workKeys } from '../api';
 import { Drawer } from '../components';
 
-const when = (iso: string) => new Date(iso).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+const when = (iso: string) => new Date(iso).toLocaleString('en-IN', { timeZone: activeTimezone(), day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
 /** Task drawer: details, assignee/estimate/due, git branch + MR, comments, history. */
 export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () => void }) {

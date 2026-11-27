@@ -13,6 +13,7 @@ import { DevicesService } from './devices.service';
 import { IngestService } from './ingest.service';
 import { ReviewService } from './review.service';
 import { addDays } from './tracker.rules';
+import { tenantsForCron } from '../../core/region/region-cache';
 
 /**
  * Registrations (auth hook, file access, approval counts), cross-domain event consumers,
@@ -94,7 +95,7 @@ export class TrackerJobs implements OnModuleInit {
   }
 
   private async forEachTenant(name: string, fn: (tenantId: string) => Promise<unknown>) {
-    const tenants = await this.prisma.raw.tenant.findMany({ select: { id: true } }).catch(() => [] as { id: string }[]);
+    const tenants = tenantsForCron(await this.prisma.raw.tenant.findMany({ select: { id: true } }).catch(() => [] as { id: string }[]));
     for (const t of tenants) {
       try {
         await runAsTenant(t.id, () => fn(t.id));
