@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
-import { BOARD_COLUMNS, TASK_STATUS_LABELS, sortBoardCards, type BoardView, type TaskStatusKey } from '@lexisora/shared';
+import { BOARD_COLUMNS, DONE_WINDOW_DAYS, TASK_STATUS_LABELS, sortBoardCards, type BoardView, type TaskStatusKey } from '@lexisora/shared';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { AuditService } from '../../../core/audit/audit.service';
 import { NotificationsService } from '../../../core/notifications/notifications.service';
@@ -49,18 +49,23 @@ export class BoardsService {
     const { v, project, dept, rights } = await this.load(projectId, departmentId);
     if (!rights.canView) throw this.access.boardLockedError(dept.name, dept.id);
     const statuses: TaskStatusKey[] = [...BOARD_COLUMNS];
+    const doneSince = new Date(Date.now() - DONE_WINDOW_DAYS * DAY_MS);
     const where: Prisma.TaskWhereInput = {
       projectId,
       departmentId,
       isStanding: false,
       OR: [
         { status: { in: [...BOARD_COLUMNS] } },
-        ...(includeDone ? [{ status: 'DONE' as const, doneAt: { gte: new Date(Date.now() - 14 * DAY_MS) } }] : []),
+        ...(includeDone ? [{ status: 'DONE' as const, doneAt: { gte: doneSince } }] : []),
       ],
     };
     if (includeDone) statuses.push('DONE');
     const now = new Date();
-    const tasks = await this.prisma.task.findMany({ where });
+    const [tasks, olderDoneCount] = await Promise.all([
+      this.prisma.task.findMany({ where }),
+      // Say how many finished cards the window leaves out, so "Show done" isn't a silent subset (L28).
+      includeDone ? this.prisma.task.count({ where: { projectId, departmentId, isStanding: false, status: 'DONE', OR: [{ doneAt: null }, { doneAt: { lt: doneSince } }] } }) : Promise.resolve(0),
+    ]);
     const taskIds = tasks.map((t) => t.id);
     const [allocated, spent, running] = await Promise.all([
       this.prisma.boardMember.findMany({ where: { projectId, departmentId } }),
@@ -108,6 +113,7 @@ export class BoardsService {
       serverNow: now.toISOString(),
       viewer: { employeeId: v.employeeId, name: v.name, canManage: rights.canManage },
       canCreate: hasPerm(requireContext(), 'tasks.manage') && rights.canView && !locked,
+      olderDoneCount,
     };
   }
 

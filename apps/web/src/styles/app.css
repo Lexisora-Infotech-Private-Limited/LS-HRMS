@@ -42,11 +42,24 @@
 .menu > button, .menu > a { font: inherit; font-size: 13.5px; text-align: left; padding: 7px 10px; border: 0; background: transparent; cursor: pointer; border-radius: 4px; color: inherit; text-decoration: none; }
 .menu > button:hover, .menu > a:hover { background: color-mix(in srgb, var(--color-text) 6%, transparent); }
 .mobile-nav-toggle { display: none; }
+.sidebar-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.brand-logo { height: 28px; width: auto; max-width: 160px; object-fit: contain; margin-bottom: 6px; }
+.sidebar-close { display: none; }
+.sidebar-backdrop { display: none; }
 @media (max-width: 860px) {
   .shell { grid-template-columns: minmax(0, 1fr); }
   .sidebar { position: fixed; z-index: 45; width: 260px; transform: translateX(-100%); transition: transform .2s; }
   .sidebar.open { transform: none; box-shadow: var(--shadow-lg); }
   .mobile-nav-toggle { display: inline-flex; }
+  /* Close arrow, top-right of the open menu. */
+  .sidebar-close {
+    display: inline-flex; align-items: center; justify-content: center; flex: none; width: 32px; height: 32px; margin-top: -2px;
+    border: 1px solid var(--color-sidebar-border); border-radius: 4px; background: transparent; color: var(--color-sidebar-text);
+    font-size: 18px; line-height: 1; cursor: pointer;
+  }
+  .sidebar-close:hover { background: var(--color-sidebar-hover); color: var(--color-sidebar-active-text); }
+  /* Tap outside the open menu to close it. */
+  .sidebar-backdrop { display: block; position: fixed; inset: 0; z-index: 44; background: color-mix(in srgb, #000 35%, transparent); }
   .topbar, .main { padding-left: 16px; padding-right: 16px; }
   /* Small screens: one row of menu, Punch in, Alerts and the profile (on the right); the search sits on its own row below.
      A grid keeps them on one row at any width: the profile shrinks (name shown with "...") instead of wrapping to a new line. */

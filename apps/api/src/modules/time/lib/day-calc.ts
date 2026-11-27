@@ -358,7 +358,9 @@ export function summarizeMonth(days: MonthDayLike[], allowanceMinutes = 0) {
     lateMarks: days.filter(isCountedLate).length,
     /** The ones the payroll late-mark penalty looks at (not already charged as a half day). */
     penaltyLateMarks: days.filter(countsAsLateMark).length,
-    lateHalfDays: days.filter((d) => d.lateHalfDay).length,
+    /** Late marks that were charged as a half day. A day that ended Absent (or was excused) is not one more
+     * half day on top — so this never exceeds `lateMarks` (L12). */
+    lateHalfDays: days.filter((d) => d.lateHalfDay && isCountedLate(d)).length,
     activeMinutes: days.reduce((s, d) => s + d.workedMinutes, 0),
     idleMinutes: days.reduce((s, d) => s + d.idleMinutes, 0),
     leaveDays: round2(days.reduce((s, d) => s + d.leaveFraction, 0)),

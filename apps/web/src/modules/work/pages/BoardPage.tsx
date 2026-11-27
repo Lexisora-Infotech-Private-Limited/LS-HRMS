@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type SyntheticEvent } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BOARD_COLUMNS,
+  DONE_WINDOW_DAYS,
   TASK_STATUS_LABELS,
   adjacentColumns,
   formatEstimate,
@@ -159,7 +160,7 @@ export default function BoardPage() {
           <label className="radio tb-toolbar-label">
             <input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} />
             <span className="dot" style={{ borderRadius: 3 }} />
-            Show done
+            Show done (last {DONE_WINDOW_DAYS} days)
           </label>
         )}
       </div>
@@ -182,6 +183,12 @@ export default function BoardPage() {
       ) : (
         <>
           {view.project.locked && <div className="note">This project is {view.project.status.toLowerCase()} — the board is read-only.</div>}
+          {showDone && view.olderDoneCount > 0 && (
+            <div className="faint" style={{ fontSize: 13 }}>
+              Done shows the last {DONE_WINDOW_DAYS} days · {view.olderDoneCount} older done {view.olderDoneCount === 1 ? 'task is' : 'tasks are'} not shown here (search finds any task by its key; totals are on the{' '}
+              <Link to={`/projects/${view.project.id}`}>project page</Link>)
+            </div>
+          )}
           <Columns view={view} skewMs={skewMs} onMove={doMove} onOpen={(id) => setParam({ task: id })} />
           <div className="tb-footer">
             Board members: {view.members.map((m) => `${m.name}${m.isLead ? ' (lead)' : ''}`).join(', ') || '—'} · you are signed in as {view.viewer.name}

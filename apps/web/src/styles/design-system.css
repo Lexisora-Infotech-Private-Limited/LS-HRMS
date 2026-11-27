@@ -112,9 +112,10 @@ figure { margin: 0; }
 }
 .btn svg { display: block; }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.btn-primary { color: #ffffff; background: var(--color-sidebar-bg); border-color: var(--color-sidebar-bg); }
-.btn-primary:hover:not(:disabled) { background: color-mix(in srgb, var(--color-sidebar-bg) 85%, #000 15%); border-color: color-mix(in srgb, var(--color-sidebar-bg) 85%, #000 15%); }
-.btn-primary:active:not(:disabled) { background: color-mix(in srgb, var(--color-sidebar-bg) 70%, #000 30%); border-color: color-mix(in srgb, var(--color-sidebar-bg) 70%, #000 30%); }
+/* Filled primary buttons: navy by default; a published brand sets --color-btn-primary to its primary colour (lib/branding.ts). */
+.btn-primary { color: #ffffff; background: var(--color-btn-primary, var(--color-sidebar-bg)); border-color: var(--color-btn-primary, var(--color-sidebar-bg)); }
+.btn-primary:hover:not(:disabled) { background: color-mix(in srgb, var(--color-btn-primary, var(--color-sidebar-bg)) 85%, #000 15%); border-color: color-mix(in srgb, var(--color-btn-primary, var(--color-sidebar-bg)) 85%, #000 15%); }
+.btn-primary:active:not(:disabled) { background: color-mix(in srgb, var(--color-btn-primary, var(--color-sidebar-bg)) 70%, #000 30%); border-color: color-mix(in srgb, var(--color-btn-primary, var(--color-sidebar-bg)) 70%, #000 30%); }
 .btn-secondary { background: var(--color-bg); border-color: var(--color-divider); }
 .btn-secondary:hover:not(:disabled) { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
 .btn-secondary:active:not(:disabled) { background: color-mix(in srgb, var(--color-text) 14%, transparent); }

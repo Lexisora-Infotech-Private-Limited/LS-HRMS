@@ -286,6 +286,14 @@ describe('idle deduction and month summary', () => {
     expect(s.lateHalfDays).toBe(1);
   });
 
+  it('a late half day on a day that ended Absent is not counted again, so half days never exceed late marks (L12)', () => {
+    // Priya, October: 9 Oct absent (late, flagged half day) + 5 missed-punch late half days.
+    const base = { leaveFraction: 0, idleDeductibleMinutes: 0, workedMinutes: 0, idleMinutes: 0, lateExcused: false, presentFraction: 0, isLate: true, lateHalfDay: true };
+    const s = summarizeMonth([{ ...base, status: 'ABSENT' as const }, ...Array.from({ length: 5 }, () => ({ ...base, status: 'MISSED_PUNCH' as const }))]);
+    expect(s.lateMarks).toBe(5);
+    expect(s.lateHalfDays).toBe(5);
+  });
+
   it('late marks per penalty', () => {
     expect(latePenaltyDays(2, 3, 0.5)).toBe(0);
     expect(latePenaltyDays(3, 3, 0.5)).toBe(0.5);

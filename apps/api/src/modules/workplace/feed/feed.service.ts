@@ -22,7 +22,7 @@ import { currentTenantId, requireContext } from '../../../core/context/request-c
 import { badRequest, conflict, forbidden, notFound } from '../../../core/http/errors';
 import { AudienceService } from '../common/audience';
 import { excerptOf, htmlToText, imageFileIds, sanitizeHtml } from '../common/html';
-import { addDaysKey, istInstant, monthLabel, todayKey } from '../common/dates';
+import { addDaysKey, istInstant, monthLabel, todayKey, weekStartKey } from '../common/dates';
 import { ALERT_BATCH_MS, canEditPost, MAX_PINNED, postMeta, resolveMentions, threadParent } from './feed.rules';
 import { shortName } from '../kudos/kudos.rules';
 
@@ -356,12 +356,17 @@ export class FeedService {
     const today = todayKey();
     const month = today.slice(0, 7);
     const awards = await this.prisma.eotmAward.findMany({ where: { revokedAt: null, month: { lte: month } }, orderBy: { month: 'desc' }, take: 1 });
-    const award = awards[0] ?? null;
-    const since = istInstant(addDaysKey(today, -7), '00:00');
+    // "Employee of the month" is this month's award only; an older one is shown as "Last: …" (L3).
+    const latest = awards[0] ?? null;
+    const award = latest?.month === month ? latest : null;
+    const last = latest && !award ? latest : null;
+    // "Kudos this week" = since Monday 00:00 IST, not a rolling 7 days (L4).
+    const since = istInstant(weekStartKey(today), '00:00');
     const kudos = await this.prisma.kudos.findMany({ where: { revokedAt: null, createdAt: { gte: since }, badge: { system: false } }, include: { badge: true }, orderBy: { createdAt: 'desc' }, take: 5 });
-    const people = await this.audience.briefs([award?.employeeId, ...kudos.map((k) => k.recipientEmployeeId)]);
+    const people = await this.audience.briefs([latest?.employeeId, ...kudos.map((k) => k.recipientEmployeeId)]);
     return {
       eotm: award ? { month: monthLabel(award.month), name: people.get(award.employeeId)?.name ?? '—', citation: award.citation, certificateId: award.certificateId } : null,
+      lastEotm: last ? { month: monthLabel(last.month), name: people.get(last.employeeId)?.name ?? '—' } : null,
       kudosThisWeek: kudos.map((k) => ({ id: k.id, text: `${k.badge.name} → ${shortName(people.get(k.recipientEmployeeId)?.name ?? '—')}` })),
     };
   }

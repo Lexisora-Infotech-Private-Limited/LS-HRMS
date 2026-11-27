@@ -49,6 +49,32 @@ export function celebrationsWithin(
 }
 
 /** Merge + sort to-dos: overdue first, then due date, then system → board → personal, then age. */
+/**
+ * Wraps dashboard sections: a section slower than `ms` (or failing) resolves to its fallback and its
+ * name is added to `failed`, so the page can say "Couldn't load" instead of showing an empty section (L2).
+ * The timer is cleared when the section finishes in time, so fast sections are never marked failed.
+ */
+export function sectionGuard<N extends string>(failed: N[], ms = 2500) {
+  return <T>(p: Promise<T>, fallback: T, name: N): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<T>((resolve) => {
+      timer = setTimeout(() => {
+        failed.push(name);
+        resolve(fallback);
+      }, ms);
+    });
+    const done = p.then((v) => {
+      clearTimeout(timer);
+      return v;
+    });
+    return Promise.race([done, timeout]).catch(() => {
+      clearTimeout(timer);
+      failed.push(name);
+      return fallback;
+    });
+  };
+}
+
 export function sortTodos<T extends { overdue: boolean; sortDate: string; prio: number; createdAt: number }>(items: T[]): T[] {
   return items.slice().sort((a, b) => Number(b.overdue) - Number(a.overdue) || a.sortDate.localeCompare(b.sortDate) || a.prio - b.prio || a.createdAt - b.createdAt);
 }

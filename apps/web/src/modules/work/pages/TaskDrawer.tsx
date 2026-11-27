@@ -70,10 +70,13 @@ function Body({ t, onClose }: { t: TaskDetail; onClose: () => void }) {
         {ro ? (
           <span>{t.assigneeName ?? '—'}</span>
         ) : (
-          <select className="input" value={t.assigneeEmployeeId ?? ''} onChange={(e) => update.mutate({ assigneeEmployeeId: e.target.value || null })}>
-            <option value="">Unassigned</option>
-            {t.assigneeOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
+          <span className="stack" style={{ gap: 3 }}>
+            <select className="input" value={t.assigneeEmployeeId ?? ''} onChange={(e) => update.mutate({ assigneeEmployeeId: e.target.value || null })}>
+              <option value="">Unassigned</option>
+              {t.assigneeOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+            {!t.canReassign && <span className="faint" style={{ fontSize: 12 }}>Only the board lead can give this task to someone else</span>}
+          </span>
         )}
         <span>Module</span>
         {ro ? (

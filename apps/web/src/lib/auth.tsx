@@ -33,6 +33,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const off = onSessionRefreshed((d) => {
       setUser(d.user);
+      // Page reload restores the session here (not via login): the tenant theme must be applied too.
+      applyBranding(d.user.branding);
       connectSocket(d.accessToken);
     });
     setSessionExpiredHandler(() => {

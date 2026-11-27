@@ -40,7 +40,7 @@ export default function ProjectDetailPage() {
     if (p.status === 'ACTIVE') statusActions.push({ status: 'ON_HOLD', label: 'Put on hold', body: 'Tasks stay on the board; time can still be logged.' });
     if (p.status === 'ON_HOLD') statusActions.push({ status: 'ACTIVE', label: 'Resume', body: 'The project becomes active again.' });
     if (p.status === 'ACTIVE' || p.status === 'ON_HOLD') statusActions.push({ status: 'COMPLETED', label: 'Mark completed', body: 'Open tasks are cancelled. The project can then be archived to the client vault.' });
-    if (p.status === 'COMPLETED') statusActions.push({ status: 'ACTIVE', label: 'Reopen', body: 'The project becomes active again.' });
+    if (p.canReopen) statusActions.push({ status: 'ACTIVE', label: 'Reopen', body: 'The project becomes active again.' });
   }
   return (
     <div data-screen-label="Project detail" className="stack" style={{ gap: 18 }}>

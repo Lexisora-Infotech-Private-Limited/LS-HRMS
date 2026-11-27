@@ -499,8 +499,8 @@ function ChannelPane({ channel, myUserId, callsEnabled, onStartCall, onLeft, onO
               <button role="menuitem" onClick={() => { setPanel('search'); setMenu(false); }}>Search</button>
               <button role="menuitem" onClick={() => { mute.mutate(undefined); setMenu(false); }}>{channel.muted ? 'Unmute' : 'Mute'}</button>
               {!dm && !channel.managed && <button role="menuitem" onClick={() => { setConfirm({ kind: 'leave' }); setMenu(false); }}>Leave</button>}
-              {!dm && channel.canManage && !channel.archived && <button role="menuitem" onClick={() => { setConfirm({ kind: 'archive' }); setMenu(false); }}>Archive</button>}
-              {!dm && channel.canManage && channel.archived && <button role="menuitem" onClick={() => { setConfirm({ kind: 'unarchive' }); setMenu(false); }}>Unarchive</button>}
+              {channel.canArchive && !channel.archived && <button role="menuitem" onClick={() => { setConfirm({ kind: 'archive' }); setMenu(false); }}>Archive</button>}
+              {channel.canArchive && channel.archived && <button role="menuitem" onClick={() => { setConfirm({ kind: 'unarchive' }); setMenu(false); }}>Unarchive</button>}
             </div>
           )}
         </div>
@@ -508,7 +508,7 @@ function ChannelPane({ channel, myUserId, callsEnabled, onStartCall, onLeft, onO
       {channel.archived && (
         <div className="wp-archived-banner" role="status">
           <span>This channel is archived. You can read the history; nobody can post.</span>
-          {channel.canManage && <button className="btn btn-secondary btn-sm" onClick={() => setConfirm({ kind: 'unarchive' })}>Unarchive</button>}
+          {channel.canArchive && <button className="btn btn-secondary btn-sm" onClick={() => setConfirm({ kind: 'unarchive' })}>Unarchive</button>}
         </div>
       )}
       {channel.liveCall && (

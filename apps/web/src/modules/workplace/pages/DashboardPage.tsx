@@ -42,6 +42,14 @@ export default function DashboardPage() {
   if (error && !data) return <ErrorBlock error={error} retry={() => void refetch()} />;
   const g = data?.greeting;
   const dayPart = dayPartFor(now);
+  // A section the server couldn't load in time: say so (with Retry) instead of "empty" (L2).
+  const failed = new Set(data?.failed ?? []);
+  const couldNotLoad = (what: string) => (
+    <div className="list-row faint">
+      <span>Couldn’t load {what} right now.</span>
+      <button className="wp-link" onClick={() => void refetch()}>Retry</button>
+    </div>
+  );
 
   return (
     <div data-screen-label="Dashboard" className="stack" style={{ gap: 22 }}>
@@ -70,7 +78,7 @@ export default function DashboardPage() {
       <div className="wp-cards">
         <PunchCard />
         <LeaveBalanceCard />
-        <TodoCard todos={data?.todos ?? []} more={data?.todosMore ?? 0} />
+        <TodoCard todos={data?.todos ?? []} more={data?.todosMore ?? 0} failed={failed.has('todos')} onRetry={() => void refetch()} />
         {data?.approvals && <ApprovalsCard rows={data.approvals} />}
       </div>
 
@@ -97,7 +105,7 @@ export default function DashboardPage() {
               <span className="wp-ann-date">{a.date}</span>
             </div>
           ))}
-          {data && !data.announcements?.length && <div className="list-row faint">No announcements right now.</div>}
+          {data && !data.announcements?.length && (failed.has('announcements') ? couldNotLoad('announcements') : <div className="list-row faint">No announcements right now.</div>)}
         </div>
         <div className="stack" style={{ gap: 10 }}>
           <div className="row-between">
@@ -114,7 +122,7 @@ export default function DashboardPage() {
               </span>
             </div>
           ))}
-          {data && !data.events?.length && <div className="list-row faint">Nothing coming up this week.</div>}
+          {data && !data.events?.length && (failed.has('events') ? couldNotLoad('events') : <div className="list-row faint">Nothing coming up this week.</div>)}
           <LeaveHistoryList />
         </div>
       </div>
@@ -136,7 +144,7 @@ export default function DashboardPage() {
 
 // ── Pending to-do ──────────────────────────────────────────────────────────
 
-function TodoCard({ todos, more }: { todos: DashboardTodo[]; more: number }) {
+function TodoCard({ todos, more, failed = false, onRetry }: { todos: DashboardTodo[]; more: number; failed?: boolean; onRetry?: () => void }) {
   const can = useCan();
   const nav = useNavigate();
   const [menu, setMenu] = useState(false);
@@ -157,7 +165,15 @@ function TodoCard({ todos, more }: { todos: DashboardTodo[]; more: number }) {
       {todos.map((t) => (
         <TodoLine key={t.id} t={t} onDone={() => complete.mutate(t.id)} busy={complete.isPending && complete.variables === t.id} onOpen={() => t.link && nav(t.link)} />
       ))}
-      {!todos.length && <div className="wp-muted-card">You’re all caught up.</div>}
+      {!todos.length &&
+        (failed ? (
+          <div className="wp-muted-card">
+            Couldn’t load your to-dos right now.{' '}
+            <button className="wp-link" onClick={onRetry}>Retry</button>
+          </div>
+        ) : (
+          <div className="wp-muted-card">You’re all caught up.</div>
+        ))}
       {more > 0 && (
         <button className="wp-link" style={{ alignSelf: 'flex-start' }} onClick={() => setAll(true)}>
           +{more} more

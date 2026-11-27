@@ -8,6 +8,8 @@ import '../time.css';
 
 type Status = 'PENDING' | 'APPROVED' | 'REJECTED' | 'ALL';
 const STATUS_LABEL: Record<string, string> = { PENDING: 'Pending', APPROVED: 'Approved', REJECTED: 'Rejected', CANCELLED: 'Cancelled' };
+/** "2026-09-28" → "September" */
+const monthName = (key: string) => new Date(`${key}T00:00:00Z`).toLocaleString('en-GB', { month: 'long', timeZone: 'UTC' });
 
 /**
  * Attendance corrections (regularizations) awaiting a decision. Managers see requests routed to
@@ -44,6 +46,7 @@ export function CorrectionsPanel() {
                 <span className="nm">{r.employeeName}</span>
                 <Tag tone={toneFor(r.status)}>{STATUS_LABEL[r.status] ?? r.status}</Tag>
                 {r.devicePunchesNow && <Tag tone="outline" title="A biometric or desktop punch for this day arrived after the request was made">Device punches now exist</Tag>}
+                {r.status === 'PENDING' && r.periodLocked && <Tag tone="neutral">{monthName(r.date)} locked</Tag>}
               </div>
               <div>
                 {r.dateLabel} · {r.typeLabel}
@@ -65,7 +68,14 @@ export function CorrectionsPanel() {
             {r.status === 'PENDING' && (
               <div className="row" style={{ gap: 6, alignSelf: 'center' }}>
                 <button className="btn btn-secondary btn-sm" onClick={() => setDeciding({ row: r, action: 'reject' })}>Reject</button>
-                <button className="btn btn-primary btn-sm" onClick={() => setDeciding({ row: r, action: 'approve' })}>Approve</button>
+                <button
+                  className="btn btn-primary btn-sm"
+                  disabled={r.periodLocked}
+                  title={r.periodLocked ? `${monthName(r.date)} is locked · reject it, or ask HR to unlock the month in Period locks` : undefined}
+                  onClick={() => setDeciding({ row: r, action: 'approve' })}
+                >
+                  Approve
+                </button>
               </div>
             )}
           </div>
