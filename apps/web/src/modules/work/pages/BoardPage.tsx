@@ -78,7 +78,10 @@ export default function BoardPage() {
   // Realtime: any move / new task / assignee change / tracker start-stop on this project refreshes the view.
   useEffect(() => {
     const off1 = onRealtime<{ projectId: string; departmentId: string | null }>('work.board', (p) => {
-      if (p.projectId === projectId) void qc.invalidateQueries({ queryKey: ['work', 'board', projectId] });
+      if (p.projectId !== projectId) return;
+      void qc.invalidateQueries({ queryKey: ['work', 'board', projectId] });
+      // An open task drawer follows too, so its Move uses the card's current version (L30: no VERSION_CONFLICT).
+      if (taskId) void qc.invalidateQueries({ queryKey: workKeys.task(taskId) });
     });
     const off2 = onRealtime<{ projectId: string }>('work.boardAccess', (p) => {
       void qc.invalidateQueries({ queryKey: workKeys.boards(p.projectId) });
@@ -88,7 +91,7 @@ export default function BoardPage() {
       off1();
       off2();
     };
-  }, [projectId, qc]);
+  }, [projectId, taskId, qc]);
 
   // One backend action for drag and drop and the ← / → links; the card moves at once and goes back on failure.
   const move = useMutation({
@@ -147,6 +150,10 @@ export default function BoardPage() {
 
       <div className="tb-toolbar">
         <select className="input" value={projectId} onChange={(e) => setParam({ project: e.target.value, board: null, task: null })} aria-label="Project">
+          {/* A completed / on-hold project opened from its page isn't in the live list: show it, labelled (L29). */}
+          {view && view.project.id === projectId && !projects.some((p) => p.value === projectId) && (
+            <option value={projectId}>{`${view.project.name} · ${view.project.key} (${view.project.status.toLowerCase().replace('_', ' ')})`}</option>
+          )}
           {projects.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
         </select>
         <span className="tb-toolbar-label">Team board:</span>

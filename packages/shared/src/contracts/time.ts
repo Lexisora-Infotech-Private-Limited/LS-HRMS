@@ -601,6 +601,8 @@ export type TimesheetDay = {
   leave: TimesheetDayLeave | null;
   /** Hours expected: 0 on a weekly off / holiday, less leave taken. */
   expectedMinutes: number;
+  /** Attendance worked minutes that day: entering more than this (without tracker data) needs a reason. */
+  attendanceWorkedMinutes: number;
 };
 export type TimesheetWeek = {
   id: string;
@@ -626,6 +628,8 @@ export type TimesheetWeek = {
   version: number;
   submitLabel: string;
   canSubmit: boolean;
+  /** Why Submit is off while the week is still open ("You can submit this week from Fri 27 Nov, 15:00"). */
+  submitHint: string | null;
   canRecall: boolean;
   hasTrackerData: boolean;
   screenshotCount: number;

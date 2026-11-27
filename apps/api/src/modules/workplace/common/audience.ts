@@ -2,9 +2,9 @@ import { Injectable } from '@nestjs/common';
 import { initialsOf, type WpAudienceRule } from '@lexisora/shared';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { SpineReader } from './spine';
-import { projectIdsByEmployee, resolveAudience, ruleMatches, type AudienceSubject } from './audience.rules';
+import { departmentsFullyUnder, projectIdsByEmployee, resolveAudience, ruleMatches, type AudienceSubject } from './audience.rules';
 
-export { projectIdsByEmployee, resolveAudience, ruleMatches, type AudienceSubject } from './audience.rules';
+export { departmentsFullyUnder, projectIdsByEmployee, resolveAudience, ruleMatches, type AudienceSubject } from './audience.rules';
 
 export const ACTIVE_STATUSES = ['ACTIVE', 'NOTICE_PERIOD'] as const;
 
@@ -104,16 +104,20 @@ export class AudienceService {
     return e?.id ?? null;
   }
 
-  /** Departments/projects a publisher may target with a team notice (lead or manager). */
+  /**
+   * Departments/projects a publisher may target with a team notice: departments they lead, or where
+   * everyone (active) reports to them directly or further down — managing one person there is not
+   * enough (L10); projects they lead.
+   */
   async teamsLedBy(employeeId: string): Promise<{ departmentIds: string[]; projectIds: string[] }> {
-    const [led, reports, projects, lead] = await Promise.all([
+    const [led, people, projects, lead] = await Promise.all([
       this.prisma.department.findMany({ where: { leadEmployeeId: employeeId }, select: { id: true } }),
-      this.prisma.employee.findMany({ where: { managerId: employeeId }, select: { departmentId: true } }),
+      this.prisma.employee.findMany({ where: { status: { in: [...ACTIVE_STATUSES] } }, select: { id: true, managerId: true, departmentId: true } }),
       this.spine.projects({ leadEmployeeId: employeeId }),
       this.spine.projectMembers({ employeeId, role: 'LEAD' }),
     ]);
     return {
-      departmentIds: [...new Set([...led.map((d) => d.id), ...reports.map((r) => r.departmentId).filter((x): x is string => !!x)])],
+      departmentIds: [...new Set([...led.map((d) => d.id), ...departmentsFullyUnder(employeeId, people)])],
       projectIds: [...new Set([...projects.map((p) => p.id), ...lead.map((m) => m.projectId)])],
     };
   }

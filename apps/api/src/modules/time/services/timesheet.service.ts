@@ -367,7 +367,7 @@ export class TimesheetService {
     const today = istKeyOf(now);
     const emp = await this.policies.employee(ts.employeeId);
     if (!emp) throw notFound('Employee');
-    const [shiftRow, holidays, idleDays, ohRows, adjustments, steps, leaveRows] = await Promise.all([
+    const [shiftRow, holidays, idleDays, ohRows, adjustments, steps, leaveRows, attendance] = await Promise.all([
       this.policies.shiftFor(emp, from),
       this.policies.holidaysBetween(from, to),
       this.prisma.timesheetIdleDay.findMany({ where: { timesheetId: id } }),
@@ -375,6 +375,8 @@ export class TimesheetService {
       this.prisma.timesheetAdjustment.findMany({ where: { timesheetId: id }, orderBy: { createdAt: 'desc' } }),
       this.prisma.timesheetApprovalStep.findMany({ where: { timesheetId: id, cycle: ts.cycle } }),
       this.cross.leaveDays([ts.employeeId], from, to),
+      // Worked minutes per day: the cell editor asks for a reason by the same rule as the server (L17).
+      this.prisma.attendanceDay.findMany({ where: { employeeId: ts.employeeId, date: { gte: dateOf(from), lte: dateOf(to) } }, select: { date: true, workedMinutes: true } }),
     ]);
     const shift = toShiftLike(shiftRow);
     const required = requiredMinutes(shift);
@@ -396,6 +398,7 @@ export class TimesheetService {
         locked: await this.locks.isLocked(d),
         leave: lv ? { typeCode: lv.typeCode, fraction: lv.fraction, session, label: leaveLabel({ typeCode: lv.typeCode, fraction: lv.fraction, session }) } : null,
         expectedMinutes: expectedMinutes({ offDay: weeklyOff || !!holiday, leaveFraction: lv?.fraction ?? 0, requiredMinutes: required }),
+        attendanceWorkedMinutes: attendance.find((a) => keyOf(a.date) === d)?.workedMinutes ?? 0,
       });
     }
     const scoped = opts.scopeProjectId !== undefined;
@@ -523,6 +526,8 @@ export class TimesheetService {
       version: ts.version,
       submitLabel: submitLabel(ts.status),
       canSubmit: editable && submitOpen(from, now),
+      // Why Submit is greyed out before Friday 15:00 (L18).
+      submitHint: editable && !submitOpen(from, now) ? `You can submit this week from Fri ${dm(addDays(from, 4))}, 15:00` : null,
       canRecall: opts.owner && ts.status === 'SUBMITTED' && actedSteps.length === 0,
       hasTrackerData,
       screenshotCount: ts.screenshotCount,

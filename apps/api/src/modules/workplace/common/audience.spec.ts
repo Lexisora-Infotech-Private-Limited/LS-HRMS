@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { WpAudienceRule } from '@lexisora/shared';
-import { projectIdsByEmployee, resolveAudience, ruleMatches, type AudienceSubject } from './audience.rules';
+import { departmentsFullyUnder, projectIdsByEmployee, resolveAudience, ruleMatches, type AudienceSubject } from './audience.rules';
 
 /** The demo tenant in miniature: Development, QA, Design; Atlas project spans teams. */
 const members = [
@@ -73,5 +73,30 @@ describe('notice audience resolution', () => {
   it('a late joiner in Development matches the live Atlas notice', () => {
     const meera: AudienceSubject = { id: 'new', departmentId: 'dev', branchId: 'ahmedabad', employmentType: 'FULL_TIME', projectIds: [] };
     expect(ruleMatches(meera, [{ type: 'DEPARTMENT', refId: 'dev' }, { type: 'PROJECT', refId: 'atlas' }])).toBe(true);
+  });
+});
+
+describe('team-notice scope: departments fully under a manager (L10)', () => {
+  // Real org: Arjun → Vikram (Design) → Divya (Design); Arjun → Isha (Development); Neha manages everyone.
+  const people = [
+    { id: 'neha', managerId: null, departmentId: 'dev' },
+    { id: 'arjun', managerId: 'neha', departmentId: 'dev' },
+    { id: 'priya', managerId: 'neha', departmentId: 'dev' },
+    { id: 'isha', managerId: 'arjun', departmentId: 'dev' },
+    { id: 'vikram', managerId: 'arjun', departmentId: 'design' },
+    { id: 'divya', managerId: 'vikram', departmentId: 'design' },
+  ];
+  it('everyone in Design is under Arjun (Vikram directly, Divya through Vikram) → Design allowed', () => {
+    expect(departmentsFullyUnder('arjun', people)).toEqual(['design']);
+  });
+  it('managing one person in Development (Isha) does not open Development, where Priya is not under Arjun', () => {
+    expect(departmentsFullyUnder('arjun', people)).not.toContain('dev');
+  });
+  it('a newcomer in Design who reports elsewhere closes Design for Arjun', () => {
+    const more = [...people, { id: 'new', managerId: 'neha', departmentId: 'design' }];
+    expect(departmentsFullyUnder('arjun', more)).toEqual([]);
+  });
+  it('the manager may sit in the department themselves (Neha in Development)', () => {
+    expect(departmentsFullyUnder('neha', people).sort()).toEqual(['design', 'dev']);
   });
 });

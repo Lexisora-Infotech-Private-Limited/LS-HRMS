@@ -25,7 +25,7 @@ export type RejectTarget = { id: string; employeeName: string; typeName: string;
 /** Reject a leave / comp-off request (or decline a cancellation) with a comment for the employee. */
 export function RejectModal({ row, onClose }: { row: RejectTarget; onClose: () => void }) {
   const [comment, setComment] = useState('');
-  const act = useAction(() => (row.kind === 'COMP_OFF' ? lpApi.rejectCompOff(row.id, comment) : row.status === 'CANCELLATION_PENDING' ? lpApi.decideCancellation(row.id, false) : lpApi.reject(row.id, comment)), {
+  const act = useAction(() => (row.kind === 'COMP_OFF' ? lpApi.rejectCompOff(row.id, comment) : row.status === 'CANCELLATION_PENDING' ? lpApi.decideCancellation(row.id, false, comment) : lpApi.reject(row.id, comment)), {
     success: `Request from ${row.employeeName} rejected`,
     invalidate: [LEAVE_ALL, ['approvals']],
     onSuccess: onClose,

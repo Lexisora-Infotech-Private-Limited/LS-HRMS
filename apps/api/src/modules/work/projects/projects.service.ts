@@ -197,7 +197,8 @@ export class ProjectsService {
     const tasksByStatus: Record<string, number> = {};
     for (const t of tasks) if (!t.isStanding) tasksByStatus[t.status] = (tasksByStatus[t.status] ?? 0) + 1;
     const ctx = requireContext();
-    const canManage = this.access.canManageProject(v, p);
+    // Archived projects are read-only: no Edit / Add member / module / upload buttons (L23).
+    const canManage = this.access.canManageProject(v, p) && p.status !== 'ARCHIVED';
     const seeMoney = this.canSeeBilling();
     // Client-vault files (contracts, NDAs) only for people who can open them (M13: no Download → 403).
     const seeClientVault = CLIENT_VAULT_PERMS.some((perm) => hasPerm(ctx, perm));
@@ -276,6 +277,10 @@ export class ProjectsService {
     const tenantId = currentTenantId();
     const boards = input.boardDepartmentIds.length ? input.boardDepartmentIds : lead.departmentId ? [lead.departmentId] : [];
     const isInternal = client.isInternal;
+    // A lead who creates a project for someone else joins it as a member, so they can open what they just
+    // created (otherwise the redirect lands on "Project not found") (L26). Managers see every project anyway.
+    const creator = !v.viewAll && v.employeeId && v.employeeId !== lead.id ? await this.prisma.employee.findFirst({ where: { id: v.employeeId }, select: { id: true, department: { select: { name: true } } } }) : null;
+    const creatorRole = creator?.department?.name === 'QA' ? 'QA' : creator?.department?.name === 'Design' ? 'DESIGN' : 'MEMBER';
     const project = await this.prisma.project.create({
       data: {
         tenantId,
@@ -298,7 +303,7 @@ export class ProjectsService {
         gitRepoUrl: input.gitRepoUrl,
         createdByEmployeeId: v.employeeId,
         modules: { create: [...new Set(input.modules)].map((name, i) => ({ tenantId, name, sortOrder: i })) },
-        members: { create: [{ tenantId, employeeId: lead.id, role: 'LEAD' }] },
+        members: { create: [{ tenantId, employeeId: lead.id, role: 'LEAD' }, ...(creator ? [{ tenantId, employeeId: creator.id, role: creatorRole }] : [])] },
         documents: {
           create: files.map((f) => ({ tenantId, fileId: f.id, title: f.filename, kind: 'REQUIREMENT', sizeBytes: f.size, uploadedByEmployeeId: v.employeeId })),
         },
@@ -317,12 +322,14 @@ export class ProjectsService {
     const v = await this.access.viewer();
     const p = await this.access.requireProject(v, id);
     if (!this.access.canManageProject(v, p)) throw forbidden('Only the project lead or a manager can change this project');
+    // Archived = read-only for modules, members and documents too, not just the edit form (L23).
+    // (The archive page keeps its own document upload for managers.)
+    if (p.status === 'ARCHIVED') throw new AppError(423, 'PROJECT_LOCKED', 'Archived projects are read-only · restore it from Project archive to change it');
     return { v, p };
   }
 
   async update(id: string, input: ProjectUpdateInput) {
     const { p } = await this.requireManage(id);
-    if (p.status === 'ARCHIVED') throw new AppError(423, 'PROJECT_LOCKED', 'Archived projects are read-only');
     const data: Prisma.ProjectUpdateInput = {};
     if (input.name !== undefined && input.name !== p.name) {
       if (await this.prisma.project.count({ where: { id: { not: id }, name: { equals: input.name, mode: 'insensitive' } } })) throw conflict(`A project named ${input.name} already exists`, 'NAME_TAKEN');
@@ -337,6 +344,8 @@ export class ProjectsService {
     if (input.clientId !== undefined && input.clientId !== p.clientId) {
       const c = await this.prisma.client.findFirst({ where: { id: input.clientId } });
       if (!c) throw badRequest('Client not found');
+      // Same rule as creating: a project can't be moved to an inactive client (keeping its current one is fine) (L25).
+      if (c.status !== 'ACTIVE') throw new AppError(422, 'CLIENT_INACTIVE', `${c.name} is inactive — reactivate the client first`);
       data.client = { connect: { id: c.id } };
       data.isInternal = c.isInternal;
       isInternal = c.isInternal;
@@ -484,6 +493,7 @@ export class ProjectsService {
 
   async addMember(id: string, input: { employeeId: string; role: string; allocationPct?: number | null }) {
     const { v, p } = await this.requireManage(id);
+    if (input.role === 'LEAD') throw new AppError(422, 'LEAD_VIA_EDIT', 'A project has one lead · change it from Edit → Project lead');
     const e = await this.prisma.employee.findFirst({ where: { id: input.employeeId }, select: { id: true, fullName: true, userId: true, status: true } });
     if (!e || e.status === 'EXITED') throw badRequest('Employee not found');
     if (await this.prisma.projectMember.count({ where: { projectId: id, employeeId: e.id } })) throw conflict(`${e.fullName} is already on this project`);
@@ -500,6 +510,8 @@ export class ProjectsService {
     const m = await this.prisma.projectMember.findFirst({ where: { id: memberId, projectId: id } });
     if (!m) throw notFound('Member');
     if (m.employeeId === p.leadEmployeeId && input.role && input.role !== 'LEAD') throw conflict('Change the project lead first');
+    // One lead per project, set from Edit → Project lead (which also moves the LEAD member row) (L24).
+    if (m.employeeId !== p.leadEmployeeId && input.role === 'LEAD') throw new AppError(422, 'LEAD_VIA_EDIT', 'A project has one lead · change it from Edit → Project lead');
     await this.prisma.projectMember.update({ where: { id: memberId }, data: { role: input.role ?? undefined, allocationPct: input.allocationPct } });
     if (input.role && input.role !== m.role) {
       const emp = await this.prisma.employee.findFirst({ where: { id: m.employeeId }, select: { userId: true } });
