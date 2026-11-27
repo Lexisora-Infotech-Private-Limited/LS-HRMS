@@ -800,6 +800,54 @@ export class TimesheetService {
     for (const e of claimEvents) this.events.emit('idle.claimDecided', e);
   }
 
+  /** Accept/reject a single outside-hours entry, manual increase or idle claim immediately, without finalizing the step. */
+  decideItem(timesheetId: string, scope: { projectId?: string | null }, item: ItemDecision, actor: string) {
+    return this.lock.run(timesheetId, () => this.decideItemNow(timesheetId, scope, item, actor));
+  }
+
+  private async decideItemNow(timesheetId: string, scope: { projectId?: string | null }, item: ItemDecision, actor: string) {
+    const now = new Date();
+    const inScope = (projectId: string | null | undefined) => scope.projectId === undefined || (projectId ?? null) === scope.projectId;
+    const tenantId = currentTenantId();
+    const accept = item.decision !== 'REJECT';
+
+    if (item.type === 'OUTSIDE_HOURS') {
+      const o = await this.prisma.outsideHoursEntry.findFirst({ where: { id: item.id, timesheetId } });
+      if (!o || o.reviewStatus !== 'PENDING_PL' || !inScope(o.projectId)) throw new AppError(409, 'ALREADY_DECIDED', 'This entry has already been reviewed');
+      await this.prisma.outsideHoursEntry.update({ where: { id: o.id }, data: { reviewStatus: accept ? 'ACCEPTED' : 'REJECTED', reviewedByName: actor, reviewedAt: now, reviewComment: item.note ?? null } });
+      await this.syncOutsideHoursNow(timesheetId);
+      return;
+    }
+
+    if (item.type === 'MANUAL_INCREASE') {
+      const a = await this.prisma.timesheetAdjustment.findFirst({ where: { id: item.id, timesheetId } });
+      if (!a || a.reviewStatus !== 'PENDING_PL') throw new AppError(409, 'ALREADY_DECIDED', 'This entry has already been reviewed');
+      const sheet = await this.load(timesheetId);
+      const line = sheet.lines.find((l) => l.cells.some((c) => c.id === a.cellId));
+      const cell = line?.cells.find((c) => c.id === a.cellId);
+      if (!line || !cell || !inScope(line.projectId)) throw new AppError(409, 'ALREADY_DECIDED', 'This entry has already been reviewed');
+      await this.prisma.timesheetAdjustment.update({ where: { id: a.id }, data: { reviewStatus: accept ? 'ACCEPTED' : 'REJECTED', reviewedByName: actor, reviewedAt: now } });
+      const updated = decidePending(cell, a.deltaMinutes, accept);
+      await this.prisma.timesheetCell.update({ where: { id: cell.id }, data: { adjustmentMinutes: updated.adjustmentMinutes, pendingAdjustmentMinutes: updated.pendingAdjustmentMinutes, finalMinutes: cellFinal({ ...cell, ...updated }) } });
+      return;
+    }
+
+    // IDLE_AS_WORK
+    const sheet = await this.load(timesheetId);
+    const from = keyOf(sheet.weekStart);
+    const to = keyOf(sheet.weekEnd);
+    const claim = (await this.cross.idleClaims(sheet.employeeId, from, to)).find((c) => c.id === item.id && c.status === 'PENDING');
+    if (!claim) throw new AppError(409, 'ALREADY_DECIDED', 'This entry has already been reviewed');
+    const alreadyDecided = await this.prisma.timesheetItemDecision.findFirst({ where: { itemType: 'IDLE_CLAIM', refId: claim.id } });
+    if (alreadyDecided) throw new AppError(409, 'ALREADY_DECIDED', 'This entry has already been reviewed');
+    const tasks = await this.cross.taskMap(claim.taskId ? [claim.taskId] : []);
+    if (!inScope((claim.taskId ? tasks.get(claim.taskId)?.projectId : null) ?? claim.projectId ?? null)) throw new AppError(409, 'ALREADY_DECIDED', 'This entry has already been reviewed');
+    const status = accept ? 'APPROVED' : 'REJECTED';
+    await this.prisma.timesheetItemDecision.create({ data: { tenantId, timesheetId, itemType: 'IDLE_CLAIM', refId: claim.id, decision: status, note: item.note ?? null, decidedByName: actor } });
+    await this.rebuildNow(timesheetId, { claims: true });
+    this.events.emit('idle.claimDecided', { claimId: claim.id, employeeId: sheet.employeeId, workDate: keyOf(claim.workDate), status, source: 'approval', note: item.note ?? null, by: actor });
+  }
+
   // ── submit / recall ─────────────────────────────────────────────────────
   submit(id: string, input: { expectedVersion?: number; confirmEmpty?: boolean }): Promise<SubmitResult> {
     return this.lock.run(id, () => this.submitNow(id, input));

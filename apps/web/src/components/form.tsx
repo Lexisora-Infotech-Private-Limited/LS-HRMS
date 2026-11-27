@@ -262,9 +262,10 @@ export function FileDrop({ file, onFile, accept, label = 'Drop file or browse', 
     >
       <input ref={ref} type="file" hidden accept={accept} onChange={(e) => onFile(e.target.files?.[0] ?? null)} />
       {file ? (
-        <span>
-          {file.name} · {(file.size / 1024).toFixed(0)} KB{' '}
-          <button type="button" className="btn btn-ghost btn-sm" onClick={(e) => { e.stopPropagation(); onFile(null); }}>Remove</button>
+        <span className="row" style={{ textAlign: 'left', gap: 8, width: '100%' }}>
+          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</span>
+          <span className="faint" style={{ flexShrink: 0 }}>{(file.size / 1024).toFixed(0)} KB</span>
+          <button type="button" className="btn btn-ghost btn-sm" style={{ flexShrink: 0 }} onClick={(e) => { e.stopPropagation(); onFile(null); }}>Remove</button>
         </span>
       ) : (
         existing ?? label

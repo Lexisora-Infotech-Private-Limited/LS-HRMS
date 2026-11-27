@@ -210,6 +210,18 @@ export class ApprovalService {
     return this.sheets.applyReview(step.timesheetId, step.level === 1 ? { projectId: step.projectId } : {}, decisions, actor);
   }
 
+  /** Accept/reject one outside-hours entry, manual increase or idle claim right away, ahead of the overall step approval. */
+  async decideItem(stepId: string, item: { type: ApproveStepInput['decisions'][number]['type']; id: string; decision: 'ACCEPT' | 'REJECT'; note?: string | null }) {
+    if (!['OUTSIDE_HOURS', 'IDLE_AS_WORK', 'MANUAL_INCREASE'].includes(item.type)) throw new AppError(400, 'INVALID_TYPE', 'Unknown item type');
+    const { ctx, step } = await this.loadStep(stepId);
+    const t = step.timesheet;
+    if (t.employeeId === ctx.employeeId) throw forbidden("You can't approve your own timesheet");
+    if (step.status !== 'PENDING') throw new AppError(409, 'STEP_DECIDED', 'This step has already been decided');
+    const actor = ctx.userName ?? 'Approver';
+    await this.sheets.decideItem(step.timesheetId, step.level === 1 ? { projectId: step.projectId } : {}, item, actor);
+    return { ok: true, message: item.decision === 'ACCEPT' ? 'Accepted' : 'Rejected' };
+  }
+
   async approve(stepId: string, input: ApproveStepInput) {
     const { ctx, step } = await this.loadStep(stepId);
     const t = step.timesheet;

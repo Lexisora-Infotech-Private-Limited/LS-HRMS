@@ -141,7 +141,11 @@ function ArchiveDrawer({ id, onClose }: { id: string; onClose: () => void }) {
           <div>
             <div className="wk-section-title">Project documents · {d.projectDocuments.length}</div>
             <DocList docs={d.projectDocuments} onDownload={dl} />
-            {d.canManage && <div style={{ marginTop: 8 }}><DocumentsList docs={[]} emptyText="" onUpload={(x) => addDoc.mutateAsync(x)} /></div>}
+            {d.canManage && (
+              <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--color-divider)' }}>
+                <DocumentsList docs={[]} emptyText="" onUpload={(x) => addDoc.mutateAsync(x)} />
+              </div>
+            )}
           </div>
           <div>
             <div className="wk-section-title">Client vault · {d.clientDocuments.length}</div>

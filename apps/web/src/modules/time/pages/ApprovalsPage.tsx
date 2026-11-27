@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import type { ApprovalDetail, ReviewItem } from '@lexisora/shared';
+import type { ReviewItem } from '@lexisora/shared';
 import { ErrorBlock, Loading, PageHeader, Pills, Seg, Tag, toneFor } from '@/components/ui';
 import { Pager } from '@/components/table';
 import { fileUrl, post } from '@/lib/api';
@@ -99,17 +99,15 @@ function Detail({ stepId, onDone }: { stepId: string; onDone: () => void }) {
   const [taskKey, setTaskKey] = useState('');
   const q = useApproval(stepId, page, date, taskKey);
   const [comment, setComment] = useState('');
-  const [decisions, setDecisions] = useState<Record<string, 'ACCEPT' | 'REJECT'>>({});
   const [err, setErr] = useState<string | null>(null);
 
+  const decideItem = useAction(
+    (v: { type: ReviewItem['type']; id: string; decision: 'ACCEPT' | 'REJECT' }) =>
+      post<{ ok: boolean; message: string }>(`/timesheet-approvals/${stepId}/items/${v.type}/${v.id}/decide`, { decision: v.decision }),
+    { success: (r) => r.message, invalidate: [tk.all, ['approvals']] },
+  );
   const approve = useAction(
-    (d: ApprovalDetail) =>
-      post<{ ok: boolean; message: string }>(`/timesheet-approvals/${stepId}/approve`, {
-        comment: comment.trim() || null,
-        decisions: d.items
-          .filter((i) => i.status === 'PENDING')
-          .map((i) => ({ type: i.type, id: i.id, decision: decisions[`${i.type}:${i.id}`] ?? 'ACCEPT' })),
-      }),
+    () => post<{ ok: boolean; message: string }>(`/timesheet-approvals/${stepId}/approve`, { comment: comment.trim() || null, decisions: [] }),
     { success: (r) => r.message, invalidate: [tk.all, ['approvals']], onSuccess: onDone },
   );
   const sendBack = useAction(() => post<{ ok: boolean; message: string }>(`/timesheet-approvals/${stepId}/return`, { comment: comment.trim() }), {
@@ -142,7 +140,7 @@ function Detail({ stepId, onDone }: { stepId: string; onDone: () => void }) {
         {d.canAct && (
           <div className="row" style={{ alignItems: 'flex-start' }}>
             <button className="btn btn-secondary" onClick={doReturn} disabled={sendBack.isPending || approve.isPending}>Send back</button>
-            <button className="btn btn-primary" onClick={() => approve.mutate(d)} disabled={approve.isPending || sendBack.isPending}>Approve</button>
+            <button className="btn btn-primary" onClick={() => approve.mutate(undefined)} disabled={approve.isPending || sendBack.isPending}>Approve</button>
           </div>
         )}
       </div>
@@ -180,11 +178,11 @@ function Detail({ stepId, onDone }: { stepId: string; onDone: () => void }) {
               key={`${i.type}:${i.id}`}
               item={i}
               canAct={d.canAct}
-              value={decisions[`${i.type}:${i.id}`]}
-              onChange={(v) => setDecisions((s) => ({ ...s, [`${i.type}:${i.id}`]: v }))}
+              busy={decideItem.isPending}
+              onDecide={(decision) => decideItem.mutate({ type: i.type, id: i.id, decision })}
             />
           ))}
-          {d.canAct && pending.length > 0 && <div className="field-hint" style={{ marginTop: 6 }}>Your Accept / Reject choices are applied when you approve.</div>}
+          {d.canAct && pending.length > 0 && <div className="field-hint" style={{ marginTop: 6 }}>Accept or reject each item · anything left undecided is accepted when you approve.</div>}
         </div>
       )}
 
@@ -257,7 +255,7 @@ function Detail({ stepId, onDone }: { stepId: string; onDone: () => void }) {
 
 const TYPE_LABEL: Record<ReviewItem['type'], string> = { OUTSIDE_HOURS: 'Outside hours', IDLE_AS_WORK: 'Idle claimed as work', MANUAL_INCREASE: 'Manual increase' };
 
-function ItemRow({ item, canAct, value, onChange }: { item: ReviewItem; canAct: boolean; value?: 'ACCEPT' | 'REJECT'; onChange: (v: 'ACCEPT' | 'REJECT') => void }) {
+function ItemRow({ item, canAct, busy, onDecide }: { item: ReviewItem; canAct: boolean; busy: boolean; onDecide: (v: 'ACCEPT' | 'REJECT') => void }) {
   const open = item.status === 'PENDING';
   return (
     <div className="time-item">
@@ -266,14 +264,10 @@ function ItemRow({ item, canAct, value, onChange }: { item: ReviewItem; canAct: 
         <span className="faint" style={{ display: 'block', fontSize: 12 }}>{item.reason}</span>
       </span>
       {open && canAct ? (
-        <Seg
-          options={[
-            { value: 'ACCEPT', label: 'Accept' },
-            { value: 'REJECT', label: 'Reject' },
-          ]}
-          value={value ?? 'ACCEPT'}
-          onChange={onChange}
-        />
+        <div className="row" style={{ gap: 6 }}>
+          <button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => onDecide('REJECT')}>Reject</button>
+          <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => onDecide('ACCEPT')}>Accept</button>
+        </div>
       ) : (
         <Tag tone={toneFor(item.status)}>{item.status.charAt(0) + item.status.slice(1).toLowerCase()}</Tag>
       )}

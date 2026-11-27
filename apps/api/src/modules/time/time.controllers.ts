@@ -11,6 +11,7 @@ import {
   biometricSimulateSchema,
   cellEditSchema,
   dayOverrideSchema,
+  decideItemSchema,
   decisionCommentSchema,
   enrollmentSchema,
   holidayCopySchema,
@@ -39,6 +40,7 @@ import {
   type BiometricSimulateInput,
   type CellEditInput,
   type DayOverrideInput,
+  type DecideItemInput,
   type HolidayInput,
   type IdCheckInput,
   type IdleSpanInput,
@@ -697,6 +699,16 @@ export class ApprovalsController {
   @Post(':stepId/approve')
   approve(@Param('stepId') stepId: string, @Body(new ZodPipe(approveStepSchema)) body: ApproveStepInput) {
     return this.approvals.approve(stepId, body);
+  }
+
+  @Post(':stepId/items/:type/:itemId/decide')
+  decideItem(
+    @Param('stepId') stepId: string,
+    @Param('type') type: string,
+    @Param('itemId') itemId: string,
+    @Body(new ZodPipe(decideItemSchema)) body: DecideItemInput,
+  ) {
+    return this.approvals.decideItem(stepId, { type: type as 'OUTSIDE_HOURS' | 'IDLE_AS_WORK' | 'MANUAL_INCREASE', id: itemId, ...body });
   }
 
   @Post(':stepId/return')
