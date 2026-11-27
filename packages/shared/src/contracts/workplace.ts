@@ -76,6 +76,8 @@ export type DashboardResponse = {
   approvals: { key: string; label: string; count: number; link: string }[] | null;
   announcements: DashboardAnnouncement[];
   events: DashboardEvent[];
+  /** Sections that didn't load in time (slow / failed): the page says so instead of showing "empty". */
+  failed?: ('todos' | 'approvals' | 'announcements' | 'events' | 'quote')[];
 };
 
 /** "Good morning" before 12:00, afternoon until 16:59, evening after (IST). */
@@ -222,7 +224,14 @@ export type FeedPost = {
   isMine: boolean;
 };
 export type FeedComment = { id: string; parentId: string | null; body: string; authorName: string; initials: string; createdAt: string; canDelete: boolean; deleted: boolean };
-export type FeedSidebar = { eotm: { month: string; name: string; citation: string; certificateId: string | null } | null; kudosThisWeek: { id: string; text: string }[] };
+export type FeedSidebar = {
+  /** This month's Employee of the month (null until HR announces it). */
+  eotm: { month: string; name: string; citation: string; certificateId: string | null } | null;
+  /** The most recent earlier award, shown small under "Not announced yet this month". */
+  lastEotm: { month: string; name: string } | null;
+  /** Kudos given since Monday 00:00 IST (calendar week). */
+  kudosThisWeek: { id: string; text: string }[];
+};
 export const FEED_KINDS = ['BLOG', 'MILESTONE', 'UPDATE', 'EOTM', 'KUDOS'] as const;
 export const FEED_KIND_LABEL: Record<(typeof FEED_KINDS)[number], string> = { BLOG: 'Blog', MILESTONE: 'Milestone', UPDATE: 'Update', EOTM: 'EOTM', KUDOS: 'Kudos' };
 export const feedListQuery = z.object({
@@ -376,6 +385,8 @@ export type ChatChannelRow = {
   liveCall: { callId: string; kind: string } | null;
   /** Archived channel: history stays readable, nobody can post; channel managers can unarchive. */
   archived: boolean;
+  /** May archive / unarchive: channel managers, except on #general and #announcements (never archived). */
+  canArchive: boolean;
 };
 export type ChatAttachment = { fileId: string; name: string; mime: string; size: number };
 export type ChatMessageRow = {

@@ -301,6 +301,8 @@ export type RegularizationRow = {
   /** What was recorded before the correction (HH:MM), for the approver. */
   recordedIn: string | null;
   recordedOut: string | null;
+  /** Pending, but the day is in a locked attendance period: it can be rejected, not approved (until HR unlocks). */
+  periodLocked: boolean;
 };
 
 // ── Shifts ────────────────────────────────────────────────────────────────────

@@ -25,7 +25,7 @@ import { AudienceService } from '../common/audience';
 import { SpineReader } from '../common/spine';
 import { addDaysKey, dateOnly, dayMonth, DAY_MS, dueLabel, istInstant, keyOf, longDate, shortTime, todayKey, weekStartKey } from '../common/dates';
 import { NoticesService } from '../notices/notices.service';
-import { approvalsFor, celebrationsWithin, DEFAULT_QUOTES, sortTodos, taskLink, titleLine, weekRangeLabel } from './dashboard.rules';
+import { approvalsFor, celebrationsWithin, DEFAULT_QUOTES, sectionGuard, sortTodos, taskLink, titleLine, weekRangeLabel } from './dashboard.rules';
 
 export { approvalsFor, celebrationsWithin, DEFAULT_QUOTES, reviewLink, sortTodos, taskLink, titleLine, weekRangeLabel } from './dashboard.rules';
 
@@ -49,7 +49,10 @@ export class DashboardService {
     const now = new Date();
     const out: Partial<DashboardResponse> = {};
     const tasks: Promise<void>[] = [];
-    const guard = <T>(p: Promise<T>, fallback: T) => Promise.race([p, new Promise<T>((r) => setTimeout(() => r(fallback), 2500))]).catch(() => fallback);
+    // A section slower than 2.5 s (or failing) falls back to empty AND is listed in `failed`, so the
+    // page shows "couldn't load" rather than "You're all caught up" (L2).
+    const failed: NonNullable<DashboardResponse['failed']> = [];
+    const guard = sectionGuard(failed);
 
     if (want('greeting')) {
       tasks.push(
@@ -63,23 +66,24 @@ export class DashboardService {
         })(),
       );
     }
-    if (want('quote')) tasks.push(guard(this.quoteToday(), null).then((q) => void (out.quote = q)));
+    if (want('quote')) tasks.push(guard(this.quoteToday(), null, 'quote').then((q) => void (out.quote = q)));
     if (want('todos'))
       tasks.push(
-        guard(this.todos(ctx), { items: [], more: 0 }).then((t) => {
+        guard(this.todos(ctx), { items: [], more: 0 }, 'todos').then((t) => {
           out.todos = t.items;
           out.todosMore = t.more;
         }),
       );
     if (want('approvals'))
       tasks.push(
-        guard(this.approvals.counts(), []).then((c) => {
+        guard(this.approvals.counts(), [], 'approvals').then((c) => {
           out.approvals = approvalsFor(ctx.roleKey, c);
         }),
       );
-    if (want('announcements')) tasks.push(guard(this.notices.latestForMe(5), []).then((a) => void (out.announcements = a)));
-    if (want('events')) tasks.push(guard(this.upcoming(7), []).then((e) => void (out.events = e.slice(0, 6))));
+    if (want('announcements')) tasks.push(guard(this.notices.latestForMe(5), [], 'announcements').then((a) => void (out.announcements = a)));
+    if (want('events')) tasks.push(guard(this.upcoming(7), [], 'events').then((e) => void (out.events = e.slice(0, 6))));
     await Promise.all(tasks);
+    out.failed = [...failed];
     return out;
   }
 

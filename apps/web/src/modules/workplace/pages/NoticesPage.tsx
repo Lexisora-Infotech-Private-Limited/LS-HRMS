@@ -77,7 +77,7 @@ export default function NoticesPage() {
               · attachment
             </span>
           )}
-          {r.myRead === false && <span className="wp-dot" title="New" />}
+          {r.myRead === false && r.status === 'PUBLISHED' && <span className="wp-dot" title="New" />}
         </span>
       ),
     },

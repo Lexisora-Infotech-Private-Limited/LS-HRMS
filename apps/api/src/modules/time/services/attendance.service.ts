@@ -882,7 +882,12 @@ export class AttendanceService {
     const key = date ?? istKeyOf(new Date());
     const ids = await this.visibleEmployeeIds(ctx);
     const emps = await this.prisma.employee.findMany({
-      where: { status: { in: ACTIVE_STATUSES as any }, ...(ids ? { id: { in: ids.filter((x) => x !== ctx.employeeId) } } : {}) },
+      where: {
+        status: { in: ACTIVE_STATUSES as any },
+        ...(ids ? { id: { in: ids.filter((x) => x !== ctx.employeeId) } } : {}),
+        // Only people employed that day: not before joining, not after the exit date (L13: no "Not yet in" for them).
+        AND: [{ OR: [{ joiningDate: null }, { joiningDate: { lte: dateOf(key) } }] }, { OR: [{ exitDate: null }, { exitDate: { gte: dateOf(key) } }] }],
+      },
       select: { id: true, fullName: true, empCode: true, workMode: true, joiningDate: true, department: { select: { name: true } } },
       orderBy: { fullName: 'asc' },
     });

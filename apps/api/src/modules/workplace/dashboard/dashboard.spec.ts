@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { dayPartFor, quoteIndexFor } from '@lexisora/shared';
-import { approvalsFor, celebrationsWithin, reviewLink, sortTodos, taskLink, titleLine, weekRangeLabel } from './dashboard.rules';
+import { approvalsFor, celebrationsWithin, reviewLink, sectionGuard, sortTodos, taskLink, titleLine, weekRangeLabel } from './dashboard.rules';
 import { dueLabel, istInstant, longDate, shortTime, weekStartKey } from '../common/dates';
 
 const d = (k: string) => new Date(`${k}T00:00:00.000Z`);
@@ -159,5 +159,29 @@ describe('event times', () => {
   it('renders "3 Oct, 5 pm" style times in IST', () => {
     expect(shortTime(istInstant('2026-10-03', '17:00'))).toBe('5 pm');
     expect(shortTime(istInstant('2026-10-03', '10:30'))).toBe('10:30 am');
+  });
+});
+
+describe('slow or failing dashboard sections (L2)', () => {
+  const later = <T>(v: T, ms: number) => new Promise<T>((r) => setTimeout(() => r(v), ms));
+  it('a section that finishes in time is returned and not marked failed (even after the timeout passes)', async () => {
+    const failed: string[] = [];
+    const guard = sectionGuard(failed, 50);
+    expect(await guard(later(['todo'], 5), [], 'todos')).toEqual(['todo']);
+    await later(null, 80); // the old timer must not fire late
+    expect(failed).toEqual([]);
+  });
+  it('a slow section falls back to empty and is listed, so the page shows "Couldn\'t load", not "all caught up"', async () => {
+    const failed: string[] = [];
+    const guard = sectionGuard(failed, 20);
+    expect(await guard(later(['todo'], 200), [], 'todos')).toEqual([]);
+    expect(failed).toEqual(['todos']);
+  });
+  it('a failing section is listed once', async () => {
+    const failed: string[] = [];
+    const guard = sectionGuard(failed, 50);
+    expect(await guard(Promise.reject(new Error('db down')), [], 'events')).toEqual([]);
+    await later(null, 80);
+    expect(failed).toEqual(['events']);
   });
 });

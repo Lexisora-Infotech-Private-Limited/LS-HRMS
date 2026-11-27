@@ -302,6 +302,8 @@ export type ProjectDetail = ProjectRow & {
   recentGit: { taskId: string; key: string; title: string; branch: string | null; branchUrl: string | null; mrUrl: string | null; mrState: string | null; syncStatus: string }[];
   canManage: boolean;
   canArchive: boolean;
+  /** Completed → Active: managers / admins only (tasks.viewAllBoards), not the project lead. */
+  canReopen: boolean;
 };
 
 // ── Boards & tasks ─────────────────────────────────────────────────────────
@@ -387,7 +389,11 @@ export type BoardView = {
   viewer: { employeeId: string | null; name: string; canManage: boolean };
   /** "Add task" is shown (tasks.manage + board access + project not locked). */
   canCreate: boolean;
+  /** With "Show done": Done cards older than DONE_WINDOW_DAYS that the board leaves out (0 otherwise). */
+  olderDoneCount: number;
 };
+/** "Show done" on the board shows cards finished in the last N days. */
+export const DONE_WINDOW_DAYS = 14;
 export type BoardLocked = { locked: true; department: string; departmentId: string };
 export type TaskDetail = TaskCard & {
   projectId: string;
@@ -414,6 +420,8 @@ export type TaskDetail = TaskCard & {
   canEdit: boolean;
   /** Board lead / manager, or the reporter while Open (work.rules canCancelTask); assignees cannot. */
   canCancel: boolean;
+  /** May give the card to someone else (board lead / manager). The assignee alone may only keep or unassign it. */
+  canReassign: boolean;
 };
 export type TaskMoveResult = { task: TaskCard; message: string; git?: { action: 'branch' | 'mr' | 'none'; branch?: string | null; mrUrl?: string | null; status: string; error?: string | null } };
 export type MyTask = { id: string; key: string; title: string; projectId: string; projectName: string; moduleName: string | null; status: TaskStatusKey; estimatedMinutes: number | null; loggedMinutes: number; dueDate: string | null; isStanding: boolean };

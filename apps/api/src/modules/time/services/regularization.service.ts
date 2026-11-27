@@ -218,6 +218,11 @@ export class RegularizationService {
     // What was recorded before the correction: the day as computed (pending) / the superseded punches (decided).
     const days = await this.prisma.attendanceDay.findMany({ where: { OR: list.map((r) => ({ employeeId: r.employeeId, date: r.date })) }, select: { employeeId: true, date: true, firstInAt: true, lastOutAt: true } });
     const dayOf = (r: AttendanceRegularization) => days.find((d) => d.employeeId === r.employeeId && keyOf(d.date) === keyOf(r.date));
+    // Approve rewrites a locked day and always fails there; tell the approver up front (L15).
+    const lockedDates = new Set<string>();
+    for (const date of new Set(list.filter((r) => r.status === 'PENDING').map((r) => keyOf(r.date)))) {
+      if (await this.locks.isLocked(date)) lockedDates.add(date);
+    }
     const out: RegularizationRow[] = [];
     for (const r of list) {
       const date = keyOf(r.date);
@@ -246,6 +251,7 @@ export class RegularizationService {
         attachmentFileId: r.attachmentFileId,
         recordedIn: istHm(recorded?.firstInAt ?? null),
         recordedOut: istHm(recorded?.lastOutAt ?? null),
+        periodLocked: r.status === 'PENDING' && lockedDates.has(date),
       });
     }
     return out;

@@ -41,6 +41,13 @@ export function AppShell() {
   }, [qc, toast]);
 
   useEffect(() => setOpen(false), [loc.pathname]);
+  // Small screens: Escape closes the menu too.
+  useEffect(() => {
+    if (!open) return;
+    const k = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  }, [open]);
   useEffect(() => {
     const close = (e: MouseEvent) => menuRef.current && !menuRef.current.contains(e.target as Node) && setMenu(false);
     document.addEventListener('mousedown', close);
@@ -51,16 +58,24 @@ export function AppShell() {
 
   return (
     <div className="shell">
+      {open && <div className="sidebar-backdrop" onClick={() => setOpen(false)} aria-hidden />}
       <aside className={`sidebar${open ? ' open' : ''}`}>
-        <NavLink to="/dashboard" className="brand">
-          <span className="brand-name">{me.tenantName}</span>
-          <span className="brand-sub">People &amp; Operations</span>
-        </NavLink>
+        <div className="sidebar-head">
+          <NavLink to="/dashboard" className="brand" onClick={() => setOpen(false)}>
+            {me.branding?.logoUrl && <img className="brand-logo" src={me.branding.logoUrl} alt="" />}
+            <span className="brand-name">{me.tenantName}</span>
+            <span className="brand-sub">People &amp; Operations</span>
+          </NavLink>
+          {/* Small screens only: close the menu (it also closes on any link, outside tap or Escape). */}
+          <button className="sidebar-close" aria-label="Close menu" title="Close menu" onClick={() => setOpen(false)}>
+            ←
+          </button>
+        </div>
         {groups.map((g) => (
           <nav className="nav-group" key={g.group} aria-label={g.group}>
             <div className="nav-group-title">{g.group}</div>
             {g.items.map((it) => (
-              <NavLink key={it.id} to={it.path} className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}>
+              <NavLink key={it.id} to={it.path} onClick={() => setOpen(false)} className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}>
                 <span>{it.label}</span>
                 {!!badges[it.id] && <span className="tnum" style={{ color: 'var(--color-accent-300)' }}>{badges[it.id]}</span>}
               </NavLink>

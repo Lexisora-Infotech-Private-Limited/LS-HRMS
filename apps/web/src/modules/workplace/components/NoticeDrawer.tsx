@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { NoticeDetail } from '@lexisora/shared';
-import { fileUrl } from '@/lib/api';
+import { fileUrl, HttpError } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { useAction } from '@/lib/query';
+import { useToast } from '@/lib/toast';
 import { Avatar, ConfirmDialog, ErrorBlock, Loading, Tabs, Tag } from '@/components/ui';
 import { dayMonthOf, dayMonthTime, fileSize, wpApi, wpKeys } from '../api';
 import { SafeHtml } from './RichText';
@@ -31,7 +32,8 @@ export function NoticeDrawer({ id, onClose, onEdit }: { id: string; onClose: () 
   const can = useCan();
   const { data: n, isLoading, error, refetch } = useQuery({ queryKey: wpKeys.notice(id), queryFn: () => wpApi.notice(id) });
   const marked = useRef<string | null>(null);
-  const [confirm, setConfirm] = useState<'archive' | 'delete' | null>(null);
+  const [confirm, setConfirm] = useState<'archive' | 'delete' | 'empty' | null>(null);
+  const { toast, toastError } = useToast();
 
   useEffect(() => {
     const k = (e: KeyboardEvent) => e.key === 'Escape' && !confirm && onClose();
@@ -54,7 +56,15 @@ export function NoticeDrawer({ id, onClose, onEdit }: { id: string; onClose: () 
   }, [n, qc]);
 
   const inv = [wpKeys.notices, wpKeys.dashboard];
-  const publish = useAction(() => wpApi.publishNotice(id, true), { success: (r) => (r.status === 'SCHEDULED' ? 'Notice scheduled' : 'Notice published'), invalidate: inv });
+  // Ask the server first (force=false); an empty audience comes back as 409 and we confirm, like the form does (L8).
+  const publish = useMutation({
+    mutationFn: (force: boolean) => wpApi.publishNotice(id, force),
+    onSuccess: (r) => {
+      for (const k of inv) void qc.invalidateQueries({ queryKey: k });
+      toast(r.status === 'SCHEDULED' ? 'Notice scheduled' : 'Notice published');
+    },
+    onError: (e) => (e instanceof HttpError && e.code === 'NOTICE_AUDIENCE_EMPTY' ? setConfirm('empty') : toastError(e)),
+  });
   const unschedule = useAction(() => wpApi.unscheduleNotice(id), { success: 'Moved back to drafts', invalidate: inv });
   const archive = useAction(() => wpApi.archiveNotice(id), { success: 'Notice archived', invalidate: inv, onSuccess: onClose });
   const remove = useAction(() => wpApi.deleteNotice(id), { success: 'Draft deleted', invalidate: inv, onSuccess: onClose });
@@ -121,7 +131,7 @@ export function NoticeDrawer({ id, onClose, onEdit }: { id: string; onClose: () 
                   </button>
                 )}
                 {draft && (
-                  <button className="btn btn-primary btn-sm" disabled={publish.isPending} onClick={() => publish.mutate(undefined)}>
+                  <button className="btn btn-primary btn-sm" disabled={publish.isPending} onClick={() => publish.mutate(false)}>
                     Publish now
                   </button>
                 )}
@@ -151,7 +161,20 @@ export function NoticeDrawer({ id, onClose, onEdit }: { id: string; onClose: () 
           </>
         )}
       </aside>
-      {confirm && n && (
+      {confirm === 'empty' && n && (
+        <ConfirmDialog
+          title="Nobody is in this audience yet"
+          body="The selected teams have no active members right now. People who join later will still receive this notice. Publish anyway?"
+          confirmLabel="Publish anyway"
+          busy={publish.isPending}
+          onClose={() => setConfirm(null)}
+          onConfirm={() => {
+            setConfirm(null);
+            publish.mutate(true);
+          }}
+        />
+      )}
+      {(confirm === 'archive' || confirm === 'delete') && n && (
         <ConfirmDialog
           title={confirm === 'archive' ? 'Archive this notice?' : 'Delete this draft?'}
           body={confirm === 'archive' ? 'It will be hidden from the notice board and dashboards. Read receipts are kept.' : 'The draft and its attachments list will be removed.'}

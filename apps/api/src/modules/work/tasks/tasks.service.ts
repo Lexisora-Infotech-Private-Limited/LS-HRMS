@@ -208,10 +208,12 @@ export class TasksService {
       comments: comments.map((c) => ({ id: c.id, authorName: c.authorName, body: c.body, createdAt: c.createdAt.toISOString() })),
       history: history.map((h) => ({ id: h.id, kind: h.kind, fromStatus: h.fromStatus, toStatus: h.toStatus, note: h.note, byName: h.byName, at: h.at.toISOString() })),
       commits: commits.map((c) => ({ sha: c.sha, message: c.message, authorName: c.authorName, committedAt: c.committedAt.toISOString(), url: c.url })),
-      assigneeOptions: people.map((p) => ({ value: p, label: names.get(p) ?? p })).sort((a, b) => a.label.localeCompare(b.label)),
+      // Only the board lead hands a card to someone else; the assignee may keep it or unassign (L27: no 403 options).
+      assigneeOptions: (rights.canManage ? people : v.employeeId ? [v.employeeId] : []).map((p) => ({ value: p, label: names.get(p) ?? p })).sort((a, b) => a.label.localeCompare(b.label)),
       moduleOptions: modules.map((m) => m.name),
       canEdit,
       canCancel,
+      canReassign: writable && rights.canManage,
     };
   }
 

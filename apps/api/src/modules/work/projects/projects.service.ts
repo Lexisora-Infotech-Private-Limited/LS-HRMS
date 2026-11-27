@@ -245,6 +245,8 @@ export class ProjectsService {
         .map((t) => ({ taskId: t.id, key: t.key, title: t.title, branch: t.gitBranch, branchUrl: t.gitBranchUrl, mrUrl: t.gitMrUrl, mrState: t.gitMrState, syncStatus: t.gitSyncStatus })),
       canManage,
       canArchive: hasPerm(ctx, 'archive.manage') && p.status === 'COMPLETED',
+      // Same rule as setStatus: a Completed project is reopened by a manager, not the project lead (L22).
+      canReopen: canManage && v.viewAll && p.status === 'COMPLETED',
     };
   }
 

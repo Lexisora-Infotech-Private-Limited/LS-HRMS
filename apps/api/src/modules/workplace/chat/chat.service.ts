@@ -35,6 +35,8 @@ type ChannelWithMembers = ChatChannel & { members: ChatMember[] };
 type ChannelCreateBody = ChannelCreateInput;
 
 const AUDIENCE_LINKS = ['COMPANY_GENERAL', 'COMPANY_ANNOUNCEMENTS', 'DEPARTMENT', 'PROJECT'];
+/** #general and #announcements: everyone's channels, never archived. */
+const COMPANY_LINKS = ['COMPANY_GENERAL', 'COMPANY_ANNOUNCEMENTS'];
 
 /**
  * Comms hub (spec §5): channels, DMs and group DMs, message persistence with a per-channel
@@ -259,6 +261,7 @@ export class ChatService {
         lastReadSeq: c.me.lastReadSeq,
         liveCall: call && this.callsEnabled ? { callId: call.id, kind: call.kind } : null,
         archived: !!c.archivedAt,
+        canArchive: !dm && this.canManage(ctx, c.me) && !COMPANY_LINKS.includes(c.linkedType ?? ''),
       };
     });
   }
@@ -373,7 +376,7 @@ export class ChatService {
     const { ctx } = this.me();
     const m = await this.assertMember(channelId);
     if (!this.canManage(ctx, m)) throw forbidden('Only channel owners and HR/Admin can archive channels');
-    if (m.channel.linkedType === 'COMPANY_GENERAL' || m.channel.linkedType === 'COMPANY_ANNOUNCEMENTS') throw badRequest('Company channels cannot be archived');
+    if (COMPANY_LINKS.includes(m.channel.linkedType ?? '')) throw badRequest('Company channels cannot be archived');
     await this.prisma.chatChannel.update({ where: { id: channelId }, data: { archivedAt: archived ? new Date() : null } });
     await this.audit.record({ action: archived ? 'chat.channel.archive' : 'chat.channel.unarchive', entity: 'ChatChannel', entityId: channelId });
     this.realtime.toRoom(`ch:${channelId}`, 'chat:channels', { reason: 'archived', channelId });

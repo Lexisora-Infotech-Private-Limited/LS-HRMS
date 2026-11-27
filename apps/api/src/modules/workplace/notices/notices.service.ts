@@ -175,10 +175,10 @@ export class NoticesService {
     const read = new Map(mine.map((m) => [m.noticeId, !!m.readAt]));
     return rows.map((r) => {
       const own = !!v.me && r.authorEmployeeId === v.me;
-      const live = LIVE.includes(r.status as NoticeState);
       let myRead: boolean | null = read.has(r.id) ? read.get(r.id)! : null;
-      // Global notices published before I joined: not materialised yet, still "New" for me.
-      if (myRead === null && live && !own && r.visibility === 'GLOBAL') myRead = false;
+      // Global notices published before I joined: not materialised yet, still "New" for me (while live,
+      // not once expired) — unreadCount() counts exactly these too, so the badge and the "New" dots agree (L9).
+      if (myRead === null && r.status === 'PUBLISHED' && !own && r.visibility === 'GLOBAL') myRead = false;
       return {
         id: r.id,
         title: r.title,
@@ -250,8 +250,12 @@ export class NoticesService {
   async unreadCount(): Promise<{ unread: number }> {
     const v = this.viewer();
     if (!v.me) return { unread: 0 };
-    const unread = await this.prisma.noticeRecipient.count({ where: { employeeId: v.me, readAt: null, notice: { status: 'PUBLISHED', deletedAt: null } } });
-    return { unread };
+    const [mine, lateJoiner] = await Promise.all([
+      this.prisma.noticeRecipient.count({ where: { employeeId: v.me, readAt: null, notice: { status: 'PUBLISHED', deletedAt: null } } }),
+      // Global notices published before I joined (no receipt row yet) — the list shows them as "New" too.
+      this.prisma.notice.count({ where: { status: 'PUBLISHED', deletedAt: null, visibility: 'GLOBAL', authorEmployeeId: { not: v.me }, recipients: { none: { employeeId: v.me } } } }),
+    ]);
+    return { unread: mine + lateJoiner };
   }
 
   /** Dashboard "Announcements": top N live, unexpired notices addressed to me; pinned first. */

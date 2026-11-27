@@ -127,6 +127,11 @@ function FeedSidebarPanel() {
       ) : (
         <div className="card">
           <div className="card-body">{data ? 'Not announced yet this month.' : '…'}</div>
+          {data?.lastEotm && (
+            <div className="faint" style={{ fontSize: 12.5, marginTop: 4 }}>
+              Last: {data.lastEotm.name} · {data.lastEotm.month}
+            </div>
+          )}
         </div>
       )}
       <h4 style={{ margin: '6px 0 0' }}>Kudos this week</h4>
